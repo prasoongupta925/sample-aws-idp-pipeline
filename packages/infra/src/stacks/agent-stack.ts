@@ -207,7 +207,7 @@ export class AgentStack extends Stack {
       sessionStorageBucket,
       backendTable,
       gateway,
-      bedrockModelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
+      bedrockModelId: 'global.anthropic.claude-sonnet-5',
       agentStorageBucket,
       websocketMessageQueue,
       codeInterpreterIdentifier: idpCodeInterpreter.codeInterpreterId,

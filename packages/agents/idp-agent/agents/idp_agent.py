@@ -77,7 +77,6 @@ _MODEL_ALLOWLIST_TTL_SECONDS = 300
 # model's capability, not on the originally-requested one (which may have been
 # dropped and fallen back to a model that rejects effort).
 _DEFAULT_MODEL_CATALOG: dict[str, bool] = {
-    "global.anthropic.claude-haiku-4-5-20251001-v1:0": False,
     "global.anthropic.claude-sonnet-5": True,
     "global.anthropic.claude-opus-4-8": True,
     "global.anthropic.claude-sonnet-4-6": False,

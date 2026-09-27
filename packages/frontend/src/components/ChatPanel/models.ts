@@ -17,17 +17,6 @@ export type ChatModel = LlmModel;
 
 export const CHAT_MODELS: ChatModel[] = [
   {
-    value: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
-    label: 'Haiku 4.5',
-    description: 'Fast, low-cost (demo default)',
-    contextWindow: '200K tokens',
-    inputPrice: '$1.00 / 1M',
-    outputPrice: '$5.00 / 1M',
-    metrics: { intelligence: 6, speed: 10, context: 7, cost: 10 },
-    // Haiku 4.5 has no effort/reasoning control.
-    supportsReasoning: false,
-  },
-  {
     value: 'global.anthropic.claude-sonnet-5',
     label: 'Sonnet 5',
     description: '일상 작업에 최적',
