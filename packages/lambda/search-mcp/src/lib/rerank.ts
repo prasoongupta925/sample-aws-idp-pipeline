@@ -1,14 +1,16 @@
 import {
   BedrockAgentRuntimeClient,
   RerankCommand,
+  type RerankCommandOutput,
   RerankSource,
 } from '@aws-sdk/client-bedrock-agent-runtime';
 import type { HybridResult } from '../types.js';
 
-const client = new BedrockAgentRuntimeClient({});
+const MODEL_ID = process.env.RERANK_MODEL_ID ?? 'amazon.rerank-v1:0';
+const REGION =
+  process.env.RERANK_REGION ?? process.env.AWS_REGION ?? 'us-east-1';
 
-const MODEL_ID = process.env.RERANK_MODEL_ID ?? 'cohere.rerank-v3-5:0';
-const REGION = process.env.AWS_REGION ?? 'us-east-1';
+const client = new BedrockAgentRuntimeClient({ region: REGION });
 
 function toModelArn(modelId: string): string {
   if (modelId.startsWith('arn:')) return modelId;
@@ -48,7 +50,15 @@ export async function rerankResults(
     },
   });
 
-  const response = await client.send(command);
+  let response: RerankCommandOutput;
+  try {
+    response = await client.send(command);
+  } catch {
+    // Rerank unavailable: keep the hybrid-search order.
+    return results
+      .slice(0, topN ?? results.length)
+      .map((r, i) => ({ ...r, rerankScore: 1 - i / results.length }));
+  }
 
   return (response.results ?? [])
     .map((r) => ({

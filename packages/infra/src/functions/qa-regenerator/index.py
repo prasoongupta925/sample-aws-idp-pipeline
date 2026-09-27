@@ -336,32 +336,20 @@ def handler(event, _context):
         if image_data:
             resized = _resize_image_if_needed(image_data)
             media_type = _detect_media_type(resized)
-            image_base64 = base64.b64encode(resized).decode('utf-8')
-            messages_content.append({
-                'type': 'image',
-                'source': {
-                    'type': 'base64',
-                    'media_type': media_type,
-                    'data': image_base64
-                }
-            })
-        messages_content.append({'type': 'text', 'text': prompt})
-
-        request_body = {
-            'anthropic_version': 'bedrock-2023-05-31',
-            'max_tokens': 8192,
-            'temperature': 0.1,
-            'messages': [{'role': 'user', 'content': messages_content}]
-        }
+            image_format = media_type.split('/')[-1].replace('jpg', 'jpeg')
+            messages_content.append({'image': {'format': image_format, 'source': {'bytes': resized}}})
+        messages_content.append({'text': prompt})
 
         client = get_bedrock_client()
-        response = client.invoke_model(
+        response = client.converse(
             modelId=BEDROCK_MODEL_ID,
-            body=json.dumps(request_body),
-            contentType='application/json'
+            messages=[{'role': 'user', 'content': messages_content}],
+            inferenceConfig={'maxTokens': 8192, 'temperature': 0.1},
         )
-        result = json.loads(response['body'].read().decode('utf-8'))
-        answer = result.get('content', [{}])[0].get('text', '')
+        answer = ''.join(
+            block.get('text', '')
+            for block in response['output']['message']['content']
+        )
     except Exception:
         _set_qa_regen_status(workflow_id, segment_index, 'completed')
         raise

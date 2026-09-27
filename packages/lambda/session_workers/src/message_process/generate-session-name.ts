@@ -67,7 +67,7 @@ export async function generateSessionName(
   ].join('\n');
 
   const command = new ConverseCommand({
-    modelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
+    modelId: 'global.amazon.nova-2-lite-v1:0',
     messages: [{ role: 'user', content: [{ text: prompt }] }],
     inferenceConfig: {
       maxTokens: 50,

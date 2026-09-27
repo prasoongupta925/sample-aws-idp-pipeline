@@ -14,7 +14,7 @@ class Config(BaseSettings):
     backend_table_name: str = os.environ.get("BACKEND_TABLE_NAME", "")
     agent_storage_bucket_name: str = os.environ.get("AGENT_STORAGE_BUCKET_NAME", "")
     bedrock_model_id: str = os.environ.get(
-        "BEDROCK_MODEL_ID", "global.anthropic.claude-sonnet-5"
+        "BEDROCK_MODEL_ID", "global.amazon.nova-2-lite-v1:0"
     )
 
 

@@ -50,8 +50,10 @@ export class SearchMcp extends Construct {
         LANCEDB_FUNCTION_ARN: lancedbFunctionArn,
         GRAPH_SERVICE_FUNCTION_ARN: graphServiceFunctionArn,
         DOCUMENT_STORAGE_BUCKET: documentStorageBucketName,
-        SUMMARIZE_MODEL_ID: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
-        RERANK_MODEL_ID: 'cohere.rerank-v3-5:0',
+        SUMMARIZE_MODEL_ID: 'global.amazon.nova-2-lite-v1:0',
+        RERANK_MODEL_ID: 'amazon.rerank-v1:0',
+        // Amazon Rerank is not offered in us-east-1; call it in us-west-2.
+        RERANK_REGION: 'us-west-2',
       },
     });
 

@@ -14,7 +14,7 @@ from strands import Agent
 from strands.models import BedrockModel
 
 REFERENCE_MODEL_ID = os.environ.get(
-    "DATASET_REFERENCE_MODEL_ID", "global.anthropic.claude-sonnet-5"
+    "DATASET_REFERENCE_MODEL_ID", "global.amazon.nova-2-lite-v1:0"
 )
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 

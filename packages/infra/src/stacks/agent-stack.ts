@@ -207,7 +207,7 @@ export class AgentStack extends Stack {
       sessionStorageBucket,
       backendTable,
       gateway,
-      bedrockModelId: 'global.anthropic.claude-sonnet-5',
+      bedrockModelId: 'global.amazon.nova-2-lite-v1:0',
       agentStorageBucket,
       websocketMessageQueue,
       codeInterpreterIdentifier: idpCodeInterpreter.codeInterpreterId,

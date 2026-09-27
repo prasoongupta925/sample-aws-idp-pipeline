@@ -77,9 +77,7 @@ _MODEL_ALLOWLIST_TTL_SECONDS = 300
 # model's capability, not on the originally-requested one (which may have been
 # dropped and fallen back to a model that rejects effort).
 _DEFAULT_MODEL_CATALOG: dict[str, bool] = {
-    "global.anthropic.claude-sonnet-5": True,
-    "global.anthropic.claude-opus-4-8": True,
-    "global.anthropic.claude-sonnet-4-6": False,
+    "global.amazon.nova-2-lite-v1:0": False,
 }
 # (catalog dict, fetched_at monotonic) - refreshed lazily past the TTL.
 _model_catalog_cache: tuple[dict[str, bool], float] | None = None

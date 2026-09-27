@@ -140,38 +140,22 @@ Question: {question}
 
 Provide detailed, professional analysis in {language}."""
 
-            request_body = {
-                'anthropic_version': 'bedrock-2023-05-31',
-                'max_tokens': 8192,
-                'temperature': 0.1,
-                'messages': [{
+            image_format = media_type.split('/')[-1].replace('jpg', 'jpeg')
+            response = bedrock_client.converse(
+                modelId=model_id,
+                messages=[{
                     'role': 'user',
                     'content': [
-                        {
-                            'type': 'image',
-                            'source': {
-                                'type': 'base64',
-                                'media_type': media_type,
-                                'data': image_base64
-                            },
-                            'cache_control': {'type': 'ephemeral'}
-                        },
-                        {
-                            'type': 'text',
-                            'text': analysis_prompt
-                        }
-                    ]
-                }]
-            }
-
-            response = bedrock_client.invoke_model(
-                modelId=model_id,
-                body=json.dumps(request_body),
-                contentType='application/json'
+                        {'image': {'format': image_format, 'source': {'bytes': resized_image}}},
+                        {'text': analysis_prompt},
+                    ],
+                }],
+                inferenceConfig={'maxTokens': 8192, 'temperature': 0.1},
             )
-
-            result = json.loads(response['body'].read().decode('utf-8'))
-            answer = result.get('content', [{}])[0].get('text', '')
+            answer = ''.join(
+                block.get('text', '')
+                for block in response['output']['message']['content']
+            )
 
             analysis_steps.append({
                 'step': len(analysis_steps) + 1,

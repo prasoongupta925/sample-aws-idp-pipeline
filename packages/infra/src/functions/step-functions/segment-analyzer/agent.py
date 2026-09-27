@@ -171,11 +171,15 @@ class VisionReactAgent:
         }
         language_name = language_names.get(language, 'English')
 
+        cache_kwargs = (
+            {'cache_tools': 'default', 'cache_config': CacheConfig(strategy='auto')}
+            if 'anthropic' in self.model_id
+            else {}
+        )
         model = BedrockModel(
             model_id=self.model_id,
             region_name=self.region,
-            cache_tools='default',
-            cache_config=CacheConfig(strategy='auto')
+            **cache_kwargs
         )
 
         tools = []

@@ -84,7 +84,7 @@ def generate_document_summary(model_id, region, language, page_descriptions, tot
     system_text = prompts['document_summary_system']
 
     batches = batch_with_overlap(page_descriptions, BATCH_SIZE, BATCH_OVERLAP)
-    use_cache = len(batches) > 1
+    use_cache = len(batches) > 1 and 'anthropic' in model_id
 
     bedrock_model = BedrockModel(model_id=model_id, region_name=region)
     system_prompt = build_system_prompt(system_text, use_cache=use_cache)

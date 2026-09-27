@@ -13,7 +13,7 @@ class Config(BaseSettings):
     agentcore_runtime_id: str = ""
     backend_table_name: str = ""
     websocket_message_queue_url: str = ""
-    bedrock_model_id: str = "global.anthropic.claude-opus-4-8"
+    bedrock_model_id: str = "global.amazon.nova-2-lite-v1:0"
     code_interpreter_identifier: str = ""
 
     @property

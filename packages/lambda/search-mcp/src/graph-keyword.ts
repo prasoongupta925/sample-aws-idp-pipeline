@@ -6,7 +6,7 @@ import {
   bedrockClient,
 } from './lib/clients.js';
 
-const HAIKU_MODEL_ID = 'global.anthropic.claude-haiku-4-5-20251001-v1:0';
+const HAIKU_MODEL_ID = 'global.amazon.nova-2-lite-v1:0';
 
 export interface GraphKeywordInput {
   project_id: string;
