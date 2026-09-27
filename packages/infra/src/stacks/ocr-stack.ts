@@ -15,7 +15,10 @@ import { fileURLToPath } from 'url';
 
 import { RustFunction } from 'cargo-lambda-cdk';
 
-import { SSM_KEYS } from ':idp-v2/common-constructs';
+import {
+  PADDLEOCR_ENDPOINT_NAME_VALUE,
+  SSM_KEYS,
+} from ':idp-v2/common-constructs';
 import {
   PaddleOcrModelBuilder,
   PaddleOcrEndpoint,
@@ -74,24 +77,11 @@ export class OcrStack extends Stack {
     // PaddleOCR Model Builder (CodeBuild + ECR)
     // ========================================
 
-    const paddleOcrModelBuilder = new PaddleOcrModelBuilder(
-      this,
-      'PaddleOcrModelBuilder',
-      {
-        bucket: modelArtifactsBucket as s3.Bucket,
-        triggerLambdaPath: path.join(
-          __dirname,
-          '../functions/paddleocr/model-builder-trigger',
-        ),
-        modelUploaderLambdaPath: path.join(
-          __dirname,
-          '../functions/paddleocr/model-uploader',
-        ),
-        inferenceCodePath: path.join(
-          __dirname,
-          '../functions/paddleocr/code/inference.py',
-        ),
-      },
+    // GPU OCR (PaddleOCR-VL on ml.g5.xlarge) is opt-in with -c enablePaddleOcrVl=true.
+    // New accounts have a 0 quota for GPU endpoints; the default OCR (pp-ocrv5)
+    // runs on Lambda and does not need it.
+    const enablePaddleOcrVl = ['true', true].includes(
+      this.node.tryGetContext('enablePaddleOcrVl'),
     );
 
     // ========================================
@@ -110,20 +100,42 @@ export class OcrStack extends Stack {
     // PaddleOCR SageMaker Endpoint with Auto Scaling (0-1)
     // ========================================
 
-    const paddleOcrEndpoint = new PaddleOcrEndpoint(this, 'PaddleOcrEndpoint', {
-      bucket: modelArtifactsBucket as s3.Bucket,
-      documentBucket: documentBucket as s3.Bucket,
-      imageUri: paddleOcrModelBuilder.imageUri,
-      modelDataUrl: paddleOcrModelBuilder.modelDataUrl,
-      buildTrigger: paddleOcrModelBuilder.dockerBuildTrigger,
-      instanceType: 'ml.g5.xlarge', // A10G 24GB GPU
-      minCapacity: 0, // Scale to zero when idle
-      maxCapacity: 1,
-      successTopic: ocrSuccessTopic,
-      errorTopic: ocrErrorTopic,
-    });
+    if (enablePaddleOcrVl) {
+      const paddleOcrModelBuilder = new PaddleOcrModelBuilder(
+        this,
+        'PaddleOcrModelBuilder',
+        {
+          bucket: modelArtifactsBucket as s3.Bucket,
+          triggerLambdaPath: path.join(
+            __dirname,
+            '../functions/paddleocr/model-builder-trigger',
+          ),
+          modelUploaderLambdaPath: path.join(
+            __dirname,
+            '../functions/paddleocr/model-uploader',
+          ),
+          inferenceCodePath: path.join(
+            __dirname,
+            '../functions/paddleocr/code/inference.py',
+          ),
+        },
+      );
 
-    this.endpointName = paddleOcrEndpoint.endpointName;
+      new PaddleOcrEndpoint(this, 'PaddleOcrEndpoint', {
+        bucket: modelArtifactsBucket as s3.Bucket,
+        documentBucket: documentBucket as s3.Bucket,
+        imageUri: paddleOcrModelBuilder.imageUri,
+        modelDataUrl: paddleOcrModelBuilder.modelDataUrl,
+        buildTrigger: paddleOcrModelBuilder.dockerBuildTrigger,
+        instanceType: 'ml.g5.xlarge', // A10G 24GB GPU
+        minCapacity: 0, // Scale to zero when idle
+        maxCapacity: 1,
+        successTopic: ocrSuccessTopic,
+        errorTopic: ocrErrorTopic,
+      });
+    }
+
+    this.endpointName = PADDLEOCR_ENDPOINT_NAME_VALUE;
 
     // Store endpoint name in SSM
     new ssm.StringParameter(this, 'PaddleOcrEndpointNameParam', {
