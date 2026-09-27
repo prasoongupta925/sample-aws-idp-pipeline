@@ -42,6 +42,10 @@ export class WorkflowStack extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
     super(scope, id, props);
 
+    // Accounts with the default 10-execution Lambda quota cannot reserve
+    // concurrency; deploy with IDP_RESERVED_CONCURRENCY=off there.
+    const reserveConcurrency = process.env.IDP_RESERVED_CONCURRENCY !== 'off';
+
     // ========================================
     // Lookup Existing Storage Resources (from SSM)
     // ========================================
@@ -330,7 +334,7 @@ export class WorkflowStack extends Stack {
         vpc,
         vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
         securityGroups: [graphServiceSg],
-        reservedConcurrentExecutions: 1,
+        reservedConcurrentExecutions: reserveConcurrency ? 1 : undefined,
         environment: {
           NEPTUNE_ENDPOINT: neptuneEndpoint,
           NEPTUNE_PORT: neptunePort,
@@ -881,7 +885,7 @@ export class WorkflowStack extends Stack {
       handler: 'index.handler',
       timeout: Duration.minutes(5),
       memorySize: 256,
-      reservedConcurrentExecutions: 1,
+      reservedConcurrentExecutions: reserveConcurrency ? 1 : undefined,
       code: lambda.Code.fromAsset(
         path.join(__dirname, '../functions/lancedb-writer'),
       ),

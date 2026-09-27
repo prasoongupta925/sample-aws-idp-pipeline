@@ -163,9 +163,9 @@ fi
 # Start CodeBuild
 echo ""
 echo "Starting CodeBuild: $PROJECT_NAME ..."
-CODEBUILD_ENV_OVERRIDES="[{\"name\":\"NODE_OPTIONS\",\"value\":\"--max-old-space-size=6144\",\"type\":\"PLAINTEXT\"}]"
+CODEBUILD_ENV_OVERRIDES="[{\"name\":\"NODE_OPTIONS\",\"value\":\"--max-old-space-size=6144\",\"type\":\"PLAINTEXT\"},{\"name\":\"IDP_RESERVED_CONCURRENCY\",\"value\":\"off\",\"type\":\"PLAINTEXT\"}]"
 if [[ -n "$DEPLOY_STACKS" ]]; then
-    CODEBUILD_ENV_OVERRIDES="[{\"name\":\"NODE_OPTIONS\",\"value\":\"--max-old-space-size=6144\",\"type\":\"PLAINTEXT\"},{\"name\":\"DEPLOY_STACKS\",\"value\":\"$DEPLOY_STACKS\",\"type\":\"PLAINTEXT\"}]"
+    CODEBUILD_ENV_OVERRIDES="[{\"name\":\"NODE_OPTIONS\",\"value\":\"--max-old-space-size=6144\",\"type\":\"PLAINTEXT\"},{\"name\":\"IDP_RESERVED_CONCURRENCY\",\"value\":\"off\",\"type\":\"PLAINTEXT\"},{\"name\":\"DEPLOY_STACKS\",\"value\":\"$DEPLOY_STACKS\",\"type\":\"PLAINTEXT\"}]"
 fi
 BUILD_ID=$(aws codebuild start-build --project-name "$PROJECT_NAME" --environment-variables-override "$CODEBUILD_ENV_OVERRIDES" --query 'build.id' --output text)
 
