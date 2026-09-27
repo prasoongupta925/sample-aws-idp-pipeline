@@ -39,7 +39,7 @@ def create_video_analyzer_tool(
     Args:
         video_uri_getter: Function to get video S3 URI
         analysis_steps: List to append analysis steps
-        model_id: Bedrock model ID for TwelveLabs Pegasus
+        model_id: Bedrock model ID for video analysis (Amazon Nova)
         bedrock_client: Bedrock client
         bucket_owner_account_id: AWS account ID that owns the S3 bucket
         language: Language for analysis output (e.g., 'Korean', 'English')
@@ -80,30 +80,31 @@ Question: {question}
 
 Provide detailed, professional analysis in {language}."""
 
-            # TwelveLabs Pegasus API format
-            request_body = {
-                'inputPrompt': analysis_prompt,
-                'mediaSource': {
-                    's3Location': {
-                        'uri': video_uri
-                    }
-                }
-            }
-
+            # Converse API: video read directly from S3 (Amazon Nova accepts video input)
+            ext = video_uri.rsplit('.', 1)[-1].lower()
+            video_format = {'3gp': 'three_gp', 'jpg': 'mp4'}.get(ext, ext)
+            if video_format not in ('mkv', 'mov', 'mp4', 'webm', 'flv', 'mpeg', 'mpg', 'wmv', 'three_gp'):
+                video_format = 'mp4'
+            s3_location = {'uri': video_uri}
             if bucket_owner_account_id:
-                request_body['mediaSource']['s3Location']['bucketOwner'] = bucket_owner_account_id
+                s3_location['bucketOwner'] = bucket_owner_account_id
 
             print(f'Analyzing video: {video_uri}')
-
-            response = bedrock_client.invoke_model(
+            response = bedrock_client.converse(
                 modelId=model_id,
-                body=json.dumps(request_body),
-                contentType='application/json'
+                messages=[{
+                    'role': 'user',
+                    'content': [
+                        {'video': {'format': video_format, 'source': {'s3Location': s3_location}}},
+                        {'text': analysis_prompt},
+                    ],
+                }],
+                inferenceConfig={'maxTokens': 4096, 'temperature': 0.1},
             )
-
-            result = json.loads(response['body'].read().decode('utf-8'))
-            # TwelveLabs Pegasus returns response in 'message' field
-            answer = result.get('message', '')
+            answer = ''.join(
+                block.get('text', '')
+                for block in response['output']['message']['content']
+            )
 
             analysis_steps.append({
                 'step': len(analysis_steps) + 1,

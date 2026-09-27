@@ -10,7 +10,7 @@ from strands import Agent, AgentSkills
 from strands.hooks.registry import HookProvider
 from strands.models import BedrockModel
 from strands.session import S3SessionManager
-from strands_tools import calculator, current_time, file_read, generate_image, http_request, shell, use_llm
+from strands_tools import calculator, current_time, file_read, http_request, shell, use_llm
 from strands_tools.code_interpreter import AgentCoreCodeInterpreter
 
 from agentcore_mcp_client import AgentCoreGatewayMCPClient
@@ -211,7 +211,6 @@ def get_agent(
     tools = [
         calculator,
         current_time,
-        generate_image,
         http_request,
         file_read,
         shell,
