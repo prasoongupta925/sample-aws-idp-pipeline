@@ -1,7 +1,8 @@
 """Grounding of model-extracted fields against the document's machine text (pure, no AWS).
 
 Port of Plan B lean-file-check extract._lev / inr / ground_fields: the model can
-mis-read single characters of IDs (PAN) or drop/add a digit of an amount. When
+mis-read single characters of IDs (PAN) or drop/add a digit of an amount
+(salaries, salary credits, recurring debits, declared EMIs). When
 the document has a machine text layer (PDF text, OCR, BDA, text file), the exact
 characters printed there win.
 """
@@ -88,14 +89,23 @@ def ground_fields(fields: dict, text: str) -> tuple:
         f[k] = fix(f.get(k), k)
     f['salary_credits'] = [{**c, 'amount': fix(c.get('amount'), f"salary credit {c.get('date')}")}
                            for c in f.get('salary_credits') or [] if isinstance(c, dict)]
+    if 'recurring_debits' in f:
+        f['recurring_debits'] = [{**r, 'amount': fix(r.get('amount'), f"debit {r.get('date')}")}
+                                 for r in f.get('recurring_debits') or [] if isinstance(r, dict)]
+    if 'declared_existing_emis' in f:
+        f['declared_existing_emis'] = [
+            {**e, 'amount': fix(e.get('amount'), f"declared EMI ({e.get('lender') or 'lender not named'})")}
+            for e in f.get('declared_existing_emis') or [] if isinstance(e, dict)]
     return f, notes
 
 
 def unverified_numbers(fields: dict, text: str) -> list:
     """Names of numeric fields whose value is not among the printed numbers.
 
-    Salary credits are reported as 'salary_credits[i].amount'. Returns [] when
-    the text has fewer than 50 characters (nothing to verify against).
+    List amounts are reported as 'salary_credits[i].amount',
+    'recurring_debits[i].amount' and 'declared_existing_emis[i].amount'; the
+    file-check engine flags obligations built on them as NEEDS REVIEW. Returns
+    [] when the text has fewer than 50 characters (nothing to verify against).
     """
     if not _has_text_layer(text):
         return []
@@ -105,8 +115,9 @@ def unverified_numbers(fields: dict, text: str) -> list:
         v = fields.get(k)
         if v is not None and v not in printed:
             out.append(k)
-    for i, c in enumerate(fields.get('salary_credits') or []):
-        v = c.get('amount') if isinstance(c, dict) else None
-        if v is not None and v not in printed:
-            out.append(f'salary_credits[{i}].amount')
+    for key in ('salary_credits', 'recurring_debits', 'declared_existing_emis'):
+        for i, c in enumerate(fields.get(key) or []):
+            v = c.get('amount') if isinstance(c, dict) else None
+            if v is not None and v not in printed:
+                out.append(f'{key}[{i}].amount')
     return out

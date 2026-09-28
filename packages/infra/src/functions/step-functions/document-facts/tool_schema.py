@@ -3,6 +3,12 @@
 Port of the Plan B lean-file-check TOOL_SCHEMA, plus financial_year.
 Plain (non-nullable) JSON types only: Nova tool use degrades badly with
 ["string", "null"] unions. A missing field is simply omitted by the model.
+
+Obligations (FOIR input): bank statements carry recurring_debits (loan EMIs,
+rent, SIP, insurance, utility bills, credit-card payments; one entry per
+transaction) and loan applications carry declared_existing_emis /
+declared_total_existing_emi. Records extracted before these fields existed
+simply lack the keys; the file-check engine reports that as NEEDS REVIEW.
 """
 
 DOC_TYPES = [
@@ -13,6 +19,10 @@ DOC_TYPES = [
     'form16_itr',
     'other',
 ]
+
+# Payment channel of a bank debit and what the debit pays for.
+DEBIT_CHANNELS = ['ACH', 'NACH', 'ECS', 'SI', 'UPI', 'other']
+DEBIT_CATEGORIES = ['loan_emi', 'rent', 'investment', 'utility', 'credit_card', 'insurance', 'other']
 
 TOOL_NAME = 'record_loan_document'
 TOOL_DESCRIPTION = 'Record the structured fields of one loan-file document.'
@@ -52,8 +62,48 @@ TOOL_SCHEMA = {
                 'required': ['date', 'amount', 'narration'],
             },
         },
+        'recurring_debits': {
+            'type': 'array',
+            'description': 'Bank statement: EVERY debit row that pays a loan EMI, rent, SIP / mutual fund / RD, '
+                           'insurance premium, utility / phone / broadband / electricity bill or credit-card '
+                           'bill, one entry per transaction in every month (include one-off premiums). '
+                           'Skip groceries, shopping, fuel, restaurants, medical stores, ATM withdrawals and credits',
+            'items': {
+                'type': 'object',
+                'properties': {
+                    'date': {'type': 'string', 'description': 'YYYY-MM-DD'},
+                    'amount': {'type': 'number', 'description': 'Withdrawal amount of this row'},
+                    'narration': {'type': 'string', 'description': 'Narration exactly as printed'},
+                    'channel': {'type': 'string', 'enum': DEBIT_CHANNELS,
+                                'description': 'ACH / NACH / ECS / SI (standing instruction) / UPI, else other'},
+                    'category': {'type': 'string', 'enum': DEBIT_CATEGORIES,
+                                 'description': 'loan_emi = repayment of a loan (EMI); investment = SIP, mutual '
+                                                'fund, RD; utility = electricity, phone, broadband, DTH bills; '
+                                                'credit_card = credit-card bill payment (not an EMI)'},
+                },
+                'required': ['date', 'amount', 'narration', 'category'],
+            },
+        },
         'declared_net_salary': {**_NUM, 'description': 'Loan application: net monthly (take-home) salary declared'},
+        'declared_existing_emis': {
+            'type': 'array',
+            'description': 'Loan application: every existing loan the applicant declared (existing obligations '
+                           'section), one entry per loan. A credit card that is not an EMI is not a loan. '
+                           'Empty when none is declared',
+            'items': {
+                'type': 'object',
+                'properties': {
+                    'lender': {'type': 'string', 'description': 'Lender name exactly as printed'},
+                    'loan_type': {'type': 'string', 'description': 'Facility, e.g. Car loan'},
+                    'amount': {'type': 'number', 'description': 'Monthly EMI'},
+                },
+                'required': ['amount'],
+            },
+        },
+        'declared_total_existing_emi': {**_NUM, 'description': 'Loan application: total existing monthly EMI '
+                                                               'declared (0 when none is declared)'},
         'loan_amount': {**_NUM, 'description': 'Loan application: loan amount requested'},
+        'loan_tenure_months': {**_NUM, 'description': 'Loan application: requested tenure in months'},
         'product': {**_STR, 'description': 'Loan application: loan product, e.g. Personal Loan'},
         'financial_year': {**_STR, 'description': 'Form-16 / ITR only: financial year as YYYY-YY, e.g. 2025-26'},
     },
@@ -61,7 +111,11 @@ TOOL_SCHEMA = {
 }
 
 # Amount fields that are grounded against the printed numbers of the document.
-NUMERIC_FIELDS = ('gross_salary', 'net_salary', 'declared_net_salary', 'loan_amount')
+NUMERIC_FIELDS = ('gross_salary', 'net_salary', 'declared_net_salary', 'declared_total_existing_emi',
+                  'loan_amount', 'loan_tenure_months')
+
+# List fields: always present in a normalised record, [] when empty.
+LIST_FIELDS = ('salary_credits', 'recurring_debits', 'declared_existing_emis')
 
 # Canonical field order of a normalised facts record (includes doc_type).
 FIELD_NAMES = list(TOOL_SCHEMA['properties'])

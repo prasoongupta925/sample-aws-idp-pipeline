@@ -154,3 +154,88 @@ def test_unverified_salary_credit():
         {'date': '2026-03-01', 'amount': 82500, 'narration': 'x'},
         {'date': '2026-04-01', 'amount': 99999, 'narration': 'y'}]})
     assert unverified_numbers(fields, BANK_TEXT) == ['salary_credits[1].amount']
+
+
+# --------------------------------------------------------------------------- #
+# obligations: recurring debits and declared EMIs (synthetic demo text)
+# --------------------------------------------------------------------------- #
+RAHUL_BANK_TEXT = (
+    'STATEMENT OF ACCOUNT\nAccount holder RAHUL VIJAY DESHMUKH\nPeriod: 01-Mar-2026 to 31-Aug-2026\n'
+    '01-Mar-2026 NEFT CR/SAL KONKAN SOFTWORKS/MAR26 SAHYN7438010963 82,500.00 2,01,142.35\n'
+    '03-Mar-2026 NEFT DR/RENT MAR26/VASANT JOSHI SAHYN7467648334 18,000.00 1,83,142.35\n'
+    '05-Mar-2026 ACH DR/MULSHI AUTO FINANCE/CAR LOAN EMI ACH11261866 8,200.00 1,74,942.35\n'
+    '07-Mar-2026 ACH DR/SIP/SAMPLE ASSET MGMT MF ACH89348362 5,000.00 1,69,942.35\n'
+    '25-Mar-2026 BILLPAY/DR/MOBILE & BROADBAND BP756664639 1,299.00 1,44,602.35\n'
+)
+
+RAHUL_APP_TEXT = (
+    'PERSONAL LOAN APPLICATION FORM\nLoan amount requested ₹6,00,000 (Rupees Six Lakh Only) Tenure 48 months\n'
+    'Full name Rahul Vijay Deshmukh PAN BQXPD4821K Net monthly salary ₹82,500\n'
+    '4. EXISTING OBLIGATIONS (AS DECLARED BY APPLICANT)\n'
+    'Mulshi Auto Finance Ltd (sample) Car loan ₹8,200 22 months\nTotal existing EMI ₹8,200\n'
+)
+
+
+def _debit(date, amount, narration, category, channel='other'):
+    return {'date': date, 'amount': amount, 'narration': narration, 'channel': channel, 'category': category}
+
+
+def test_recurring_debit_dropped_digit_is_corrected():
+    fields = normalise_fields({'doc_type': 'bank_statement', 'recurring_debits': [
+        _debit('2026-03-05', 820, 'ACH DR/MULSHI AUTO FINANCE/CAR LOAN EMI', 'loan_emi', 'ACH'),
+        _debit('2026-03-03', 18000, 'NEFT DR/RENT MAR26/VASANT JOSHI', 'rent')]})
+    out, notes = ground_fields(fields, RAHUL_BANK_TEXT)
+    assert [d['amount'] for d in out['recurring_debits']] == [8200.0, 18000.0]
+    assert notes == ['debit 2026-03-05 corrected from text layer: model read ₹820, document text says ₹8,200']
+    assert unverified_numbers(out, RAHUL_BANK_TEXT) == []
+    assert fields['recurring_debits'][0]['amount'] == 820.0, 'input dict must not be mutated'
+
+
+def test_ungrounded_recurring_debit_is_marked_unverified():
+    fields = normalise_fields({'doc_type': 'bank_statement', 'recurring_debits': [
+        _debit('2026-03-05', 8200, 'ACH DR/MULSHI AUTO FINANCE/CAR LOAN EMI', 'loan_emi', 'ACH'),
+        _debit('2026-03-10', 12345, 'NACH DR/UNKNOWN FINSERV/PL EMI', 'loan_emi', 'NACH')]})
+    out, _ = ground_fields(fields, RAHUL_BANK_TEXT)
+    assert out['recurring_debits'][1]['amount'] == 12345.0  # kept, but flagged
+    assert unverified_numbers(out, RAHUL_BANK_TEXT) == ['recurring_debits[1].amount']
+
+
+def test_declared_emi_and_requested_loan_grounded():
+    fields = normalise_fields({
+        'doc_type': 'loan_application', 'pan': 'BQXPD4821K', 'declared_net_salary': 82500,
+        'declared_existing_emis': [{'lender': 'Mulshi Auto Finance Ltd (sample)', 'loan_type': 'Car loan',
+                                    'amount': 82000}],
+        'declared_total_existing_emi': 8200, 'loan_amount': 600000, 'loan_tenure_months': 48})
+    out, notes = ground_fields(fields, RAHUL_APP_TEXT)
+    assert out['declared_existing_emis'][0]['amount'] == 8200.0
+    assert notes == ['declared EMI (Mulshi Auto Finance Ltd (sample)) corrected from text layer: '
+                     'model read ₹82,000, document text says ₹8,200']
+    assert unverified_numbers(out, RAHUL_APP_TEXT) == []
+
+
+def test_ungrounded_declared_emi_and_tenure_are_unverified():
+    fields = normalise_fields({
+        'doc_type': 'loan_application',
+        'declared_existing_emis': [{'lender': 'Mulshi Auto Finance Ltd (sample)', 'amount': 9100}],
+        'declared_total_existing_emi': 9100, 'loan_tenure_months': 60})
+    out, _ = ground_fields(fields, RAHUL_APP_TEXT)
+    assert unverified_numbers(out, RAHUL_APP_TEXT) == [
+        'declared_total_existing_emi', 'loan_tenure_months', 'declared_existing_emis[0].amount']
+
+
+def test_declared_none_zero_total_is_grounded():
+    text = RAHUL_APP_TEXT.replace('Mulshi Auto Finance Ltd (sample) Car loan ₹8,200 22 months\n'
+                                  'Total existing EMI ₹8,200\n', 'None declared – ₹0 –\n')
+    fields = normalise_fields({'doc_type': 'loan_application', 'pan': 'BQXPD4821K', 'declared_existing_emis': [],
+                               'declared_total_existing_emi': 0})
+    out, notes = ground_fields(fields, text)
+    assert out['declared_total_existing_emi'] == 0.0 and notes == []
+    assert unverified_numbers(out, text) == []
+
+
+def test_old_record_without_obligation_keys_is_left_alone():
+    old = {'doc_type': 'bank_statement', 'salary_credits': [
+        {'date': '2026-03-01', 'amount': 82500, 'narration': 'NEFT CR/SAL KONKAN SOFTWORKS/MAR26'}]}
+    out, _ = ground_fields(old, RAHUL_BANK_TEXT)
+    assert 'recurring_debits' not in out and 'declared_existing_emis' not in out
+    assert unverified_numbers(old, RAHUL_BANK_TEXT) == []

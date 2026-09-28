@@ -204,9 +204,10 @@ def test_ready_made_mapping_rules():
     assert cl['product'] == 'personal_loan'
     assert cl['tolerance_pct'] == 7
     items = _items(cl)
+    # X12 is computed by the engine now (no manual item)
     assert list(items) == [
         'xx_01', 'xx_02', 'xx_03', 'xx_04', 'xx_05', 'xx_06', 'xx_07',
-        'xx_e01', 'xx_e02', 'x02', 'x12',
+        'xx_e01', 'xx_e02', 'x02',
     ]
     assert items['xx_01'] == {
         'id': 'xx_01', 'label': 'Identity proof',
@@ -237,13 +238,13 @@ def test_ready_made_mapping_rules():
     assert items['xx_e02']['required'] is False
     assert items['x02']['label'] == 'Cross-check: PAN format'
     assert items['x02']['required'] is True
-    assert items['x12']['required'] is False
-    # X01/X03/X06 map to engine checks; X10/X11 are covered elsewhere.
+    # X01/X03/X06/X12 map to engine checks; X10/X11 are covered elsewhere.
     # Slips + Form-16/ITR add the INFO-only Form-16 gross check.
     assert cl['consistency_checks'] == [
         'pan', 'applicant_name', 'employer', 'employer_vs_bank_credits',
-        'form16_vs_slip_gross',
+        'form16_vs_slip_gross', 'declared_emis_vs_bank_debits',
     ]
+    assert 'foir' not in cl  # no X14 and no parameters.foir in the sample
 
 
 def test_ready_made_unknown_applies_to_warns():
@@ -273,3 +274,83 @@ def test_bundle_matches_research_file(catalog):
     assert converted['checklists'] == catalog['checklists'][1:], (
         'checklists.json is stale; regenerate it (see convert_checklists.py)'
     )
+
+
+# ------------------------------------------------------------------ FOIR
+FOIR_PARAMS = {
+    'label_result': 'indicative; lender policy decides',
+    'by_brand': {
+        'XX': [
+            {'value': 0.5, 'where': '/check-eligibility', 'verbatim': 'Calculated at 50% FOIR',
+             'url': 'https://example.invalid/check-eligibility'},
+            {'value': 0.7, 'where': '/calculator, eligibility tab', 'verbatim': 'FOIR 70%',
+             'url': 'https://example.invalid/calculator'},
+        ],
+        'YY': [{'value': 0.7, 'where': 'Calculator', 'verbatim': 'FOIR 70%',
+                'url': 'https://example.invalid/yy'}],
+    },
+    'default_for_checker': {'XX': 0.5, 'YY': 0.7, 'basis': 'DEMO-POLICY'},
+}
+
+
+def test_ready_made_foir_from_research_parameters():
+    data = copy.deepcopy(SAMPLE)
+    data['parameters']['foir'] = FOIR_PARAMS
+    data['checklists'][0]['brand'] = 'XX'
+    data['checklists'][0]['cross_check_ids'].append('X14')
+    yy = copy.deepcopy(data['checklists'][0])
+    yy.update(checklist_id='YY-PL-SAL', brand='YY', brand_name='Other DSA')
+    data['checklists'].append(yy)
+    catalog, warnings = cc.convert(data)
+    assert warnings == []
+    assert engine.validate_catalog(catalog) == []
+    xx, yy_cl = catalog['checklists']
+    assert xx['consistency_checks'][-2:] == ['declared_emis_vs_bank_debits', 'foir']
+    assert xx['foir'] == {
+        'value': 0.5,
+        'hard_limit': False,
+        'basis': 'DEMO-POLICY',
+        'source': "Example DSA /check-eligibility: 'Calculated at 50% FOIR'",
+        'url': 'https://example.invalid/check-eligibility',
+        'alternatives': [{'value': 0.7,
+                          'source': "Example DSA /calculator, eligibility tab: 'FOIR 70%'",
+                          'url': 'https://example.invalid/calculator'}],
+        'note': 'Example DSA also shows 70% (/calculator, eligibility tab); 50% is used '
+                'for eligibility. Confirm with the lender.',
+    }
+    assert yy_cl['foir'] == {
+        'value': 0.7, 'hard_limit': False, 'basis': 'PUBLISHED',
+        'source': "Other DSA Calculator: 'FOIR 70%'", 'url': 'https://example.invalid/yy'}
+
+
+def test_bundle_foir_per_brand(catalog):
+    """SS 70% (calculator); LS 50% for eligibility with the 70% calculator noted;
+    the default demo checklist 70%. X12/X14 are engine checks, not manual items."""
+    default = engine.get_checklist(catalog, 'salaried_personal_loan')
+    assert default['foir']['value'] == 0.7
+    for cid in BRAND_IDS:
+        cl = engine.get_checklist(catalog, cid)
+        assert cl['foir']['hard_limit'] is False, cid
+        assert {'declared_emis_vs_bank_debits', 'foir'} <= set(cl['consistency_checks']), cid
+        assert not {'x12', 'x14'} & {i['id'] for i in cl['items']}, cid
+        if cid.startswith('ss_'):
+            assert cl['foir']['value'] == 0.7, cid
+            assert "'FOIR 70%'" in cl['foir']['source'], cid
+        else:
+            assert cl['foir']['value'] == 0.5, cid
+            assert [a['value'] for a in cl['foir']['alternatives']] == [0.7], cid
+            assert '70% (/calculator, eligibility tab)' in cl['foir']['note'], cid
+    assert 'Car Loan eligibility' in engine.get_checklist(catalog, 'ls_cl_sal')['foir']['source']
+
+
+def test_ls_pl_sal_foir_at_50_percent(catalog):
+    cl = engine.get_checklist(catalog, 'ls_pl_sal')
+    a = engine.run_file_check(rahul(), cl)['applicants'][0]
+    f = a['foir']
+    assert (f['foir_limit'], f['existing_emis'], f['net_monthly_income']) == (0.5, 8200, 82500)
+    assert f['max_new_emi'] == 33050  # 0.5 x 82,500 - 8,200
+    assert f['status'] == 'OK' and f['label'] == "indicative — the lender's policy decides"
+    assert 'FOIR 50%' in f['detail']
+    assert f['limit_alternatives'][0]['value'] == 0.7
+    rows = {c['check_id']: c for c in a['consistency']}
+    assert rows['declared_emis_vs_bank_debits']['status'] == 'OK'

@@ -10,6 +10,14 @@
       "description": "Salaried personal loan file: application form, identity details (PAN + masked Aadhaar), last 3 months' salary slips, last 6 months' bank statement, latest Form-16 / ITR.",
       "tolerance_pct": 5,
       "form16_tolerance_pct": 10,
+      "foir": {
+        "value": 0.7,
+        "hard_limit": false,
+        "basis": "DEMO-POLICY",
+        "source": "Smart Solutions calculator, eligibility tab: 'FOIR 70%' (Max EMI = 0.7 × net monthly income − existing EMIs); the Loan Sarathi calculator also shows 'FOIR 70%'",
+        "url": "https://www.smartsolutionsmumbai.com/calculator",
+        "note": "Demo checklist default. Loan Sarathi /check-eligibility says 'Calculated at 50% FOIR'; the lender's policy decides."
+      },
       "items": [
         {
           "id": "loan_application",
@@ -73,7 +81,9 @@
         "declared_vs_slip_net",
         "declared_vs_bank_credits",
         "slip_net_vs_bank_credits",
-        "form16_vs_slip_gross"
+        "form16_vs_slip_gross",
+        "declared_emis_vs_bank_debits",
+        "foir"
       ]
     },
     {
@@ -84,6 +94,13 @@
       "description": "Smart Solutions Personal Loan (SS-PL-SAL), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.smartsolutionsmumbai.com/loan/personal-loan",
       "tolerance_pct": 5,
       "form16_tolerance_pct": 10,
+      "foir": {
+        "value": 0.7,
+        "hard_limit": false,
+        "basis": "PUBLISHED",
+        "source": "Smart Solutions Calculator, eligibility tab: 'FOIR 70%'",
+        "url": "https://www.smartsolutionsmumbai.com/calculator"
+      },
       "items": [
         {
           "id": "ss_pl_01",
@@ -174,26 +191,8 @@
           }
         },
         {
-          "id": "x12",
-          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
           "id": "x13",
           "label": "Cross-check: Bounce / return entries",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
-          "id": "x14",
-          "label": "Cross-check: FOIR (indicative)",
           "doc_types": [],
           "required": false,
           "rule": {
@@ -209,7 +208,9 @@
         "employer_vs_bank_credits",
         "declared_vs_slip_net",
         "declared_vs_bank_credits",
-        "slip_net_vs_bank_credits"
+        "slip_net_vs_bank_credits",
+        "declared_emis_vs_bank_debits",
+        "foir"
       ]
     },
     {
@@ -220,6 +221,13 @@
       "description": "Smart Solutions Personal Loan (SS-PL-SE), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.smartsolutionsmumbai.com/loan/personal-loan",
       "tolerance_pct": 5,
       "form16_tolerance_pct": 10,
+      "foir": {
+        "value": 0.7,
+        "hard_limit": false,
+        "basis": "PUBLISHED",
+        "source": "Smart Solutions Calculator, eligibility tab: 'FOIR 70%'",
+        "url": "https://www.smartsolutionsmumbai.com/calculator"
+      },
       "items": [
         {
           "id": "ss_pl_01",
@@ -308,26 +316,8 @@
           }
         },
         {
-          "id": "x12",
-          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
           "id": "x13",
           "label": "Cross-check: Bounce / return entries",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
-          "id": "x14",
-          "label": "Cross-check: FOIR (indicative)",
           "doc_types": [],
           "required": false,
           "rule": {
@@ -344,7 +334,13 @@
           }
         }
       ],
-      "consistency_checks": ["pan", "aadhaar_last4", "applicant_name"]
+      "consistency_checks": [
+        "pan",
+        "aadhaar_last4",
+        "applicant_name",
+        "declared_emis_vs_bank_debits",
+        "foir"
+      ]
     },
     {
       "id": "ss_bl_se",
@@ -354,6 +350,13 @@
       "description": "Smart Solutions Business Loan (SS-BL-SE), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.smartsolutionsmumbai.com/loan/business-loan",
       "tolerance_pct": 5,
       "form16_tolerance_pct": 10,
+      "foir": {
+        "value": 0.7,
+        "hard_limit": false,
+        "basis": "PUBLISHED",
+        "source": "Smart Solutions Calculator, eligibility tab: 'FOIR 70%'",
+        "url": "https://www.smartsolutionsmumbai.com/calculator"
+      },
       "items": [
         {
           "id": "ss_bl_01",
@@ -474,26 +477,8 @@
           }
         },
         {
-          "id": "x12",
-          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
           "id": "x13",
           "label": "Cross-check: Bounce / return entries",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
-          "id": "x14",
-          "label": "Cross-check: FOIR (indicative)",
           "doc_types": [],
           "required": false,
           "rule": {
@@ -510,7 +495,13 @@
           }
         }
       ],
-      "consistency_checks": ["pan", "aadhaar_last4", "applicant_name"]
+      "consistency_checks": [
+        "pan",
+        "aadhaar_last4",
+        "applicant_name",
+        "declared_emis_vs_bank_debits",
+        "foir"
+      ]
     },
     {
       "id": "ss_hl_sal",
@@ -520,6 +511,13 @@
       "description": "Smart Solutions Home Loan (SS-HL-SAL), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.smartsolutionsmumbai.com/loan/home-loan",
       "tolerance_pct": 5,
       "form16_tolerance_pct": 10,
+      "foir": {
+        "value": 0.7,
+        "hard_limit": false,
+        "basis": "PUBLISHED",
+        "source": "Smart Solutions Calculator, eligibility tab: 'FOIR 70%'",
+        "url": "https://www.smartsolutionsmumbai.com/calculator"
+      },
       "items": [
         {
           "id": "ss_hl_01",
@@ -633,26 +631,8 @@
           }
         },
         {
-          "id": "x12",
-          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
           "id": "x13",
           "label": "Cross-check: Bounce / return entries",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
-          "id": "x14",
-          "label": "Cross-check: FOIR (indicative)",
           "doc_types": [],
           "required": false,
           "rule": {
@@ -668,7 +648,9 @@
         "employer_vs_bank_credits",
         "declared_vs_slip_net",
         "declared_vs_bank_credits",
-        "slip_net_vs_bank_credits"
+        "slip_net_vs_bank_credits",
+        "declared_emis_vs_bank_debits",
+        "foir"
       ]
     },
     {
@@ -679,6 +661,13 @@
       "description": "Smart Solutions Home Loan (SS-HL-SE), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.smartsolutionsmumbai.com/loan/home-loan",
       "tolerance_pct": 5,
       "form16_tolerance_pct": 10,
+      "foir": {
+        "value": 0.7,
+        "hard_limit": false,
+        "basis": "PUBLISHED",
+        "source": "Smart Solutions Calculator, eligibility tab: 'FOIR 70%'",
+        "url": "https://www.smartsolutionsmumbai.com/calculator"
+      },
       "items": [
         {
           "id": "ss_hl_01",
@@ -790,26 +779,8 @@
           }
         },
         {
-          "id": "x12",
-          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
           "id": "x13",
           "label": "Cross-check: Bounce / return entries",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
-          "id": "x14",
-          "label": "Cross-check: FOIR (indicative)",
           "doc_types": [],
           "required": false,
           "rule": {
@@ -826,7 +797,13 @@
           }
         }
       ],
-      "consistency_checks": ["pan", "aadhaar_last4", "applicant_name"]
+      "consistency_checks": [
+        "pan",
+        "aadhaar_last4",
+        "applicant_name",
+        "declared_emis_vs_bank_debits",
+        "foir"
+      ]
     },
     {
       "id": "ss_lap_sal",
@@ -836,6 +813,13 @@
       "description": "Smart Solutions Mortgage Loan / Loan Against Property (SS-LAP-SAL), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.smartsolutionsmumbai.com/loan/mortgage-loan",
       "tolerance_pct": 5,
       "form16_tolerance_pct": 10,
+      "foir": {
+        "value": 0.7,
+        "hard_limit": false,
+        "basis": "PUBLISHED",
+        "source": "Smart Solutions Calculator, eligibility tab: 'FOIR 70%'",
+        "url": "https://www.smartsolutionsmumbai.com/calculator"
+      },
       "items": [
         {
           "id": "ss_lap_01",
@@ -962,26 +946,8 @@
           }
         },
         {
-          "id": "x12",
-          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
           "id": "x13",
           "label": "Cross-check: Bounce / return entries",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
-          "id": "x14",
-          "label": "Cross-check: FOIR (indicative)",
           "doc_types": [],
           "required": false,
           "rule": {
@@ -997,7 +963,9 @@
         "employer_vs_bank_credits",
         "declared_vs_slip_net",
         "declared_vs_bank_credits",
-        "slip_net_vs_bank_credits"
+        "slip_net_vs_bank_credits",
+        "declared_emis_vs_bank_debits",
+        "foir"
       ]
     },
     {
@@ -1008,6 +976,13 @@
       "description": "Smart Solutions Mortgage Loan / Loan Against Property (SS-LAP-SE), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.smartsolutionsmumbai.com/loan/mortgage-loan",
       "tolerance_pct": 5,
       "form16_tolerance_pct": 10,
+      "foir": {
+        "value": 0.7,
+        "hard_limit": false,
+        "basis": "PUBLISHED",
+        "source": "Smart Solutions Calculator, eligibility tab: 'FOIR 70%'",
+        "url": "https://www.smartsolutionsmumbai.com/calculator"
+      },
       "items": [
         {
           "id": "ss_lap_01",
@@ -1132,26 +1107,8 @@
           }
         },
         {
-          "id": "x12",
-          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
           "id": "x13",
           "label": "Cross-check: Bounce / return entries",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
-          "id": "x14",
-          "label": "Cross-check: FOIR (indicative)",
           "doc_types": [],
           "required": false,
           "rule": {
@@ -1168,7 +1125,13 @@
           }
         }
       ],
-      "consistency_checks": ["pan", "aadhaar_last4", "applicant_name"]
+      "consistency_checks": [
+        "pan",
+        "aadhaar_last4",
+        "applicant_name",
+        "declared_emis_vs_bank_debits",
+        "foir"
+      ]
     },
     {
       "id": "ss_cl_sal",
@@ -1178,6 +1141,13 @@
       "description": "Smart Solutions Car Loan (SS-CL-SAL), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.smartsolutionsmumbai.com/loan/car-loan",
       "tolerance_pct": 5,
       "form16_tolerance_pct": 10,
+      "foir": {
+        "value": 0.7,
+        "hard_limit": false,
+        "basis": "PUBLISHED",
+        "source": "Smart Solutions Calculator, eligibility tab: 'FOIR 70%'",
+        "url": "https://www.smartsolutionsmumbai.com/calculator"
+      },
       "items": [
         {
           "id": "ss_cl_01",
@@ -1277,26 +1247,8 @@
           }
         },
         {
-          "id": "x12",
-          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
           "id": "x13",
           "label": "Cross-check: Bounce / return entries",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
-          "id": "x14",
-          "label": "Cross-check: FOIR (indicative)",
           "doc_types": [],
           "required": false,
           "rule": {
@@ -1312,7 +1264,9 @@
         "employer_vs_bank_credits",
         "declared_vs_slip_net",
         "declared_vs_bank_credits",
-        "slip_net_vs_bank_credits"
+        "slip_net_vs_bank_credits",
+        "declared_emis_vs_bank_debits",
+        "foir"
       ]
     },
     {
@@ -1323,6 +1277,13 @@
       "description": "Smart Solutions Car Loan (SS-CL-SE), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.smartsolutionsmumbai.com/loan/car-loan",
       "tolerance_pct": 5,
       "form16_tolerance_pct": 10,
+      "foir": {
+        "value": 0.7,
+        "hard_limit": false,
+        "basis": "PUBLISHED",
+        "source": "Smart Solutions Calculator, eligibility tab: 'FOIR 70%'",
+        "url": "https://www.smartsolutionsmumbai.com/calculator"
+      },
       "items": [
         {
           "id": "ss_cl_01",
@@ -1420,26 +1381,8 @@
           }
         },
         {
-          "id": "x12",
-          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
           "id": "x13",
           "label": "Cross-check: Bounce / return entries",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
-          "id": "x14",
-          "label": "Cross-check: FOIR (indicative)",
           "doc_types": [],
           "required": false,
           "rule": {
@@ -1456,7 +1399,13 @@
           }
         }
       ],
-      "consistency_checks": ["pan", "aadhaar_last4", "applicant_name"]
+      "consistency_checks": [
+        "pan",
+        "aadhaar_last4",
+        "applicant_name",
+        "declared_emis_vs_bank_debits",
+        "foir"
+      ]
     },
     {
       "id": "ss_el_stu_cosal",
@@ -1466,6 +1415,13 @@
       "description": "Smart Solutions Education Loan (SS-EL-STU-COSAL), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.smartsolutionsmumbai.com/loan/education-loan",
       "tolerance_pct": 5,
       "form16_tolerance_pct": 10,
+      "foir": {
+        "value": 0.7,
+        "hard_limit": false,
+        "basis": "PUBLISHED",
+        "source": "Smart Solutions Calculator, eligibility tab: 'FOIR 70%'",
+        "url": "https://www.smartsolutionsmumbai.com/calculator"
+      },
       "items": [
         {
           "id": "ss_el_01",
@@ -1585,26 +1541,8 @@
           }
         },
         {
-          "id": "x12",
-          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
           "id": "x13",
           "label": "Cross-check: Bounce / return entries",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
-          "id": "x14",
-          "label": "Cross-check: FOIR (indicative)",
           "doc_types": [],
           "required": false,
           "rule": {
@@ -1620,7 +1558,9 @@
         "employer_vs_bank_credits",
         "declared_vs_slip_net",
         "declared_vs_bank_credits",
-        "slip_net_vs_bank_credits"
+        "slip_net_vs_bank_credits",
+        "declared_emis_vs_bank_debits",
+        "foir"
       ]
     },
     {
@@ -1631,6 +1571,13 @@
       "description": "Smart Solutions Education Loan (SS-EL-STU-COSE), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.smartsolutionsmumbai.com/loan/education-loan",
       "tolerance_pct": 5,
       "form16_tolerance_pct": 10,
+      "foir": {
+        "value": 0.7,
+        "hard_limit": false,
+        "basis": "PUBLISHED",
+        "source": "Smart Solutions Calculator, eligibility tab: 'FOIR 70%'",
+        "url": "https://www.smartsolutionsmumbai.com/calculator"
+      },
       "items": [
         {
           "id": "ss_el_01",
@@ -1750,26 +1697,8 @@
           }
         },
         {
-          "id": "x12",
-          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
           "id": "x13",
           "label": "Cross-check: Bounce / return entries",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
-          "id": "x14",
-          "label": "Cross-check: FOIR (indicative)",
           "doc_types": [],
           "required": false,
           "rule": {
@@ -1786,7 +1715,13 @@
           }
         }
       ],
-      "consistency_checks": ["pan", "aadhaar_last4", "applicant_name"]
+      "consistency_checks": [
+        "pan",
+        "aadhaar_last4",
+        "applicant_name",
+        "declared_emis_vs_bank_debits",
+        "foir"
+      ]
     },
     {
       "id": "ls_pl_sal",
@@ -1796,6 +1731,21 @@
       "description": "Loan Sarathi Personal Loan (LS-PL-SAL), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.loansarathi.com/loan/personal-loan",
       "tolerance_pct": 5,
       "form16_tolerance_pct": 10,
+      "foir": {
+        "value": 0.5,
+        "hard_limit": false,
+        "basis": "DEMO-POLICY",
+        "source": "Loan Sarathi /check-eligibility: 'Calculated at 50% FOIR'",
+        "url": "https://www.loansarathi.com/check-eligibility",
+        "alternatives": [
+          {
+            "value": 0.7,
+            "source": "Loan Sarathi /calculator, eligibility tab: 'FOIR 70%'",
+            "url": "https://www.loansarathi.com/calculator"
+          }
+        ],
+        "note": "Loan Sarathi also shows 70% (/calculator, eligibility tab); 50% is used for eligibility. Confirm with the lender."
+      },
       "items": [
         {
           "id": "ls_pl_01",
@@ -1931,26 +1881,8 @@
           }
         },
         {
-          "id": "x12",
-          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
           "id": "x13",
           "label": "Cross-check: Bounce / return entries",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
-          "id": "x14",
-          "label": "Cross-check: FOIR (indicative)",
           "doc_types": [],
           "required": false,
           "rule": {
@@ -1966,7 +1898,9 @@
         "employer_vs_bank_credits",
         "declared_vs_slip_net",
         "declared_vs_bank_credits",
-        "slip_net_vs_bank_credits"
+        "slip_net_vs_bank_credits",
+        "declared_emis_vs_bank_debits",
+        "foir"
       ]
     },
     {
@@ -1977,6 +1911,21 @@
       "description": "Loan Sarathi Personal Loan (LS-PL-SE), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.loansarathi.com/loan/personal-loan",
       "tolerance_pct": 5,
       "form16_tolerance_pct": 10,
+      "foir": {
+        "value": 0.5,
+        "hard_limit": false,
+        "basis": "DEMO-POLICY",
+        "source": "Loan Sarathi /check-eligibility: 'Calculated at 50% FOIR'",
+        "url": "https://www.loansarathi.com/check-eligibility",
+        "alternatives": [
+          {
+            "value": 0.7,
+            "source": "Loan Sarathi /calculator, eligibility tab: 'FOIR 70%'",
+            "url": "https://www.loansarathi.com/calculator"
+          }
+        ],
+        "note": "Loan Sarathi also shows 70% (/calculator, eligibility tab); 50% is used for eligibility. Confirm with the lender."
+      },
       "items": [
         {
           "id": "ls_pl_01",
@@ -2074,26 +2023,8 @@
           }
         },
         {
-          "id": "x12",
-          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
           "id": "x13",
           "label": "Cross-check: Bounce / return entries",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
-          "id": "x14",
-          "label": "Cross-check: FOIR (indicative)",
           "doc_types": [],
           "required": false,
           "rule": {
@@ -2110,7 +2041,13 @@
           }
         }
       ],
-      "consistency_checks": ["pan", "aadhaar_last4", "applicant_name"]
+      "consistency_checks": [
+        "pan",
+        "aadhaar_last4",
+        "applicant_name",
+        "declared_emis_vs_bank_debits",
+        "foir"
+      ]
     },
     {
       "id": "ls_bl_se",
@@ -2120,6 +2057,21 @@
       "description": "Loan Sarathi Business Loan (LS-BL-SE), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.loansarathi.com/loan/business-loan",
       "tolerance_pct": 5,
       "form16_tolerance_pct": 10,
+      "foir": {
+        "value": 0.5,
+        "hard_limit": false,
+        "basis": "DEMO-POLICY",
+        "source": "Loan Sarathi /check-eligibility: 'Calculated at 50% FOIR'",
+        "url": "https://www.loansarathi.com/check-eligibility",
+        "alternatives": [
+          {
+            "value": 0.7,
+            "source": "Loan Sarathi /calculator, eligibility tab: 'FOIR 70%'",
+            "url": "https://www.loansarathi.com/calculator"
+          }
+        ],
+        "note": "Loan Sarathi also shows 70% (/calculator, eligibility tab); 50% is used for eligibility. Confirm with the lender."
+      },
       "items": [
         {
           "id": "ls_bl_01",
@@ -2280,26 +2232,8 @@
           }
         },
         {
-          "id": "x12",
-          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
           "id": "x13",
           "label": "Cross-check: Bounce / return entries",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
-          "id": "x14",
-          "label": "Cross-check: FOIR (indicative)",
           "doc_types": [],
           "required": false,
           "rule": {
@@ -2316,7 +2250,13 @@
           }
         }
       ],
-      "consistency_checks": ["pan", "aadhaar_last4", "applicant_name"]
+      "consistency_checks": [
+        "pan",
+        "aadhaar_last4",
+        "applicant_name",
+        "declared_emis_vs_bank_debits",
+        "foir"
+      ]
     },
     {
       "id": "ls_hl_sal",
@@ -2326,6 +2266,21 @@
       "description": "Loan Sarathi Home Loan (LS-HL-SAL), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.loansarathi.com/loan/home-loan",
       "tolerance_pct": 5,
       "form16_tolerance_pct": 10,
+      "foir": {
+        "value": 0.5,
+        "hard_limit": false,
+        "basis": "DEMO-POLICY",
+        "source": "Loan Sarathi /check-eligibility: 'Calculated at 50% FOIR'",
+        "url": "https://www.loansarathi.com/check-eligibility",
+        "alternatives": [
+          {
+            "value": 0.7,
+            "source": "Loan Sarathi /calculator, eligibility tab: 'FOIR 70%'",
+            "url": "https://www.loansarathi.com/calculator"
+          }
+        ],
+        "note": "Loan Sarathi also shows 70% (/calculator, eligibility tab); 50% is used for eligibility. Confirm with the lender."
+      },
       "items": [
         {
           "id": "ls_hl_01",
@@ -2479,26 +2434,8 @@
           }
         },
         {
-          "id": "x12",
-          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
           "id": "x13",
           "label": "Cross-check: Bounce / return entries",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
-          "id": "x14",
-          "label": "Cross-check: FOIR (indicative)",
           "doc_types": [],
           "required": false,
           "rule": {
@@ -2514,7 +2451,9 @@
         "employer_vs_bank_credits",
         "declared_vs_slip_net",
         "declared_vs_bank_credits",
-        "slip_net_vs_bank_credits"
+        "slip_net_vs_bank_credits",
+        "declared_emis_vs_bank_debits",
+        "foir"
       ]
     },
     {
@@ -2525,6 +2464,21 @@
       "description": "Loan Sarathi Home Loan (LS-HL-SE), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.loansarathi.com/loan/home-loan",
       "tolerance_pct": 5,
       "form16_tolerance_pct": 10,
+      "foir": {
+        "value": 0.5,
+        "hard_limit": false,
+        "basis": "DEMO-POLICY",
+        "source": "Loan Sarathi /check-eligibility: 'Calculated at 50% FOIR'",
+        "url": "https://www.loansarathi.com/check-eligibility",
+        "alternatives": [
+          {
+            "value": 0.7,
+            "source": "Loan Sarathi /calculator, eligibility tab: 'FOIR 70%'",
+            "url": "https://www.loansarathi.com/calculator"
+          }
+        ],
+        "note": "Loan Sarathi also shows 70% (/calculator, eligibility tab); 50% is used for eligibility. Confirm with the lender."
+      },
       "items": [
         {
           "id": "ls_hl_01",
@@ -2676,26 +2630,8 @@
           }
         },
         {
-          "id": "x12",
-          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
           "id": "x13",
           "label": "Cross-check: Bounce / return entries",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
-          "id": "x14",
-          "label": "Cross-check: FOIR (indicative)",
           "doc_types": [],
           "required": false,
           "rule": {
@@ -2712,7 +2648,13 @@
           }
         }
       ],
-      "consistency_checks": ["pan", "aadhaar_last4", "applicant_name"]
+      "consistency_checks": [
+        "pan",
+        "aadhaar_last4",
+        "applicant_name",
+        "declared_emis_vs_bank_debits",
+        "foir"
+      ]
     },
     {
       "id": "ls_lap_sal",
@@ -2722,6 +2664,21 @@
       "description": "Loan Sarathi Loan Against Property (LS-LAP-SAL), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.loansarathi.com/loan/loan-against-property",
       "tolerance_pct": 5,
       "form16_tolerance_pct": 10,
+      "foir": {
+        "value": 0.5,
+        "hard_limit": false,
+        "basis": "DEMO-POLICY",
+        "source": "Loan Sarathi /check-eligibility: 'Calculated at 50% FOIR'",
+        "url": "https://www.loansarathi.com/check-eligibility",
+        "alternatives": [
+          {
+            "value": 0.7,
+            "source": "Loan Sarathi /calculator, eligibility tab: 'FOIR 70%'",
+            "url": "https://www.loansarathi.com/calculator"
+          }
+        ],
+        "note": "Loan Sarathi also shows 70% (/calculator, eligibility tab); 50% is used for eligibility. Confirm with the lender."
+      },
       "items": [
         {
           "id": "ls_lap_01",
@@ -2857,26 +2814,8 @@
           }
         },
         {
-          "id": "x12",
-          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
           "id": "x13",
           "label": "Cross-check: Bounce / return entries",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
-          "id": "x14",
-          "label": "Cross-check: FOIR (indicative)",
           "doc_types": [],
           "required": false,
           "rule": {
@@ -2892,7 +2831,9 @@
         "employer_vs_bank_credits",
         "declared_vs_slip_net",
         "declared_vs_bank_credits",
-        "slip_net_vs_bank_credits"
+        "slip_net_vs_bank_credits",
+        "declared_emis_vs_bank_debits",
+        "foir"
       ]
     },
     {
@@ -2903,6 +2844,21 @@
       "description": "Loan Sarathi Loan Against Property (LS-LAP-SE), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.loansarathi.com/loan/loan-against-property",
       "tolerance_pct": 5,
       "form16_tolerance_pct": 10,
+      "foir": {
+        "value": 0.5,
+        "hard_limit": false,
+        "basis": "DEMO-POLICY",
+        "source": "Loan Sarathi /check-eligibility: 'Calculated at 50% FOIR'",
+        "url": "https://www.loansarathi.com/check-eligibility",
+        "alternatives": [
+          {
+            "value": 0.7,
+            "source": "Loan Sarathi /calculator, eligibility tab: 'FOIR 70%'",
+            "url": "https://www.loansarathi.com/calculator"
+          }
+        ],
+        "note": "Loan Sarathi also shows 70% (/calculator, eligibility tab); 50% is used for eligibility. Confirm with the lender."
+      },
       "items": [
         {
           "id": "ls_lap_01",
@@ -3036,26 +2992,8 @@
           }
         },
         {
-          "id": "x12",
-          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
           "id": "x13",
           "label": "Cross-check: Bounce / return entries",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
-          "id": "x14",
-          "label": "Cross-check: FOIR (indicative)",
           "doc_types": [],
           "required": false,
           "rule": {
@@ -3072,7 +3010,13 @@
           }
         }
       ],
-      "consistency_checks": ["pan", "aadhaar_last4", "applicant_name"]
+      "consistency_checks": [
+        "pan",
+        "aadhaar_last4",
+        "applicant_name",
+        "declared_emis_vs_bank_debits",
+        "foir"
+      ]
     },
     {
       "id": "ls_el_stu_cosal",
@@ -3082,6 +3026,21 @@
       "description": "Loan Sarathi Education Loan (LS-EL-STU-COSAL), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.loansarathi.com/loan/education-loan",
       "tolerance_pct": 5,
       "form16_tolerance_pct": 10,
+      "foir": {
+        "value": 0.5,
+        "hard_limit": false,
+        "basis": "DEMO-POLICY",
+        "source": "Loan Sarathi /check-eligibility: 'Calculated at 50% FOIR'",
+        "url": "https://www.loansarathi.com/check-eligibility",
+        "alternatives": [
+          {
+            "value": 0.7,
+            "source": "Loan Sarathi /calculator, eligibility tab: 'FOIR 70%'",
+            "url": "https://www.loansarathi.com/calculator"
+          }
+        ],
+        "note": "Loan Sarathi also shows 70% (/calculator, eligibility tab); 50% is used for eligibility. Confirm with the lender."
+      },
       "items": [
         {
           "id": "ls_el_01",
@@ -3228,26 +3187,8 @@
           }
         },
         {
-          "id": "x12",
-          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
           "id": "x13",
           "label": "Cross-check: Bounce / return entries",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
-          "id": "x14",
-          "label": "Cross-check: FOIR (indicative)",
           "doc_types": [],
           "required": false,
           "rule": {
@@ -3263,7 +3204,9 @@
         "employer_vs_bank_credits",
         "declared_vs_slip_net",
         "declared_vs_bank_credits",
-        "slip_net_vs_bank_credits"
+        "slip_net_vs_bank_credits",
+        "declared_emis_vs_bank_debits",
+        "foir"
       ]
     },
     {
@@ -3274,6 +3217,21 @@
       "description": "Loan Sarathi Education Loan (LS-EL-STU-COSE), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.loansarathi.com/loan/education-loan",
       "tolerance_pct": 5,
       "form16_tolerance_pct": 10,
+      "foir": {
+        "value": 0.5,
+        "hard_limit": false,
+        "basis": "DEMO-POLICY",
+        "source": "Loan Sarathi /check-eligibility: 'Calculated at 50% FOIR'",
+        "url": "https://www.loansarathi.com/check-eligibility",
+        "alternatives": [
+          {
+            "value": 0.7,
+            "source": "Loan Sarathi /calculator, eligibility tab: 'FOIR 70%'",
+            "url": "https://www.loansarathi.com/calculator"
+          }
+        ],
+        "note": "Loan Sarathi also shows 70% (/calculator, eligibility tab); 50% is used for eligibility. Confirm with the lender."
+      },
       "items": [
         {
           "id": "ls_el_01",
@@ -3420,26 +3378,8 @@
           }
         },
         {
-          "id": "x12",
-          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
           "id": "x13",
           "label": "Cross-check: Bounce / return entries",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
-          "id": "x14",
-          "label": "Cross-check: FOIR (indicative)",
           "doc_types": [],
           "required": false,
           "rule": {
@@ -3456,7 +3396,13 @@
           }
         }
       ],
-      "consistency_checks": ["pan", "aadhaar_last4", "applicant_name"]
+      "consistency_checks": [
+        "pan",
+        "aadhaar_last4",
+        "applicant_name",
+        "declared_emis_vs_bank_debits",
+        "foir"
+      ]
     },
     {
       "id": "ls_cl_sal",
@@ -3466,6 +3412,21 @@
       "description": "Loan Sarathi Car Loan (LS-CL-SAL), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.loansarathi.com/loan/car-loan",
       "tolerance_pct": 5,
       "form16_tolerance_pct": 10,
+      "foir": {
+        "value": 0.5,
+        "hard_limit": false,
+        "basis": "DEMO-POLICY",
+        "source": "Loan Sarathi Car Loan eligibility: 'Existing loans: Should not exceed 50% of net income'",
+        "url": "https://www.loansarathi.com/loan/car-loan",
+        "alternatives": [
+          {
+            "value": 0.7,
+            "source": "Loan Sarathi /calculator, eligibility tab: 'FOIR 70%'",
+            "url": "https://www.loansarathi.com/calculator"
+          }
+        ],
+        "note": "Loan Sarathi also shows 70% (/calculator, eligibility tab); 50% is used for eligibility. Confirm with the lender."
+      },
       "items": [
         {
           "id": "ls_cl_01",
@@ -3619,26 +3580,8 @@
           }
         },
         {
-          "id": "x12",
-          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
           "id": "x13",
           "label": "Cross-check: Bounce / return entries",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
-          "id": "x14",
-          "label": "Cross-check: FOIR (indicative)",
           "doc_types": [],
           "required": false,
           "rule": {
@@ -3654,7 +3597,9 @@
         "employer_vs_bank_credits",
         "declared_vs_slip_net",
         "declared_vs_bank_credits",
-        "slip_net_vs_bank_credits"
+        "slip_net_vs_bank_credits",
+        "declared_emis_vs_bank_debits",
+        "foir"
       ]
     },
     {
@@ -3665,6 +3610,21 @@
       "description": "Loan Sarathi Car Loan (LS-CL-SE), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.loansarathi.com/loan/car-loan",
       "tolerance_pct": 5,
       "form16_tolerance_pct": 10,
+      "foir": {
+        "value": 0.5,
+        "hard_limit": false,
+        "basis": "DEMO-POLICY",
+        "source": "Loan Sarathi Car Loan eligibility: 'Existing loans: Should not exceed 50% of net income'",
+        "url": "https://www.loansarathi.com/loan/car-loan",
+        "alternatives": [
+          {
+            "value": 0.7,
+            "source": "Loan Sarathi /calculator, eligibility tab: 'FOIR 70%'",
+            "url": "https://www.loansarathi.com/calculator"
+          }
+        ],
+        "note": "Loan Sarathi also shows 70% (/calculator, eligibility tab); 50% is used for eligibility. Confirm with the lender."
+      },
       "items": [
         {
           "id": "ls_cl_01",
@@ -3816,26 +3776,8 @@
           }
         },
         {
-          "id": "x12",
-          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
           "id": "x13",
           "label": "Cross-check: Bounce / return entries",
-          "doc_types": [],
-          "required": false,
-          "rule": {
-            "kind": "manual"
-          }
-        },
-        {
-          "id": "x14",
-          "label": "Cross-check: FOIR (indicative)",
           "doc_types": [],
           "required": false,
           "rule": {
@@ -3852,7 +3794,13 @@
           }
         }
       ],
-      "consistency_checks": ["pan", "aadhaar_last4", "applicant_name"]
+      "consistency_checks": [
+        "pan",
+        "aadhaar_last4",
+        "applicant_name",
+        "declared_emis_vs_bank_debits",
+        "foir"
+      ]
     }
   ]
 }

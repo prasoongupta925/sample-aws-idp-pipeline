@@ -19,7 +19,8 @@ import pytest  # noqa: E402
 
 import extractor  # noqa: E402
 from extractor import build_texts, build_user_prompt, call_nova, load_prompts  # noqa: E402
-from tool_schema import DOC_TYPES, FIELD_NAMES, NUMERIC_FIELDS, TOOL_NAME, TOOL_SCHEMA  # noqa: E402
+from tool_schema import (  # noqa: E402
+    DEBIT_CATEGORIES, DEBIT_CHANNELS, DOC_TYPES, FIELD_NAMES, LIST_FIELDS, NUMERIC_FIELDS, TOOL_NAME, TOOL_SCHEMA)
 
 PLAN_B_SYSTEM_PROMPT = (
     'You extract fields from Indian loan-file documents for a DSA (loan agent) file check. '
@@ -27,6 +28,13 @@ PLAN_B_SYSTEM_PROMPT = (
     'Copy PAN, names and employer names character-for-character (do not correct typos). '
     'Numbers must be plain numbers without commas or currency symbols (e.g. 82500). '
     'Omit any field that is not present on this document. Never guess.'
+)
+OBLIGATIONS_PROMPT = (
+    ' Bank statements: list every salary credit and every obligation debit (loan EMI, rent, '
+    'SIP / mutual fund / RD, insurance premium, utility or phone bill, credit-card payment) as its '
+    "own entry with that row's date and withdrawal amount, in every month of the statement; skip "
+    'everyday spending. Loan applications: copy each existing loan / EMI from the existing-obligations '
+    'section; a credit card paid monthly is not an EMI.'
 )
 
 PDF_TEXT = ('Salary Slip for the month of August 2026 - Konkan Softworks Pvt Ltd - '
@@ -62,14 +70,31 @@ def test_tool_schema_shape():
     assert TOOL_SCHEMA['required'] == ['doc_type']
     assert TOOL_SCHEMA['properties']['doc_type']['enum'] == DOC_TYPES
     assert TOOL_SCHEMA['properties']['financial_year']['type'] == 'string'
-    assert NUMERIC_FIELDS == ('gross_salary', 'net_salary', 'declared_net_salary', 'loan_amount')
+    assert NUMERIC_FIELDS == ('gross_salary', 'net_salary', 'declared_net_salary',
+                              'declared_total_existing_emi', 'loan_amount', 'loan_tenure_months')
+    assert LIST_FIELDS == ('salary_credits', 'recurring_debits', 'declared_existing_emis')
     assert FIELD_NAMES == [
         'doc_type', 'applicant_name', 'pan', 'masked_aadhaar_last4', 'employer', 'month',
         'gross_salary', 'net_salary', 'statement_from', 'statement_to', 'salary_credits',
-        'declared_net_salary', 'loan_amount', 'product', 'financial_year']
+        'recurring_debits', 'declared_net_salary', 'declared_existing_emis',
+        'declared_total_existing_emi', 'loan_amount', 'loan_tenure_months', 'product', 'financial_year']
     for t in _types(TOOL_SCHEMA):
         assert isinstance(t, str), f'union type found: {t}'
         assert t != 'null'
+
+
+def test_obligation_fields_in_tool_schema():
+    props = TOOL_SCHEMA['properties']
+    debit = props['recurring_debits']['items']
+    assert debit['required'] == ['date', 'amount', 'narration', 'category']
+    assert debit['properties']['channel']['enum'] == DEBIT_CHANNELS == ['ACH', 'NACH', 'ECS', 'SI', 'UPI', 'other']
+    assert debit['properties']['category']['enum'] == DEBIT_CATEGORIES == [
+        'loan_emi', 'rent', 'investment', 'utility', 'credit_card', 'insurance', 'other']
+    emi = props['declared_existing_emis']['items']
+    assert set(emi['properties']) == {'lender', 'loan_type', 'amount'}
+    assert emi['required'] == ['amount']
+    assert props['declared_total_existing_emi']['type'] == 'number'
+    assert props['loan_tenure_months']['type'] == 'number'
 
 
 # --------------------------------------------------------------------------- #
@@ -174,7 +199,7 @@ def test_prompt_yaml_loads_with_placeholders():
     assert '{tool_name}' in prompts['user_prompt']
     assert prompts['system_prompt'] == (
         PLAN_B_SYSTEM_PROMPT + ' The input is the machine-extracted text of one document; '
-        'page markers are not part of the document.')
+        'page markers are not part of the document.' + OBLIGATIONS_PROMPT)
 
 
 def test_user_prompt_uses_replace_not_format():
@@ -213,7 +238,7 @@ def test_call_nova_request_and_tool_use_response():
     (req,) = fake.calls
     assert req['modelId'] == 'global.amazon.nova-2-lite-v1:0'
     assert req['system'] == [{'text': load_prompts()['system_prompt']}]
-    assert req['inferenceConfig'] == {'maxTokens': 2000, 'temperature': 0}
+    assert req['inferenceConfig'] == {'maxTokens': 8000, 'temperature': 0}
     tool_config = req['toolConfig']
     assert tool_config['toolChoice'] == {'tool': {'name': 'record_loan_document'}}
     (tool,) = tool_config['tools']
@@ -267,3 +292,29 @@ def test_default_client_is_lazy_and_uses_region_and_retries(monkeypatch):
     assert created['region_name'] == 'ap-south-1'
     assert created['config'].retries == {'max_attempts': 4, 'mode': 'adaptive'}
     assert created['config'].read_timeout == 120
+
+
+@pytest.mark.parametrize('env_value, expected', [
+    (None, 8000), ('12000', 12000), ('0', 8000), ('-5', 8000), ('lots', 8000)])
+def test_max_output_tokens_env_override(monkeypatch, env_value, expected):
+    if env_value is None:
+        monkeypatch.delenv('FACTS_MAX_OUTPUT_TOKENS', raising=False)
+    else:
+        monkeypatch.setenv('FACTS_MAX_OUTPUT_TOKENS', env_value)
+    fake = FakeBedrock([{'toolUse': {'input': RAW}}])
+    call_nova('text', 'm', client=fake)
+    assert fake.calls[0]['inferenceConfig']['maxTokens'] == expected
+
+
+class TruncatingBedrock(FakeBedrock):
+    def converse(self, **kwargs):
+        resp = super().converse(**kwargs)
+        resp['stopReason'] = 'max_tokens'
+        return resp
+
+
+def test_call_nova_flags_output_cut_at_max_tokens():
+    fake = TruncatingBedrock([{'toolUse': {'toolUseId': 't1', 'name': TOOL_NAME, 'input': RAW}}])
+    fields, usage = call_nova('text', 'm', client=fake)
+    assert fields == RAW
+    assert usage == {'input_tokens': 1200, 'output_tokens': 150, 'output_truncated': True}

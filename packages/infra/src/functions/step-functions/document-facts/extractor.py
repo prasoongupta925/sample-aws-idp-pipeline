@@ -21,6 +21,11 @@ NON_DOCUMENT_TYPES = {'VIDEO', 'AUDIO', 'CHAPTER'}
 # A page with less machine text than this falls back to the vision transcription.
 MIN_MACHINE_CHARS = 50
 
+# Output budget of the forced tool call. A 6-month statement lists ~40
+# recurring debits (~45 tokens each) plus salary credits, so 2000 is too
+# small; FACTS_MAX_OUTPUT_TOKENS overrides it without a code change.
+DEFAULT_MAX_OUTPUT_TOKENS = 8000
+
 _PROMPTS = None
 _bedrock_client = None
 
@@ -110,6 +115,14 @@ def build_user_prompt(model_text: str) -> str:
     return template.replace('{tool_name}', TOOL_NAME).replace('{document_text}', model_text)
 
 
+def max_output_tokens() -> int:
+    try:
+        value = int(os.environ.get('FACTS_MAX_OUTPUT_TOKENS') or DEFAULT_MAX_OUTPUT_TOKENS)
+    except ValueError:
+        value = DEFAULT_MAX_OUTPUT_TOKENS
+    return value if value > 0 else DEFAULT_MAX_OUTPUT_TOKENS
+
+
 def get_bedrock_client():
     global _bedrock_client
     if _bedrock_client is None:
@@ -141,7 +154,10 @@ def _tool_input(block: dict):
 
 
 def call_nova(model_text: str, model_id: str, client=None) -> tuple:
-    """Forced-tool Converse call. Returns (raw fields dict, {input_tokens, output_tokens})."""
+    """Forced-tool Converse call. Returns (raw fields dict, {input_tokens, output_tokens}).
+
+    The usage dict also carries output_truncated=True when the model stopped at maxTokens.
+    """
     client = client or get_bedrock_client()
     resp = client.converse(
         modelId=model_id,
@@ -155,7 +171,7 @@ def call_nova(model_text: str, model_id: str, client=None) -> tuple:
             }}],
             'toolChoice': {'tool': {'name': TOOL_NAME}},
         },
-        inferenceConfig={'maxTokens': 2000, 'temperature': 0},
+        inferenceConfig={'maxTokens': max_output_tokens(), 'temperature': 0},
     )
     usage = resp.get('usage') or {}
     content = ((resp.get('output') or {}).get('message') or {}).get('content') or []
@@ -175,7 +191,12 @@ def call_nova(model_text: str, model_id: str, client=None) -> tuple:
                     break
     if not isinstance(fields, dict):
         raise ValueError('model returned no structured output')
-    return fields, {
+    out = {
         'input_tokens': int(usage.get('inputTokens', 0) or 0),
         'output_tokens': int(usage.get('outputTokens', 0) or 0),
     }
+    if resp.get('stopReason') == 'max_tokens':
+        # the tool input parsed but the model stopped at maxTokens: its lists
+        # (debits, credits) may be cut short; the handler records it in grounding
+        out['output_truncated'] = True
+    return fields, out

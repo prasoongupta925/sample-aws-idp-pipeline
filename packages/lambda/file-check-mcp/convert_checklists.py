@@ -264,7 +264,9 @@ READY_MADE_DOC_TYPES = {
 
 # ready-made cross_check_ids -> engine consistency checks. X10 (gross declared
 # as net) is part of declared_vs_slip_net's detail and X11 (statement coverage)
-# is the bank statement period item, so neither needs a row of its own.
+# is the bank statement period item, so neither needs a row of its own. X12
+# (EMI debits vs declared EMIs) and X14 (FOIR, indicative) are computed by the
+# engine from the obligations facts; both are warnings (REVIEW, never MISMATCH).
 READY_MADE_CROSS_CHECKS = {
     'X01': ['applicant_name'],
     'X03': ['pan'],
@@ -275,6 +277,8 @@ READY_MADE_CROSS_CHECKS = {
     'X09': ['slip_net_vs_bank_credits'],
     'X10': [],
     'X11': [],
+    'X12': ['declared_emis_vs_bank_debits'],
+    'X14': ['foir'],
 }
 
 _APPLICANT_LABELS = {
@@ -314,6 +318,55 @@ def _ready_made_name(cl) -> str:
     if suffix:
         applicant = f'{applicant} ({suffix})'
     return ' - '.join(p for p in (brand, cl.get('product'), applicant) if p)
+
+
+def _foir_source(brand_name, e) -> str:
+    return f"{brand_name} {e.get('where')}: '{e.get('verbatim')}'"
+
+
+def _ready_made_foir(data, cl):
+    """Checklist FOIR from parameters.foir (default_for_checker by brand /
+    brand:product, cited with the published evidence). None when absent."""
+    foir = (data.get('parameters') or {}).get('foir')
+    if not isinstance(foir, dict):
+        return None
+    brand = str(cl.get('brand') or '')
+    product = str(cl.get('product_key') or '')
+    defaults = foir.get('default_for_checker') or {}
+    value = defaults.get(f'{brand}:{product}', defaults.get(brand))
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or not 0 < value <= 1:
+        return None
+    evidence = [
+        e for e in (foir.get('by_brand') or {}).get(brand) or [] if isinstance(e, dict)
+    ]
+    same = [e for e in evidence if e.get('value') == value]
+    words = product.replace('_', ' ')
+    primary = next(
+        (e for e in same if words and words in str(e.get('where') or '').lower()),
+        same[0] if same else None,
+    )
+    brand_name = cl.get('brand_name') or brand
+    others = [e for e in evidence if e.get('value') != value]
+    out = {
+        'value': value,
+        'hard_limit': False,
+        'basis': 'PUBLISHED' if not others and primary else defaults.get('basis', 'DEMO-POLICY'),
+        'source': _foir_source(brand_name, primary) if primary else f'{brand_name} (no published FOIR)',
+        'url': (primary or {}).get('url'),
+    }
+    if others:
+        out['alternatives'] = [
+            {'value': e.get('value'), 'source': _foir_source(brand_name, e), 'url': e.get('url')}
+            for e in others
+        ]
+        shown = ', '.join(
+            f"{e.get('value') * 100:g}% ({e.get('where')})" for e in others
+        )
+        out['note'] = (
+            f'{brand_name} also shows {shown}; {value * 100:g}% is used for eligibility. '
+            'Confirm with the lender.'
+        )
+    return out
 
 
 def _ready_made_doc(doc, cl_type, used_ids, warnings, where):
@@ -444,6 +497,7 @@ def convert_ready_made(data):
             enabled.add('form16_vs_slip_gross')  # INFO only, never MISMATCH
 
         product = cl.get('product') or rid
+        foir = _ready_made_foir(data, cl) if 'foir' in enabled else None
         checklists.append(
             {
                 'id': _unique(slug(rid, 'checklist'), used_ids),
@@ -459,6 +513,7 @@ def convert_ready_made(data):
                 ),
                 'tolerance_pct': tol,
                 'form16_tolerance_pct': engine.DEFAULT_FORM16_TOLERANCE_PCT,
+                **({'foir': foir} if foir else {}),
                 'items': items,
                 'consistency_checks': [c for c in engine.CHECK_IDS if c in enabled],
             }

@@ -2,7 +2,8 @@
 
 After a document is analysed, extract ONE structured loan-file facts record
 (doc type, applicant, PAN, employer, month/period, salaries, salary credits,
-loan amount, financial year) with Amazon Nova 2 Lite, ground identifiers and
+recurring debits, declared existing EMIs, loan amount / tenure, financial
+year) with Amazon Nova 2 Lite, ground identifiers and
 amounts against the document's own machine text, and store the record in S3
 (analysis/facts.json, with model_fields for audit) and DynamoDB
 (PROJ#{pid} / FACTS#{did}, without document text or model_fields).
@@ -85,6 +86,7 @@ def _base_record(ctx: dict, status: str) -> dict:
             'notes': [],
             'unverified_fields': [],
             'truncated': False,
+            'output_truncated': False,
         },
         'source': SOURCE_NONE,
         'model_id': ctx['model_id'],
@@ -157,6 +159,7 @@ def handler(event, context):
             return {'workflow_id': workflow_id, 'status': 'skipped'}
 
         raw, usage = call_nova(model_text, os.environ['FACTS_MODEL_ID'])
+        output_truncated = bool(usage.pop('output_truncated', False))
         model_fields = normalise_fields(raw)
         fields, notes = ground_fields(model_fields, grounding_text)
 
@@ -165,6 +168,8 @@ def handler(event, context):
             notes.append(f'input truncated to {max_chars} chars')
         if not grounded:
             notes.append('no machine text layer; values not verified')
+        if output_truncated:
+            notes.append('model output hit the token limit; lists may be incomplete')
 
         record = _base_record(ctx, 'completed')
         record.update({
@@ -176,6 +181,7 @@ def handler(event, context):
                 'notes': notes,
                 'unverified_fields': unverified_numbers(fields, grounding_text),
                 'truncated': stats['truncated'],
+                'output_truncated': output_truncated,
             },
             'source': SOURCE_MODEL,
             'usage': usage,
@@ -188,6 +194,7 @@ def handler(event, context):
         print(f'Facts completed: workflow_id={workflow_id} doc_type={fields["doc_type"]} '
               f'grounded={grounded} notes={len(notes)} '
               f'unverified={len(record["grounding"]["unverified_fields"])} '
+              f'debits={len(fields["recurring_debits"])} declared_emis={len(fields["declared_existing_emis"])} '
               f'input_tokens={usage.get("input_tokens", 0)} output_tokens={usage.get("output_tokens", 0)}')
         return {'workflow_id': workflow_id, 'status': 'completed'}
 

@@ -8,6 +8,11 @@ system_prompt: >-
   Numbers must be plain numbers without commas or currency symbols (e.g. 82500).
   Omit any field that is not present on this document. Never guess.
   The input is the machine-extracted text of one document; page markers are not part of the document.
+  Bank statements: list every salary credit and every obligation debit (loan EMI, rent, SIP / mutual fund / RD,
+  insurance premium, utility or phone bill, credit-card payment) as its own entry with that row's date and
+  withdrawal amount, in every month of the statement; skip everyday spending.
+  Loan applications: copy each existing loan / EMI from the existing-obligations section; a credit card paid
+  monthly is not an EMI.
 
 user_prompt: |-
   <document>

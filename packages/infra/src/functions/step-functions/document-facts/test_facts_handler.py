@@ -22,7 +22,7 @@ sys.path.insert(0, HERE)
 import pytest  # noqa: E402
 
 import index  # noqa: E402
-from tool_schema import FIELD_NAMES  # noqa: E402
+from tool_schema import FIELD_NAMES, LIST_FIELDS  # noqa: E402
 
 MODEL_ID = 'global.amazon.nova-2-lite-v1:0'
 DOC_NAME = '05_salary_slip_2026-08_aug.pdf'
@@ -249,7 +249,8 @@ def test_media_only_is_skipped(env):
     assert record['reason'] == 'media'
     assert record['doc_type'] == 'other'
     assert record['source'] == 'none'
-    assert all(record['fields'][k] is None for k in FIELD_NAMES if k not in ('doc_type', 'salary_credits'))
+    assert all(record['fields'][k] is None for k in FIELD_NAMES if k != 'doc_type' and k not in LIST_FIELDS)
+    assert all(record['fields'][k] == [] for k in LIST_FIELDS)
     (_, s3_record), _ = _only_call(env['save_facts'])
     assert s3_record['status'] == 'skipped'
 
@@ -287,3 +288,67 @@ def test_zero_segments_does_not_read_s3(env):
     assert env['get_all_segment_analyses'].calls == []
     (_, _, record), _ = _only_call(env['save_document_facts'])
     assert record['reason'] == 'no_text'
+
+
+BANK_PAGE_TEXT = (
+    'STATEMENT OF ACCOUNT\nAccount holder RAHUL VIJAY DESHMUKH\nPeriod: 01-Mar-2026 to 31-Mar-2026\n'
+    '01-Mar-2026 NEFT CR/SAL KONKAN SOFTWORKS/MAR26 SAHYN7438010963 82,500.00 2,01,142.35\n'
+    '03-Mar-2026 NEFT DR/RENT MAR26/VASANT JOSHI SAHYN7467648334 18,000.00 1,83,142.35\n'
+    '05-Mar-2026 ACH DR/MULSHI AUTO FINANCE/CAR LOAN EMI ACH11261866 8,200.00 1,74,942.35\n'
+)
+
+
+def test_bank_statement_obligations_are_stored_without_leaking_to_logs(env, capsys):
+    env['get_all_segment_analyses'].result = [
+        {'segment_index': 0, 'segment_type': 'PAGE', 'format_parser': BANK_PAGE_TEXT, 'ai_analysis': []}]
+    env['call_nova'].result = ({
+        'doc_type': 'bank_statement', 'applicant_name': 'RAHUL VIJAY DESHMUKH',
+        'statement_from': '01-Mar-2026', 'statement_to': '31-Mar-2026',
+        'salary_credits': [{'date': '01-Mar-2026', 'amount': 82500,
+                            'narration': 'NEFT CR/SAL KONKAN SOFTWORKS/MAR26'}],
+        'recurring_debits': [
+            {'date': '03-Mar-2026', 'amount': 18000, 'narration': 'NEFT DR/RENT MAR26/VASANT JOSHI',
+             'channel': 'other', 'category': 'rent'},
+            {'date': '05-Mar-2026', 'amount': 820, 'narration': 'ACH DR/MULSHI AUTO FINANCE/CAR LOAN EMI',
+             'channel': 'ACH', 'category': 'loan_emi'},
+            {'date': '06-Mar-2026', 'amount': 4321, 'narration': 'NACH DR/UNKNOWN', 'category': 'loan_emi'},
+        ],
+    }, {'input_tokens': 2000, 'output_tokens': 400})
+    assert index.handler(dict(EVENT), None)['status'] == 'completed'
+    (_, _, record), _ = _only_call(env['save_document_facts'])
+    debits = record['fields']['recurring_debits']
+    assert [d['amount'] for d in debits] == [18000.0, 8200.0, 4321.0]
+    assert debits[1] == {'date': '2026-03-05', 'amount': 8200.0,
+                         'narration': 'ACH DR/MULSHI AUTO FINANCE/CAR LOAN EMI',
+                         'channel': 'ACH', 'category': 'loan_emi'}
+    assert debits[2]['channel'] == 'NACH'  # inferred from the narration
+    assert record['fields']['declared_existing_emis'] == []
+    assert record['grounding']['unverified_fields'] == ['recurring_debits[2].amount']
+    assert any(n.startswith('debit 2026-03-05 corrected') for n in record['grounding']['notes'])
+    (_, s3_record), _ = _only_call(env['save_facts'])
+    assert s3_record['model_fields']['recurring_debits'][1]['amount'] == 820.0  # before grounding
+    out = capsys.readouterr().out
+    assert 'debits=3 declared_emis=0' in out
+    for secret in ('MULSHI', 'VASANT', '8200', '8,200', '18000', 'RAHUL'):
+        assert secret not in out, f'{secret!r} leaked into logs'
+
+
+def test_output_cut_at_max_tokens_is_recorded_in_grounding(env):
+    env['get_all_segment_analyses'].result = [
+        {'segment_index': 0, 'segment_type': 'PAGE', 'format_parser': BANK_PAGE_TEXT, 'ai_analysis': []}]
+    env['call_nova'].result = ({
+        'doc_type': 'bank_statement',
+        'recurring_debits': [{'date': '03-Mar-2026', 'amount': 18000, 'category': 'rent',
+                              'narration': 'NEFT DR/RENT MAR26/VASANT JOSHI'}],
+    }, {'input_tokens': 2000, 'output_tokens': 8000, 'output_truncated': True})
+    assert index.handler(dict(EVENT), None)['status'] == 'completed'
+    (_, _, record), _ = _only_call(env['save_document_facts'])
+    assert record['grounding']['output_truncated'] is True
+    assert 'model output hit the token limit; lists may be incomplete' in record['grounding']['notes']
+    assert record['usage'] == {'input_tokens': 2000, 'output_tokens': 8000}  # flag not in usage
+
+
+def test_output_not_truncated_by_default(env):
+    assert index.handler(dict(EVENT), None)['status'] == 'completed'
+    (_, _, record), _ = _only_call(env['save_document_facts'])
+    assert record['grounding']['output_truncated'] is False
