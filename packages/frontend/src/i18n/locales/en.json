@@ -698,8 +698,7 @@
       "income": "Income (declared vs documents)",
       "documents": "Documents read ({{count}})",
       "notChecked": "Documents not checked",
-      "needsReview": "Needs a person ({{count}}) – does not change the verdict",
-      "foir": "FOIR (indicative)"
+      "needsReview": "Needs a person ({{count}}) – does not change the verdict"
     },
     "status": {
       "present": "Present",
@@ -739,6 +738,122 @@
       "maxNewEmiAt": "Max new EMI at FOIR {{limit}}% (indicative)",
       "note": "Indicative – the lender's policy decides. Only loan EMIs count; rent, SIP, utilities and credit-card payments do not.",
       "incomeSource": "Income: {{source}}."
+    },
+    "obligations": {
+      "title": "Obligations & FOIR (indicative)",
+      "indicativeLabel": "indicative — the lender's policy decides",
+      "fixedLoanEmis": "Fixed loan EMIs ({{count}})",
+      "noLoanEmis": "No loan EMI found in the bank debits.",
+      "otherFixed": "Other fixed debits ({{count}})",
+      "totals": "Monthly totals",
+      "totalLoanEmis": "Loan EMIs",
+      "totalOtherFixed": "Other fixed debits",
+      "totalFixed": "Fixed monthly total",
+      "totalVariable": "Variable (monthly average)",
+      "variableOneOff": "Variable and one-off debits ({{count}})",
+      "oneOff": "one-off",
+      "onDay": "on the {{ordinal}}",
+      "monthsSeen": "{{seen}} of {{total}} months",
+      "monthsSeenOnly": "{{count}} months",
+      "monthsSeenOnly_one": "{{count}} month",
+      "average": "avg {{amount}}",
+      "averageRange": "avg {{amount}} ({{min}}–{{max}})",
+      "unverified": "amount not verified against the document text",
+      "declaredAs": "Declared: {{label}}",
+      "lenderNotNamed": "Lender not named",
+      "declaredNotFound": "Declared, not found in the bank debits (still counted toward FOIR)",
+      "declaredNotChecked": "Declared; bank debits not available",
+      "possibleEmi": "possible EMI – not on the application",
+      "vsLimit": "vs limit {{limit}}%",
+      "limitSource": "Limit FOIR {{limit}}%: {{source}}",
+      "limitSourceOnly": "Limit: {{source}}",
+      "limitOnly": "Limit FOIR {{limit}}%",
+      "hardLimit": "(hard limit – above it the file is NOT READY)",
+      "sourceLink": "source",
+      "alternative": "Also published: {{value}}% – {{source}}",
+      "emiBasis": "EMIs from {{basis}}.",
+      "checklistLimit": "Indicative FOIR limit {{limit}}% – {{source}}",
+      "checklistLimitOnly": "Indicative FOIR limit {{limit}}%",
+      "emiStatus": {
+        "matched": "Declared · matched",
+        "partial": "Declared · seen in only some months",
+        "amountDiffers": "Declared amount differs",
+        "declared": "Declared",
+        "notDeclared": "Not on the application",
+        "notChecked": "Declared EMIs not extracted"
+      },
+      "category": {
+        "loan_emi": "loan EMI",
+        "rent": "rent",
+        "investment": "investment",
+        "utility": "utility",
+        "credit_card": "credit card",
+        "insurance": "insurance",
+        "other": "other"
+      }
+    },
+    "focusHint": {
+      "obligations": "Run the check to see the obligations and FOIR from the bank statement."
+    },
+    "ask": {
+      "title": "Ask about this file",
+      "hint": "The answer uses only this file's check results, extracted fields and document text. The verdict above is decided by rules and does not change.",
+      "thisChecklist": "this checklist",
+      "suggestions": {
+        "complete": "Is this file complete for {{checklist}}? What is missing?",
+        "salary": "Does the declared salary match the bank statement credits?",
+        "pan": "Is the PAN consistent across all documents?",
+        "obligations": "Summarise the monthly obligations from the bank statement."
+      },
+      "inputLabel": "Your question about this file",
+      "placeholder": "e.g. Why is this file not ready? (Enter to send, Shift+Enter for a new line)",
+      "send": "Ask",
+      "thinking": "Amazon Nova 2 Lite is reading the file…",
+      "caption": "{{input}} in / {{output}} out tokens · {{cost}}",
+      "groundedOn": "from {{count}} documents",
+      "groundedOn_one": "from {{count}} document",
+      "failed": "The question could not be answered.",
+      "verdictStillValid": "The verdict above is deterministic and still valid.",
+      "clear": "Clear",
+      "clearTitle": "Clear the conversation (the session meter keeps counting)",
+      "errors": {
+        "notFound": "The project or the ask API was not found (HTTP 404).",
+        "invalid": "The question was rejected (HTTP 422). Keep it between 1 and 1000 characters.",
+        "throttled": "Too many questions right now (HTTP 429). Try again in a moment.",
+        "notConfigured": "Ask is not configured for this deployment (HTTP 503).",
+        "failed": "The model call failed (HTTP {{status}}). Try again in a moment."
+      },
+      "meter": {
+        "answeredBy": "Answered by Amazon Nova 2 Lite using ONLY the extracted fields, check results and document text",
+        "model": "Model {{model}} ({{region}})",
+        "modelNoRegion": "Model {{model}}",
+        "session": "This session: {{input}} input + {{output}} output tokens = {{cost}}",
+        "window": "Last {{days}} days: {{cost}} over {{count}} calls",
+        "window_one": "Last {{days}} days: {{cost}} over {{count}} call",
+        "windowLoading": "Last {{days}} days: loading…",
+        "windowUnavailable": "Last {{days}} days: not available",
+        "pricing": "Pricing {{input}} / 1M input, {{output}} / 1M output",
+        "retention": "Nothing is kept longer than {{days}} days",
+        "synthetic": "Synthetic data only."
+      }
     }
+  },
+  "painPoints": {
+    "button": "Why DSAs need this",
+    "open": "Pain points a DSA faces with loan files, and where this platform addresses them",
+    "title": "Why DSAs need this",
+    "subtitle": "Loan-file pain points, from Habile Labs' NBFC series",
+    "source": "Habile Labs – {{title}}",
+    "forDsa": "What it means for a DSA",
+    "feature": "In this platform",
+    "correction": "Said more precisely",
+    "showMe": {
+      "fileCheck": "Show me the file check",
+      "ask": "Show me Ask",
+      "obligations": "Show me obligations & FOIR",
+      "retention": "Show me the 7-day retention"
+    },
+    "tagTitle": "Why DSAs need this: {{title}}",
+    "footer": "Not legal advice and not a compliance claim. Demo data is synthetic."
   }
 }

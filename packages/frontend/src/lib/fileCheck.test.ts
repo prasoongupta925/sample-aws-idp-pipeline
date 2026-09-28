@@ -7,11 +7,20 @@ import {
   fileCheckCsvFileName,
   fileCheckFindings,
   itemTone,
+  loanEmiRows,
+  monthRangeLabel,
   normalizeChecklists,
+  obligationFindings,
+  ordinal,
   pickDefaultChecklistId,
+  safeHttpUrl,
   verdictTone,
 } from './fileCheck';
-import { NOT_READY_RESULT } from '../components/FileCheckPanel/fixtures';
+import {
+  NOT_READY_RESULT,
+  READY_OBLIGATIONS_RESULT,
+  READY_WITH_REVIEW_RESULT,
+} from '../components/FileCheckPanel/fixtures';
 
 describe('normalizeChecklists', () => {
   it('accepts the engine list_checklists object', () => {
@@ -27,6 +36,19 @@ describe('normalizeChecklists', () => {
       'ss_pl_sal',
     ]);
     expect(defaultId).toBe('ss_pl_sal');
+  });
+
+  it('keeps the checklist FOIR policy', () => {
+    const foir = {
+      value: 0.5,
+      source: "Loan Sarathi: 'Calculated at 50% FOIR'",
+    };
+    const { checklists } = normalizeChecklists([
+      { id: 'ls_pl_sal', name: 'LS PL', foir },
+      { id: 'plain', name: 'Plain', foir: null },
+    ]);
+    expect(checklists[0].foir).toEqual(foir);
+    expect(checklists[1]).not.toHaveProperty('foir');
   });
 
   it('accepts a bare list with label instead of name and drops bad rows', () => {
@@ -96,6 +118,7 @@ describe('tones', () => {
     expect(itemTone('MISSING', false)).toBe('muted');
     expect(itemTone('REVIEW')).toBe('review');
     expect(consistencyTone('MISMATCH')).toBe('bad');
+    expect(consistencyTone('REVIEW')).toBe('review');
     expect(consistencyTone('N/A')).toBe('muted');
     expect(consistencyTone('INFO')).toBe('info');
   });
@@ -181,5 +204,114 @@ describe('CSV', () => {
     expect(fileCheckCsvFileName(NOT_READY_RESULT, 'Amit S. Patil')).toBe(
       'file-check_salaried-personal-loan_amit-s-patil_2026-09-28.csv',
     );
+  });
+});
+
+describe('obligations helpers', () => {
+  it('formats days, month ranges and links', () => {
+    expect([1, 2, 3, 4, 5, 11, 12, 13, 21, 22, 23, 31].map(ordinal)).toEqual([
+      '1st',
+      '2nd',
+      '3rd',
+      '4th',
+      '5th',
+      '11th',
+      '12th',
+      '13th',
+      '21st',
+      '22nd',
+      '23rd',
+      '31st',
+    ]);
+    expect(monthRangeLabel(['2026-08', '2026-03', '2026-05'])).toBe(
+      'Mar 2026 – Aug 2026',
+    );
+    expect(monthRangeLabel(['2026-05'])).toBe('May 2026');
+    expect(monthRangeLabel([])).toBe('');
+    expect(safeHttpUrl('https://www.smartsolutionsmumbai.com/calculator')).toBe(
+      'https://www.smartsolutionsmumbai.com/calculator',
+    );
+    expect(safeHttpUrl(['javascript', 'alert(1)'].join(':'))).toBeNull();
+    expect(safeHttpUrl(42)).toBeNull();
+  });
+
+  it('pairs each bank EMI with the declared EMI it matched', () => {
+    const rows = loanEmiRows(
+      READY_WITH_REVIEW_RESULT.applicants[0].obligations ?? {},
+    );
+    expect(rows.map((r) => [r.debit.payee, r.status])).toEqual([
+      ['MULSHI AUTO FINANCE / CAR LOAN EMI', 'matched'],
+      ['KESARI FINSERV / PERSONAL LOAN EMI', 'not_declared'],
+    ]);
+    expect(rows[0].declared?.lender).toBe('Mulshi Auto Finance Ltd (sample)');
+    // Declared EMIs not extracted: an undeclared-looking EMI is "not checked".
+    expect(
+      loanEmiRows({
+        declared_available: false,
+        fixed_loan_emis: [{ payee: 'X', amount: 1 }],
+      })[0].status,
+    ).toBe('not_checked');
+  });
+});
+
+describe('CSV obligations rows', () => {
+  it('adds loan EMIs, fixed debits, totals and FOIR after the checks', () => {
+    const a = READY_OBLIGATIONS_RESULT.applicants[0];
+    const rows = obligationFindings(a, 'Personal Loan - Salaried');
+    expect(rows.map((r) => [r.item, r.status])).toEqual([
+      ['Loan EMI – MULSHI AUTO FINANCE / CAR LOAN EMI', 'MATCHED'],
+      ['Fixed debit – RENT / VASANT JOSHI', 'FIXED'],
+      ['Fixed debit – SIP / SAMPLE ASSET MGMT MF', 'FIXED'],
+      ['Fixed debit – MOBILE & BROADBAND', 'FIXED'],
+      ['Monthly obligations (totals)', 'INFO'],
+      ['FOIR (indicative)', 'OK'],
+    ]);
+    expect(rows.every((r) => r.section === 'Obligations')).toBe(true);
+    expect(rows[0].detail).toBe(
+      '₹8,200, on the 5th, 6 of 6 months (Mar 2026 – Aug 2026), ACH; declared ₹8,200 Mulshi Auto Finance Ltd (sample) (Car loan) [01_loan_application_form.pdf]',
+    );
+    expect(rows[0].documents).toEqual([
+      '06_bank_statement_2026-03_to_2026-08.pdf',
+    ]);
+    expect(rows[1].detail).toBe(
+      'rent: ₹18,000, on the 3rd, 6 of 6 months (Mar 2026 – Aug 2026)',
+    );
+    expect(rows[4].detail).toBe(
+      'loan EMIs ₹8,200; other fixed ₹24,299; fixed monthly ₹32,499; variable monthly average ₹13,265.5',
+    );
+    expect(rows[5].detail).toBe(
+      "FOIR 9.9% vs limit 70%; max new EMI ₹49,550; limit source: Smart Solutions calculator, eligibility tab: 'FOIR 70%' (Max EMI = 0.7 × net monthly income − existing EMIs); the Loan Sarathi calculator also shows 'FOIR 70%'; indicative — the lender's policy decides",
+    );
+  });
+
+  it('marks an undeclared bank EMI and exports the new consistency rows', () => {
+    const findings = fileCheckFindings(READY_WITH_REVIEW_RESULT);
+    const kesari = findings.find(
+      (f) => f.item === 'Loan EMI – KESARI FINSERV / PERSONAL LOAN EMI',
+    );
+    expect(kesari).toMatchObject({
+      section: 'Obligations',
+      status: 'NOT DECLARED',
+    });
+    expect(kesari?.detail).toContain('not on the loan application');
+    const consistency = findings.filter((f) => f.section === 'Consistency');
+    expect(consistency.map((f) => [f.item, f.status])).toContainEqual([
+      'Declared EMIs vs bank debits',
+      'REVIEW',
+    ]);
+    expect(consistency.map((f) => [f.item, f.status])).toContainEqual([
+      'FOIR (indicative)',
+      'OK',
+    ]);
+    // Obligations rows follow the applicant's consistency rows.
+    const sections = findings.map((f) => f.section);
+    expect(sections.lastIndexOf('Consistency')).toBeLessThan(
+      sections.indexOf('Obligations'),
+    );
+    const csv = buildFileCheckCsv(READY_WITH_REVIEW_RESULT);
+    expect(csv).toContain(
+      'Rahul Vijay Deshmukh,READY,Personal Loan - Salaried,Obligations,Loan EMI – KESARI FINSERV / PERSONAL LOAN EMI,NOT DECLARED,',
+    );
+    expect(csv).toContain('FOIR 17.8% vs limit 70%; max new EMI ₹43,050');
   });
 });

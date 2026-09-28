@@ -27,6 +27,7 @@ import {
   X,
   Network,
   ClipboardCheck,
+  Lightbulb,
 } from 'lucide-react';
 import ConfirmModal from './ConfirmModal';
 import {
@@ -564,6 +565,7 @@ interface SidePanelProps {
   onDeleteDocument?: (documentId: string) => void;
   onViewProjectGraph?: () => void;
   onOpenFileCheck?: () => void;
+  onOpenPainPoints?: () => void;
 }
 
 export default function SidePanel({
@@ -585,6 +587,7 @@ export default function SidePanel({
   onDeleteDocument,
   onViewProjectGraph,
   onOpenFileCheck,
+  onOpenPainPoints,
 }: SidePanelProps) {
   const { t } = useTranslation();
   const [openArtifactMenuId, setOpenArtifactMenuId] = useState<string | null>(
@@ -758,6 +761,16 @@ export default function SidePanel({
               >
                 <ClipboardCheck className="h-3.5 w-3.5 flex-shrink-0" />
                 <span className="truncate">{t('fileCheck.title')}</span>
+              </button>
+            )}
+            {onOpenPainPoints && (
+              <button
+                onClick={onOpenPainPoints}
+                className="flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-lg text-violet-600 dark:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-900/30 transition-colors min-w-0"
+                title={t('painPoints.open')}
+              >
+                <Lightbulb className="h-3.5 w-3.5 flex-shrink-0" />
+                <span className="truncate">{t('painPoints.button')}</span>
               </button>
             )}
             {onRefreshDocuments && (

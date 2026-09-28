@@ -698,8 +698,7 @@
       "income": "収入 (申告額と書類)",
       "documents": "読み取った文書 ({{count}})",
       "notChecked": "チェックされていない文書",
-      "needsReview": "担当者の確認が必要 ({{count}}) – 判定には影響しません",
-      "foir": "FOIR (参考値)"
+      "needsReview": "担当者の確認が必要 ({{count}}) – 判定には影響しません"
     },
     "status": {
       "present": "あり",
@@ -738,6 +737,122 @@
       "maxNewEmiAt": "FOIR {{limit}}% での新規 EMI の上限 (参考値)",
       "note": "参考値 – 最終的な判断は金融機関のポリシーによります。ローンの EMI のみを含み、家賃、SIP、公共料金、クレジットカードの支払いは含みません。",
       "incomeSource": "収入の根拠: {{source}}。"
+    },
+    "obligations": {
+      "title": "返済義務と FOIR（参考値）",
+      "indicativeLabel": "参考値 — 最終判断は貸し手の方針によります",
+      "fixedLoanEmis": "固定ローン EMI（{{count}}）",
+      "noLoanEmis": "銀行の引き落としにローン EMI は見つかりませんでした。",
+      "otherFixed": "その他の固定引き落とし（{{count}}）",
+      "totals": "月次合計",
+      "totalLoanEmis": "ローン EMI",
+      "totalOtherFixed": "その他の固定引き落とし",
+      "totalFixed": "固定の月次合計",
+      "totalVariable": "変動（月平均）",
+      "variableOneOff": "変動・単発の引き落とし（{{count}}）",
+      "oneOff": "単発",
+      "onDay": "毎月{{day}}日",
+      "monthsSeen": "{{total}}か月中{{seen}}か月",
+      "monthsSeenOnly": "{{count}}か月",
+      "monthsSeenOnly_one": "{{count}}か月",
+      "average": "平均 {{amount}}",
+      "averageRange": "平均 {{amount}}（{{min}}–{{max}}）",
+      "unverified": "金額は文書テキストで未検証",
+      "declaredAs": "申告: {{label}}",
+      "lenderNotNamed": "貸し手の記載なし",
+      "declaredNotFound": "申告あり、銀行の引き落としに見当たらない（FOIR には算入）",
+      "declaredNotChecked": "申告あり。銀行の引き落とし情報なし",
+      "possibleEmi": "EMI の可能性 – 申込書に記載なし",
+      "vsLimit": "上限 {{limit}}% に対して",
+      "limitSource": "上限 FOIR {{limit}}%: {{source}}",
+      "limitSourceOnly": "上限: {{source}}",
+      "limitOnly": "上限 FOIR {{limit}}%",
+      "hardLimit": "（厳格な上限 – 超えると準備未完了）",
+      "sourceLink": "出典",
+      "alternative": "他の公開値: {{value}}% – {{source}}",
+      "emiBasis": "EMI の根拠: {{basis}}。",
+      "checklistLimit": "参考 FOIR 上限 {{limit}}% – {{source}}",
+      "checklistLimitOnly": "参考 FOIR 上限 {{limit}}%",
+      "emiStatus": {
+        "matched": "申告 · 一致",
+        "partial": "申告 · 一部の月のみ確認",
+        "amountDiffers": "申告額が異なる",
+        "declared": "申告あり",
+        "notDeclared": "申込書に記載なし",
+        "notChecked": "申告 EMI 未抽出"
+      },
+      "category": {
+        "loan_emi": "ローン EMI",
+        "rent": "家賃",
+        "investment": "投資",
+        "utility": "公共料金",
+        "credit_card": "クレジットカード",
+        "insurance": "保険",
+        "other": "その他"
+      }
+    },
+    "focusHint": {
+      "obligations": "チェックを実行すると、銀行取引明細の返済義務と FOIR が表示されます。"
+    },
+    "ask": {
+      "title": "このファイルについて質問",
+      "hint": "回答はこのファイルのチェック結果、抽出項目、文書テキストのみを使います。上の判定はルールで決まり、変わりません。",
+      "thisChecklist": "このチェックリスト",
+      "suggestions": {
+        "complete": "このファイルは {{checklist}} の要件を満たしていますか？何が不足していますか？",
+        "salary": "申告された給与は銀行取引明細の入金と一致していますか？",
+        "pan": "PAN はすべての書類で一致していますか？",
+        "obligations": "銀行取引明細から毎月の返済義務を要約してください。"
+      },
+      "inputLabel": "このファイルについての質問",
+      "placeholder": "例: このファイルが準備未完了なのはなぜですか？（Enter で送信、Shift+Enter で改行）",
+      "send": "質問",
+      "thinking": "Amazon Nova 2 Lite がファイルを読んでいます…",
+      "caption": "入力 {{input}} / 出力 {{output}} トークン · {{cost}}",
+      "groundedOn": "{{count}} 件の文書に基づく",
+      "groundedOn_one": "{{count}} 件の文書に基づく",
+      "failed": "質問に回答できませんでした。",
+      "verdictStillValid": "上の判定は決定的なルールによるもので、引き続き有効です。",
+      "clear": "クリア",
+      "clearTitle": "会話をクリア（セッションの使用量は引き続き集計）",
+      "errors": {
+        "notFound": "プロジェクトまたは質問 API が見つかりません (HTTP 404)。",
+        "invalid": "質問が拒否されました (HTTP 422)。1〜1000 文字で入力してください。",
+        "throttled": "現在質問が多すぎます (HTTP 429)。しばらくしてから再試行してください。",
+        "notConfigured": "このデプロイでは質問機能が設定されていません (HTTP 503)。",
+        "failed": "モデルの呼び出しに失敗しました (HTTP {{status}})。しばらくしてから再試行してください。"
+      },
+      "meter": {
+        "answeredBy": "Amazon Nova 2 Lite が抽出項目、チェック結果、文書テキストのみで回答",
+        "model": "モデル {{model}}（{{region}}）",
+        "modelNoRegion": "モデル {{model}}",
+        "session": "このセッション: 入力 {{input}} + 出力 {{output}} トークン = {{cost}}",
+        "window": "過去 {{days}} 日: {{count}} 回の呼び出しで {{cost}}",
+        "window_one": "過去 {{days}} 日: {{count}} 回の呼び出しで {{cost}}",
+        "windowLoading": "過去 {{days}} 日: 読み込み中…",
+        "windowUnavailable": "過去 {{days}} 日: 取得できません",
+        "pricing": "料金 入力 1M あたり {{input}}、出力 1M あたり {{output}}",
+        "retention": "{{days}} 日を超えて保存されるものはありません",
+        "synthetic": "合成データのみ。"
+      }
     }
+  },
+  "painPoints": {
+    "button": "DSA に必要な理由",
+    "open": "DSA がローン書類で抱える課題と、このプラットフォームでの対応",
+    "title": "DSA に必要な理由",
+    "subtitle": "Habile Labs の NBFC シリーズから見たローン書類の課題",
+    "source": "Habile Labs – {{title}}",
+    "forDsa": "DSA にとっての意味",
+    "feature": "このプラットフォームでは",
+    "correction": "より正確には",
+    "showMe": {
+      "fileCheck": "ファイルチェックを見る",
+      "ask": "質問機能を見る",
+      "obligations": "返済義務と FOIR を見る",
+      "retention": "7 日間の保存ポリシーを見る"
+    },
+    "tagTitle": "DSA に必要な理由: {{title}}",
+    "footer": "法的助言やコンプライアンスの主張ではありません。デモデータは合成データです。"
   }
 }

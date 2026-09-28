@@ -5,7 +5,6 @@ import { Check, Info, Minus, UserRound, X } from 'lucide-react';
 import type {
   FileCheckApplicant,
   FileCheckConsistencyRow,
-  FileCheckFoir,
   FileCheckIncome,
   FileCheckItemRow,
   FileCheckResult,
@@ -22,6 +21,12 @@ import {
   type StatusTone,
   type VerdictTone,
 } from '../../lib/fileCheck';
+import {
+  painPointForFinding,
+  type PainPointId,
+} from '../../data/dsaPainPoints';
+import ObligationsSection from './ObligationsSection';
+import PainPointTag, { PainPointOpenContext } from './PainPointTag';
 
 // Colours / icons only: every verdict and status comes from the engine.
 
@@ -156,6 +161,7 @@ function FindingRow({
   detail,
   documents,
   missingMonths,
+  painPoint,
 }: {
   tone: StatusTone;
   label: string;
@@ -164,6 +170,7 @@ function FindingRow({
   detail: string;
   documents: string[];
   missingMonths?: string[];
+  painPoint?: PainPointId | null;
 }) {
   const { t } = useTranslation();
   // The engine usually names the documents inside the detail already.
@@ -186,6 +193,7 @@ function FindingRow({
             </span>
           )}
           {tone === 'review' && <NeedsPersonPill />}
+          {painPoint && <PainPointTag id={painPoint} />}
           {statusText !== t('fileCheck.status.review') && (
             <span className="ml-auto text-[10px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
               {statusText}
@@ -251,6 +259,11 @@ function ItemRows({ rows }: { rows: FileCheckItemRow[] }) {
               ? (row.missing_months ?? undefined)
               : undefined
           }
+          painPoint={painPointForFinding({
+            kind: 'item',
+            status: row.status,
+            required: row.required,
+          })}
         />
       ))}
     </ul>
@@ -269,6 +282,11 @@ function ConsistencyRows({ rows }: { rows: FileCheckConsistencyRow[] }) {
           statusText={statusLabel(t, row.status, CONSISTENCY_STATUS_KEYS)}
           detail={row.detail}
           documents={row.documents ?? []}
+          painPoint={painPointForFinding({
+            kind: 'consistency',
+            checkId: row.check_id,
+            status: row.status,
+          })}
         />
       ))}
     </ul>
@@ -304,61 +322,6 @@ function IncomeGrid({ income }: { income: FileCheckIncome }) {
           </div>
         ))}
       </dl>
-    </Section>
-  );
-}
-
-function num(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
-
-/** The engine's indicative FOIR numbers, shown as returned (never computed here). */
-function FoirGrid({ foir }: { foir: FileCheckFoir }) {
-  const { t } = useTranslation();
-  const ratio = num(foir.existing_emi_ratio_pct);
-  const limit = num(foir.foir_limit_pct);
-  const cells: [string, string][] = [];
-  const income = num(foir.net_monthly_income);
-  const emis = num(foir.existing_emis);
-  const maxNew = num(foir.max_new_emi);
-  if (income !== null)
-    cells.push([t('fileCheck.foir.netIncome'), formatInr(income)]);
-  if (emis !== null)
-    cells.push([t('fileCheck.foir.existingEmis'), formatInr(emis)]);
-  if (ratio !== null) cells.push([t('fileCheck.foir.ratio'), `${ratio}%`]);
-  if (maxNew !== null) {
-    cells.push([
-      limit !== null
-        ? t('fileCheck.foir.maxNewEmiAt', { limit })
-        : t('fileCheck.foir.maxNewEmi'),
-      formatInr(maxNew),
-    ]);
-  }
-  // Not computed (missing income or EMIs): the FOIR consistency row says why.
-  if (cells.length === 0) return null;
-  return (
-    <Section title={t('fileCheck.sections.foir')}>
-      <dl className="grid grid-cols-2 gap-1.5">
-        {cells.map(([label, value]) => (
-          <div
-            key={label}
-            className="rounded-lg border border-white/50 bg-white/30 px-2.5 py-1.5 dark:border-white/[0.08] dark:bg-white/[0.03]"
-          >
-            <dt className="text-[10px] text-slate-500 dark:text-slate-400">
-              {label}
-            </dt>
-            <dd className="text-sm font-semibold tabular-nums text-slate-800 dark:text-slate-100">
-              {value}
-            </dd>
-          </div>
-        ))}
-      </dl>
-      <p className="text-[10px] leading-snug text-slate-500 dark:text-slate-400">
-        {t('fileCheck.foir.note')}
-        {typeof foir.income_source === 'string' && foir.income_source
-          ? ` ${t('fileCheck.foir.incomeSource', { source: foir.income_source })}`
-          : ''}
-      </p>
     </Section>
   );
 }
@@ -454,9 +417,10 @@ function ApplicantSection({ applicant }: { applicant: FileCheckApplicant }) {
 
       {applicant.income && <IncomeGrid income={applicant.income} />}
 
-      {applicant.foir && typeof applicant.foir === 'object' && (
-        <FoirGrid foir={applicant.foir} />
-      )}
+      <ObligationsSection
+        obligations={applicant.obligations}
+        foir={applicant.foir}
+      />
 
       {docs.length > 0 && (
         <details className="group rounded-lg border border-white/50 bg-white/20 px-2.5 py-1.5 dark:border-white/[0.08] dark:bg-white/[0.02]">
@@ -529,9 +493,15 @@ function SkippedDocuments({ result }: { result: FileCheckResult }) {
 interface VerdictCardProps {
   result: FileCheckResult;
   lastRunAt?: Date | null;
+  /** Opens the "Why DSAs need this" card a finding's tag points to. */
+  onPainPoint?: (id: PainPointId) => void;
 }
 
-export default function VerdictCard({ result, lastRunAt }: VerdictCardProps) {
+export default function VerdictCard({
+  result,
+  lastRunAt,
+  onPainPoint,
+}: VerdictCardProps) {
   const { t } = useTranslation();
   const applicants = result.applicants ?? [];
   const tone = verdictTone(result.overall_verdict);
@@ -580,43 +550,47 @@ export default function VerdictCard({ result, lastRunAt }: VerdictCardProps) {
     );
 
   return (
-    <div className="space-y-3">
-      <section
-        aria-label={t('fileCheck.verdictLabel')}
-        data-verdict={tone}
-        className={`rounded-xl px-4 py-3 text-white shadow-sm ${BANNER_CLASS[tone]}`}
-      >
-        <div className="flex items-center gap-2.5">
-          <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-white/20">
-            {bannerIcon}
-          </span>
-          <span className="text-2xl font-extrabold tracking-wide">
-            {verdictLabel(t, result.overall_verdict)}
-          </span>
-        </div>
-        {headline && <p className="mt-1.5 text-sm font-semibold">{headline}</p>}
-        {applicants.length !== 1 && applicants.length > 0 && (
-          <p className="text-xs opacity-90">
-            {t('fileCheck.applicantsCount', { count: applicants.length })}
-          </p>
-        )}
-        {sub && <p className="mt-0.5 text-xs opacity-95">{sub}</p>}
-        {reviewCount > 0 && (
-          <p className="mt-1.5 inline-flex items-center gap-1 rounded-full bg-white/20 px-2 py-0.5 text-[11px] font-semibold">
-            <UserRound className="h-3 w-3" />
-            {t('fileCheck.needsReviewBanner', { count: reviewCount })}
-          </p>
-        )}
-        {meta.length > 0 && (
-          <p className="mt-1 text-[11px] opacity-80">{meta.join(' · ')}</p>
-        )}
-      </section>
+    <PainPointOpenContext.Provider value={onPainPoint ?? null}>
+      <div className="space-y-3">
+        <section
+          aria-label={t('fileCheck.verdictLabel')}
+          data-verdict={tone}
+          className={`rounded-xl px-4 py-3 text-white shadow-sm ${BANNER_CLASS[tone]}`}
+        >
+          <div className="flex items-center gap-2.5">
+            <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-white/20">
+              {bannerIcon}
+            </span>
+            <span className="text-2xl font-extrabold tracking-wide">
+              {verdictLabel(t, result.overall_verdict)}
+            </span>
+          </div>
+          {headline && (
+            <p className="mt-1.5 text-sm font-semibold">{headline}</p>
+          )}
+          {applicants.length !== 1 && applicants.length > 0 && (
+            <p className="text-xs opacity-90">
+              {t('fileCheck.applicantsCount', { count: applicants.length })}
+            </p>
+          )}
+          {sub && <p className="mt-0.5 text-xs opacity-95">{sub}</p>}
+          {reviewCount > 0 && (
+            <p className="mt-1.5 inline-flex items-center gap-1 rounded-full bg-white/20 px-2 py-0.5 text-[11px] font-semibold">
+              <UserRound className="h-3 w-3" />
+              {t('fileCheck.needsReviewBanner', { count: reviewCount })}
+            </p>
+          )}
+          {meta.length > 0 && (
+            <p className="mt-1 text-[11px] opacity-80">{meta.join(' · ')}</p>
+          )}
+        </section>
 
-      {applicants.map((a, i) => (
-        <ApplicantSection key={`${a.applicant}-${i}`} applicant={a} />
-      ))}
+        {applicants.map((a, i) => (
+          <ApplicantSection key={`${a.applicant}-${i}`} applicant={a} />
+        ))}
 
-      <SkippedDocuments result={result} />
-    </div>
+        <SkippedDocuments result={result} />
+      </div>
+    </PainPointOpenContext.Provider>
   );
 }

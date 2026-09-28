@@ -21,7 +21,11 @@ import {
 import AgentSelectModal from '../../components/AgentSelectModal';
 import DocumentUploadModal from '../../components/DocumentUploadModal';
 import ArtifactViewer from '../../components/ArtifactViewer';
-import FileCheckPanel from '../../components/FileCheckPanel';
+import FileCheckPanel, {
+  type FileCheckFocus,
+} from '../../components/FileCheckPanel';
+import DsaPainPointsPanel from '../../components/DsaPainPointsPanel';
+import type { PainPointId, PainPointTarget } from '../../data/dsaPainPoints';
 import SystemPromptModal from '../../components/SystemPromptModal';
 import ProjectGraphModal from '../../components/ProjectGraphModal';
 import { useSetSidebarSessions } from '../../contexts/SidebarSessionContext';
@@ -41,6 +45,7 @@ import { useAgents } from '../../hooks/useAgents';
 import { useArtifacts } from '../../hooks/useArtifacts';
 import { useDocuments } from '../../hooks/useDocuments';
 import { useFileCheck } from '../../hooks/useFileCheck';
+import { useFileCheckAsk } from '../../hooks/useFileCheckAsk';
 
 export const Route = createFileRoute('/projects/$projectId')({
   component: ProjectDetailPage,
@@ -117,9 +122,37 @@ function ProjectDetailPage() {
 
   // 7. File check (deterministic checklist verdict from the backend)
   const fileCheck = useFileCheck({ fetchApi, projectId });
+  const fileCheckAsk = useFileCheckAsk({ fetchApi, projectId });
   const [showFileCheck, setShowFileCheck] = useState(false);
-  const openFileCheck = useCallback(() => setShowFileCheck(true), []);
+  const [fileCheckFocus, setFileCheckFocus] = useState<FileCheckFocus | null>(
+    null,
+  );
+  // "Why DSAs need this" overlays the same place; one of the two is open.
+  const [showPainPoints, setShowPainPoints] = useState(false);
+  const [painPointFocus, setPainPointFocus] = useState<PainPointId | null>(
+    null,
+  );
+  const openFileCheck = useCallback(() => {
+    setShowPainPoints(false);
+    setFileCheckFocus(null);
+    setShowFileCheck(true);
+  }, []);
   const closeFileCheck = useCallback(() => setShowFileCheck(false), []);
+  const openPainPoints = useCallback((id?: PainPointId) => {
+    setShowFileCheck(false);
+    setPainPointFocus(id ?? null);
+    setShowPainPoints(true);
+  }, []);
+  const openPainPointsFromNav = useCallback(
+    () => openPainPoints(),
+    [openPainPoints],
+  );
+  const closePainPoints = useCallback(() => setShowPainPoints(false), []);
+  const showMeInFileCheck = useCallback((target: PainPointTarget) => {
+    setShowPainPoints(false);
+    setFileCheckFocus((prev) => ({ target, key: (prev?.key ?? 0) + 1 }));
+    setShowFileCheck(true);
+  }, []);
 
   // --- System prompt modal state ---
   const [showSystemPrompt, setShowSystemPrompt] = useState(false);
@@ -142,6 +175,9 @@ function ProjectDetailPage() {
     agentsHook.setSelectedAgent(null);
     artifactsHook.setSelectedArtifact(null);
     setShowFileCheck(false);
+    setFileCheckFocus(null);
+    setShowPainPoints(false);
+    setPainPointFocus(null);
     voiceChatManager.setVoiceChatMode(false);
     chatSession.pendingMessagesRef.current = [];
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -470,13 +506,25 @@ function ProjectDetailPage() {
                     onViewWorkflow={documentsHook.loadWorkflowDetail}
                     onDeleteDocument={documentsHook.handleDeleteDocument}
                     onOpenFileCheck={openFileCheck}
+                    onOpenPainPoints={openPainPointsFromNav}
                     // onViewProjectGraph={() => setShowProjectGraph(true)}
                   />
                   {/* File Check - overlays SidePanel (an open artifact stays on top) */}
                   {showFileCheck && !artifactsHook.selectedArtifact && (
                     <FileCheckPanel
                       state={fileCheck}
+                      askState={fileCheckAsk}
                       onClose={closeFileCheck}
+                      focus={fileCheckFocus}
+                      onPainPoint={openPainPoints}
+                    />
+                  )}
+                  {/* Why DSAs need this - same overlay; "Show me" opens File Check */}
+                  {showPainPoints && !artifactsHook.selectedArtifact && (
+                    <DsaPainPointsPanel
+                      onClose={closePainPoints}
+                      onShowMe={showMeInFileCheck}
+                      focusId={painPointFocus}
                     />
                   )}
                   {/* Artifact Viewer - overlays SidePanel */}

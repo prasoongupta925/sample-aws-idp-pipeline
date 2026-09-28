@@ -131,75 +131,7 @@ export const NOT_READY_RESULT: FileCheckResult = {
   unassigned_documents: [],
 };
 
-const EMI_DETAIL =
-  "declared ₹8,200 Mulshi Auto Finance Ltd (sample) (Car loan) [01_loan_application_form.pdf] = ACH debit ₹8,200 'MULSHI AUTO FINANCE / CAR LOAN EMI' on the 5th in 6 of 6 months (Mar 2026 – Aug 2026) [06_bank_statement.pdf]; undeclared loan debit: NACH debit ₹6,500 'KESARI FINSERV / PERSONAL LOAN EMI' on the 10th in 6 of 6 months (Mar 2026 – Aug 2026) [06_bank_statement.pdf]; not on the application [01_loan_application_form.pdf]";
-
-/** READY with a REVIEW finding (engine test_undeclared_emi_is_needs_review_not_blocking). */
-export const READY_WITH_REVIEW_RESULT: FileCheckResult = {
-  project_id: 'proj_demo',
-  engine_version: '1.0',
-  as_of: '2026-09-28',
-  checklist: {
-    id: 'salaried_personal_loan',
-    name: 'Personal Loan - Salaried',
-  },
-  overall_verdict: 'READY',
-  summary: '1 applicant: Rahul Vijay Deshmukh READY (1 to review)',
-  applicants: [
-    {
-      applicant: 'Rahul Vijay Deshmukh',
-      pan: 'BQXPD4821K',
-      verdict: 'READY',
-      reference_month: '2026-08',
-      reference_month_label: 'Aug 2026',
-      documents: [],
-      checklist: [
-        {
-          item_id: 'application',
-          item: 'Loan application form',
-          required: true,
-          status: 'PRESENT',
-          ok: true,
-          detail: '01_loan_application_form.pdf',
-          documents: ['01_loan_application_form.pdf'],
-        },
-      ],
-      consistency: [
-        {
-          check_id: 'declared_emis_vs_bank_debits',
-          check: 'Declared EMIs vs bank debits',
-          status: 'REVIEW',
-          detail: EMI_DETAIL,
-          documents: ['01_loan_application_form.pdf', '06_bank_statement.pdf'],
-        },
-      ],
-      income: {
-        declared_net: 82500,
-        slip_net: 82500,
-        bank_salary_credit: 82500,
-        bank_credits: [],
-      },
-      reasons: [],
-      missing_items: [],
-      mismatches: [],
-      needs_review: [`Declared EMIs vs bank debits: ${EMI_DETAIL}`],
-      manual_review: [],
-      obligations: { available: true, declared_available: true },
-      foir: {
-        label: "indicative — the lender's policy decides",
-        foir_limit_pct: 70,
-        net_monthly_income: 82500,
-        income_source: 'salary slips, median net pay',
-        existing_emis: 14700,
-        existing_emi_ratio_pct: 17.8,
-        max_new_emi: 43050,
-        status: 'OK',
-      },
-    },
-  ],
-  pending_documents: [],
-  failed_documents: [],
-  no_facts_documents: [],
-  unsupported_documents: [],
-  unassigned_documents: [],
-};
+export {
+  READY_OBLIGATIONS_RESULT,
+  READY_WITH_REVIEW_RESULT,
+} from './engineFixtures';

@@ -40,8 +40,33 @@ export interface Checklist {
   description?: string | null;
   items: ChecklistItem[];
   consistency_checks: string[];
-  /** The checklist's indicative FOIR policy, if any (value, hard_limit, basis, source). */
-  foir?: Record<string, unknown> | null;
+  /** The checklist's indicative FOIR policy, if any. */
+  foir?: ChecklistFoirPolicy | null;
+}
+
+/** A published FOIR value the checklist's limit can be compared with. */
+export interface FoirLimitAlternative {
+  value?: number | null;
+  source?: string | null;
+  url?: string | null;
+}
+
+/**
+ * The checklist's `foir` block (packages/lambda/file-check-mcp/checklists.json;
+ * router type: dict[str, Any]). `value` is a fraction (0.7 = 70%).
+ */
+export interface ChecklistFoirPolicy {
+  value?: number | null;
+  /** true: a FOIR above the limit is a MISMATCH (NOT READY). No bundled checklist sets it. */
+  hard_limit?: boolean | null;
+  /** PUBLISHED or DEMO-POLICY */
+  basis?: string | null;
+  /** e.g. "Smart Solutions Calculator, eligibility tab: 'FOIR 70%'" */
+  source?: string | null;
+  url?: string | null;
+  note?: string | null;
+  alternatives?: FoirLimitAlternative[] | null;
+  [key: string]: unknown;
 }
 
 export interface ChecklistCatalog {
@@ -52,7 +77,7 @@ export interface ChecklistCatalog {
 /** What the checklist dropdown needs from a Checklist. */
 export type FileCheckChecklistSummary = Pick<
   Checklist,
-  'id' | 'name' | 'product' | 'applicant_type' | 'description'
+  'id' | 'name' | 'product' | 'applicant_type' | 'description' | 'foir'
 >;
 
 // ------------------------------------------------------------------ file check
@@ -146,29 +171,154 @@ export interface ApplicantResult {
   needs_review?: string[];
   /** Items a person must verify (not decided by the rules). */
   manual_review: string[];
-  /** Existing obligations from the bank statement and the application, if computed. */
-  obligations?: Record<string, unknown> | null;
+  /**
+   * Existing obligations from the bank statement and the application. Absent
+   * from backends older than the obligations checks; null when not computed.
+   */
+  obligations?: FileCheckObligations | null;
   /** Indicative FOIR, if the checklist enables it; the lender's policy decides. */
   foir?: FileCheckFoir | null;
 }
 
+// ------------------------------------------------------------------ obligations
+// The engine's obligations block (engine._obligations; router type:
+// dict[str, Any]). Every field is optional and checked before use: the UI
+// shows these values and never recomputes them.
+
+export type DebitCategory =
+  | 'loan_emi'
+  | 'rent'
+  | 'investment'
+  | 'utility'
+  | 'credit_card'
+  | 'insurance'
+  | 'other';
+
+export type DebitChannel = 'ACH' | 'NACH' | 'ECS' | 'SI' | 'UPI' | 'other';
+
+/** One bank debit row behind a grouped obligation. */
+export interface DebitEvidence {
+  document_name?: string | null;
+  /** YYYY-MM-DD */
+  date?: string | null;
+  /** YYYY-MM */
+  month?: string | null;
+  amount?: number | null;
+  narration?: string | null;
+}
+
+/** Debits to one payee, grouped across the statement months. */
+export interface FileCheckDebit {
+  payee?: string | null;
+  narration?: string | null;
+  category?: DebitCategory | string | null;
+  channel?: DebitChannel | string | null;
+  /** The median when fixed, the average when variable. */
+  amount?: number | null;
+  min_amount?: number | null;
+  max_amount?: number | null;
+  fixed?: boolean | null;
+  day_of_month?: number | null;
+  day_consistent?: boolean | null;
+  /** YYYY-MM */
+  months?: string[] | null;
+  months_seen?: number | null;
+  months_total?: number | null;
+  count?: number | null;
+  /** An amount was not found in the document text. */
+  unverified?: boolean | null;
+  documents?: string[] | null;
+  evidence?: DebitEvidence[] | null;
+  /** Matched to an EMI declared on the loan application. */
+  declared?: boolean | null;
+  declared_lender?: string | null;
+  declared_amount?: number | null;
+  /** undeclared_loan_debits only */
+  kind?: 'loan_emi' | 'possible_emi' | string | null;
+  [key: string]: unknown;
+}
+
+export type DeclaredEmiStatus =
+  | 'matched'
+  | 'partial'
+  | 'amount_differs'
+  | 'not_found'
+  | 'not_checked';
+
+/** An existing EMI declared on the loan application, matched to the bank. */
+export interface FileCheckDeclaredEmi {
+  lender?: string | null;
+  loan_type?: string | null;
+  amount?: number | null;
+  document_name?: string | null;
+  unverified?: boolean | null;
+  status?: DeclaredEmiStatus | string | null;
+  matched_payee?: string | null;
+  bank_amount?: number | null;
+  months_matched?: number | null;
+  months_total?: number | null;
+  matched_months?: string[] | null;
+  day_of_month?: number | null;
+  [key: string]: unknown;
+}
+
+export interface ObligationTotals {
+  loan_emis?: number | null;
+  other_fixed?: number | null;
+  fixed_monthly?: number | null;
+  variable_monthly_average?: number | null;
+}
+
+export interface FileCheckObligations {
+  /** Bank debit details were extracted. */
+  available?: boolean | null;
+  declared_available?: boolean | null;
+  unavailable_reasons?: string[] | null;
+  /** YYYY-MM */
+  statement_months?: string[] | null;
+  documents?: string[] | null;
+  fixed_loan_emis?: FileCheckDebit[] | null;
+  other_fixed_debits?: FileCheckDebit[] | null;
+  variable_debits?: FileCheckDebit[] | null;
+  one_off_debits?: FileCheckDebit[] | null;
+  declared_emis?: FileCheckDeclaredEmi[] | null;
+  undeclared_loan_debits?: FileCheckDebit[] | null;
+  totals?: ObligationTotals | null;
+  /** The EMIs FOIR counts (undeclared bank EMIs and unmatched declared EMIs included). */
+  foir_emi_total?: number | null;
+  foir_emi_basis?: string | null;
+  notes?: string[] | null;
+  [key: string]: unknown;
+}
+
 /**
- * The engine's indicative FOIR block (router type: dict[str, Any]). Only the
- * fields the panel shows are listed; each is checked before use.
+ * The engine's indicative FOIR block (router type: dict[str, Any]). Every
+ * field is checked before use; the UI never recomputes the numbers.
  */
 export interface FileCheckFoir {
   /** "indicative — the lender's policy decides" */
   label?: string | null;
+  indicative?: boolean | null;
+  /** fraction, e.g. 0.7 */
+  foir_limit?: number | null;
   foir_limit_pct?: number | null;
   hard_limit?: boolean | null;
+  limit_basis?: string | null;
+  /** e.g. "Smart Solutions calculator, eligibility tab: 'FOIR 70%' …" */
+  limit_source?: string | null;
+  limit_url?: string | null;
+  limit_note?: string | null;
+  limit_alternatives?: FoirLimitAlternative[] | null;
   net_monthly_income?: number | null;
   income_source?: string | null;
   income_verified?: boolean | null;
   existing_emis?: number | null;
   existing_emis_basis?: string | null;
+  existing_emi_ratio?: number | null;
   existing_emi_ratio_pct?: number | null;
   max_new_emi?: number | null;
   within_limit?: boolean | null;
+  /** OK, REVIEW, or MISMATCH (hard_limit only) */
   status?: string | null;
   detail?: string | null;
   [key: string]: unknown;
@@ -229,3 +379,47 @@ export type FileCheckApplicant = ApplicantResult;
 export type FileCheckItemRow = ChecklistItemResult;
 export type FileCheckConsistencyRow = ConsistencyResult;
 export type FileCheckIncome = IncomeSummary;
+
+// ------------------------------------------------------------------ ask
+// POST /projects/{project_id}/file-check/ask and GET .../file-check/usage.
+// The answer is grounded on the engine's verdict (obligations and FOIR
+// included) and the documents' extracted facts and page text only.
+
+export interface FileCheckAskMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface FileCheckAskRequest {
+  /** 1..1000 characters */
+  question: string;
+  checklist_id?: string;
+  applicant?: string;
+  /** The last turns of this conversation, at most 6. */
+  history?: FileCheckAskMessage[];
+}
+
+export interface FileCheckAskPricing {
+  input_per_million_usd: number;
+  output_per_million_usd: number;
+  region?: string | null;
+}
+
+export interface FileCheckAskResponse {
+  answer: string;
+  model_id: string;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+  pricing: FileCheckAskPricing;
+  grounded_on: { applicants: string[]; documents: string[] };
+}
+
+/** Ask calls of this project over the retention window. */
+export interface FileCheckUsage {
+  window_days: number;
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+}

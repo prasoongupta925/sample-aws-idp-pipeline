@@ -1,7 +1,12 @@
 // Display helpers for the File Check panel. Nothing here decides a verdict:
 // statuses and verdicts are mapped to colours / icons / CSV cells only.
 import type {
+  ChecklistFoirPolicy,
+  FileCheckApplicant,
   FileCheckChecklistSummary,
+  FileCheckDebit,
+  FileCheckDeclaredEmi,
+  FileCheckObligations,
   FileCheckResult,
   FileCheckSkippedDocument,
 } from '../types/fileCheck';
@@ -45,7 +50,7 @@ export function itemTone(status: unknown, required = true): StatusTone {
   return 'info';
 }
 
-/** Consistency status (OK / MISMATCH / INFO / N/A) -> tone. */
+/** Consistency status (OK / MISMATCH / REVIEW / INFO / N/A) -> tone. */
 export function consistencyTone(status: unknown): StatusTone {
   const s = normalizeStatus(status);
   if (s === 'OK') return 'ok';
@@ -75,13 +80,17 @@ function toSummary(value: unknown): FileCheckChecklistSummary | null {
   const o = value as Record<string, unknown>;
   const id = str(o.id) ?? str(o.checklist_id);
   if (!id) return null;
-  return {
+  const summary: FileCheckChecklistSummary = {
     id,
     name: str(o.name) ?? str(o.label) ?? id,
     product: str(o.product),
     applicant_type: str(o.applicant_type),
     description: str(o.description),
   };
+  if (o.foir && typeof o.foir === 'object' && !Array.isArray(o.foir)) {
+    summary.foir = o.foir as ChecklistFoirPolicy;
+  }
+  return summary;
 }
 
 /**
@@ -172,9 +181,144 @@ export function formatInr(value: number | null | undefined): string {
     : '–';
 }
 
+/** 5 -> '5th', 22 -> '22nd' (the engine's day-of-month wording). */
+export function ordinal(n: number): string {
+  const mod100 = n % 100;
+  if (mod100 >= 11 && mod100 <= 13) return `${n}th`;
+  const suffix = ['th', 'st', 'nd', 'rd'][n % 10] ?? 'th';
+  return `${n}${suffix}`;
+}
+
+/** ['2026-03', …, '2026-08'] -> 'Mar 2026 – Aug 2026'; one month -> 'May 2026'. */
+export function monthRangeLabel(months: string[] | null | undefined): string {
+  const list = (months ?? []).filter((m) => typeof m === 'string' && m);
+  if (list.length === 0) return '';
+  const sorted = [...list].sort();
+  const first = formatYearMonth(sorted[0]);
+  const last = formatYearMonth(sorted[sorted.length - 1]);
+  return first === last ? first : `${first} – ${last}`;
+}
+
+/** An http(s) URL from the engine, else null (never a javascript: link). */
+export function safeHttpUrl(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const url = value.trim();
+  return /^https?:\/\/[^\s]+$/i.test(url) ? url : null;
+}
+
+function finite(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+// ------------------------------------------------------------------ obligations
+
+/**
+ * How a bank loan EMI relates to the application: matched to a declared EMI,
+ * matched only partly, a different amount, not on the application, or not
+ * checked (declared EMIs were not extracted).
+ */
+export type EmiDeclarationStatus =
+  | 'matched'
+  | 'partial'
+  | 'amount_differs'
+  | 'declared'
+  | 'not_declared'
+  | 'not_checked';
+
+export interface LoanEmiRow {
+  debit: FileCheckDebit;
+  declared: FileCheckDeclaredEmi | null;
+  status: EmiDeclarationStatus;
+}
+
+const MATCH_STATUSES = new Set(['matched', 'partial', 'amount_differs']);
+
+/** The fixed loan EMIs with the declared EMI each one was matched to. */
+export function loanEmiRows(obligations: FileCheckObligations): LoanEmiRow[] {
+  const declared = obligations.declared_emis ?? [];
+  const used = new Set<FileCheckDeclaredEmi>();
+  return (obligations.fixed_loan_emis ?? []).map((debit) => {
+    const match =
+      declared.find(
+        (d) =>
+          !used.has(d) &&
+          MATCH_STATUSES.has(String(d.status)) &&
+          !!d.matched_payee &&
+          d.matched_payee === debit.payee,
+      ) ?? null;
+    if (match) used.add(match);
+    let status: EmiDeclarationStatus;
+    if (match) status = match.status as EmiDeclarationStatus;
+    else if (debit.declared) status = 'declared';
+    else if (obligations.declared_available === false) status = 'not_checked';
+    else status = 'not_declared';
+    return { debit, declared: match, status };
+  });
+}
+
+/** Declared EMIs with no bank debit behind them (not found / not checked). */
+export function unmatchedDeclaredEmis(
+  obligations: FileCheckObligations,
+): FileCheckDeclaredEmi[] {
+  return (obligations.declared_emis ?? []).filter(
+    (d) => d.status === 'not_found' || d.status === 'not_checked',
+  );
+}
+
+/** Payees the engine flags as a possible (undeclared, uncategorised) EMI. */
+export function possibleEmiPayees(
+  obligations: FileCheckObligations,
+): Set<string> {
+  return new Set(
+    (obligations.undeclared_loan_debits ?? [])
+      .filter((d) => d.kind === 'possible_emi' && d.payee)
+      .map((d) => d.payee as string),
+  );
+}
+
+export function emiStatusTone(status: EmiDeclarationStatus): StatusTone {
+  if (status === 'matched' || status === 'declared') return 'ok';
+  if (status === 'not_checked') return 'muted';
+  return 'review';
+}
+
+/** '₹8,200 on the 5th, 6 of 6 months (Mar 2026 – Aug 2026), ACH' */
+export function debitSummary(debit: FileCheckDebit): string {
+  const parts: string[] = [];
+  const amount = finite(debit.amount);
+  const min = finite(debit.min_amount);
+  const max = finite(debit.max_amount);
+  if (amount !== null) {
+    parts.push(
+      debit.fixed === false && min !== null && max !== null && min !== max
+        ? `${formatInr(amount)} average (${formatInr(min)}–${formatInr(max)})`
+        : formatInr(amount),
+    );
+  }
+  const day = finite(debit.day_of_month);
+  if (day !== null) parts.push(`on the ${ordinal(day)}`);
+  const seen = finite(debit.months_seen);
+  const total = finite(debit.months_total);
+  if (seen !== null) {
+    const range = monthRangeLabel(debit.months);
+    parts.push(
+      `${total !== null ? `${seen} of ${total}` : seen} month${
+        (total ?? seen) === 1 ? '' : 's'
+      }${range ? ` (${range})` : ''}`,
+    );
+  }
+  if (debit.channel && debit.channel !== 'other') parts.push(debit.channel);
+  if (debit.unverified) parts.push('amount not verified against the text');
+  return parts.join(', ');
+}
+
 // ------------------------------------------------------------------ CSV
 
-export type FindingSection = 'Checklist' | 'Consistency' | 'Not checked';
+export type FindingSection =
+  | 'Checklist'
+  | 'Consistency'
+  | 'Obligations'
+  | 'Not checked';
 
 export interface FileCheckFinding {
   applicant: string;
@@ -240,7 +384,129 @@ function skippedDetail({ status, document }: SkippedDocumentRow): string {
   return '';
 }
 
-/** One finding per checklist item, consistency check and unchecked document. */
+const EMI_STATUS_CSV: Record<EmiDeclarationStatus, string> = {
+  matched: 'MATCHED',
+  partial: 'PARTIAL',
+  amount_differs: 'AMOUNT DIFFERS',
+  declared: 'DECLARED',
+  not_declared: 'NOT DECLARED',
+  not_checked: 'NOT CHECKED',
+};
+
+function declaredLabel(d: FileCheckDeclaredEmi): string {
+  const who = d.lender || 'lender not named';
+  return `${formatInr(d.amount)} ${who}${d.loan_type ? ` (${d.loan_type})` : ''}`;
+}
+
+/** Obligations & FOIR rows of one applicant (CSV only; the UI renders them itself). */
+export function obligationFindings(
+  applicant: FileCheckApplicant,
+  checklist: string,
+): FileCheckFinding[] {
+  const base = {
+    applicant: applicant.applicant,
+    verdict: applicant.verdict,
+    checklist,
+    section: 'Obligations' as const,
+  };
+  const findings: FileCheckFinding[] = [];
+  const o = applicant.obligations;
+  if (o && typeof o === 'object') {
+    for (const row of loanEmiRows(o)) {
+      const d = row.declared;
+      let detail = debitSummary(row.debit);
+      if (d) {
+        detail += `; declared ${declaredLabel(d)}${d.document_name ? ` [${d.document_name}]` : ''}`;
+      } else if (row.status === 'not_declared') {
+        detail += '; not on the loan application';
+      }
+      findings.push({
+        ...base,
+        item: `Loan EMI – ${row.debit.payee || row.debit.narration || '–'}`,
+        status: EMI_STATUS_CSV[row.status],
+        detail,
+        documents: row.debit.documents ?? [],
+      });
+    }
+    for (const d of unmatchedDeclaredEmis(o)) {
+      findings.push({
+        ...base,
+        item: `Declared EMI – ${d.lender || 'lender not named'}`,
+        status: d.status === 'not_found' ? 'NOT FOUND' : 'NOT CHECKED',
+        detail:
+          d.status === 'not_found'
+            ? `${declaredLabel(d)} declared, not found in the bank debits (still counted toward FOIR)`
+            : `${declaredLabel(d)} declared; bank debits not available`,
+        documents: d.document_name ? [d.document_name] : [],
+      });
+    }
+    const possible = possibleEmiPayees(o);
+    for (const debit of o.other_fixed_debits ?? []) {
+      findings.push({
+        ...base,
+        item: `Fixed debit – ${debit.payee || debit.narration || '–'}`,
+        status:
+          debit.payee && possible.has(debit.payee) ? 'POSSIBLE EMI' : 'FIXED',
+        detail: [debit.category, debitSummary(debit)]
+          .filter(Boolean)
+          .join(': '),
+        documents: debit.documents ?? [],
+      });
+    }
+    const totals = o.totals;
+    if (totals && typeof totals === 'object') {
+      const cells = (
+        [
+          ['loan EMIs', totals.loan_emis],
+          ['other fixed', totals.other_fixed],
+          ['fixed monthly', totals.fixed_monthly],
+          ['variable monthly average', totals.variable_monthly_average],
+        ] as const
+      )
+        .filter(([, v]) => finite(v) !== null)
+        .map(([label, v]) => `${label} ${formatInr(v)}`);
+      if (cells.length > 0) {
+        findings.push({
+          ...base,
+          item: 'Monthly obligations (totals)',
+          status: 'INFO',
+          detail: cells.join('; '),
+          documents: o.documents ?? [],
+        });
+      }
+    }
+  }
+  const f = applicant.foir;
+  if (f && typeof f === 'object') {
+    const ratio = finite(f.existing_emi_ratio_pct);
+    const limit = finite(f.foir_limit_pct);
+    const maxNew = finite(f.max_new_emi);
+    const parts: string[] = [];
+    if (ratio !== null) {
+      parts.push(
+        `FOIR ${ratio}%${limit !== null ? ` vs limit ${limit}%` : ''}`,
+      );
+    } else if (f.detail) {
+      parts.push(f.detail);
+    }
+    if (maxNew !== null) parts.push(`max new EMI ${formatInr(maxNew)}`);
+    if (f.limit_source) parts.push(`limit source: ${f.limit_source}`);
+    parts.push(f.label || "indicative — the lender's policy decides");
+    findings.push({
+      ...base,
+      item: 'FOIR (indicative)',
+      status: f.status || 'INFO',
+      detail: parts.join('; '),
+      documents: o?.documents ?? [],
+    });
+  }
+  return findings;
+}
+
+/**
+ * One finding per checklist item, consistency check, obligation row and
+ * unchecked document.
+ */
 export function fileCheckFindings(result: FileCheckResult): FileCheckFinding[] {
   const checklist = result.checklist?.name || result.checklist?.id || '';
   const findings: FileCheckFinding[] = [];
@@ -269,6 +535,7 @@ export function fileCheckFindings(result: FileCheckResult): FileCheckFinding[] {
         documents: row.documents ?? [],
       });
     }
+    findings.push(...obligationFindings(a, checklist));
   }
   for (const skipped of skippedDocuments(result)) {
     const name =

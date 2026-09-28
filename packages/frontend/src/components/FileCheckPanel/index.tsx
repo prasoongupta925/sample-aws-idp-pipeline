@@ -1,4 +1,11 @@
-import { useEffect, useId, useMemo, type FormEvent } from 'react';
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import {
@@ -10,6 +17,8 @@ import {
   X,
 } from 'lucide-react';
 import type { FileCheckState } from '../../hooks/useFileCheck';
+import type { FileCheckAskState } from '../../hooks/useFileCheckAsk';
+import type { PainPointId, PainPointTarget } from '../../data/dsaPainPoints';
 import {
   apiErrorStatus,
   buildFileCheckCsv,
@@ -18,6 +27,16 @@ import {
   fileCheckFindings,
 } from '../../lib/fileCheck';
 import VerdictCard from './VerdictCard';
+import AskSection from './AskSection';
+
+/** Where to scroll when the panel is opened from a "Show me" button. */
+export interface FileCheckFocus {
+  target: PainPointTarget;
+  /** Changes on every request, so the same target can be shown again. */
+  key: number;
+}
+
+const HIGHLIGHT_CLASSES = ['ring-2', 'ring-violet-400/70', 'ring-offset-1'];
 
 const CONTROL_CLASS =
   'w-full px-2.5 py-1.5 text-xs border border-black/10 dark:border-[#3b4264] rounded-lg bg-white/40 dark:bg-[#0d1117] text-[#0f172a] dark:text-[#f1f5f9] placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent disabled:opacity-60';
@@ -39,17 +58,29 @@ function describeError(t: TFunction, error: unknown): string {
 
 interface FileCheckPanelProps {
   state: FileCheckState;
+  askState: FileCheckAskState;
   onClose: () => void;
+  focus?: FileCheckFocus | null;
+  /** Opens the "Why DSAs need this" card a finding's tag points to. */
+  onPainPoint?: (id: PainPointId) => void;
 }
 
 /** Overlays the right-hand side panel, like the artifact viewer. */
 export default function FileCheckPanel({
   state,
+  askState,
   onClose,
+  focus,
+  onPainPoint,
 }: FileCheckPanelProps) {
   const { t } = useTranslation();
   const checklistFieldId = useId();
   const applicantFieldId = useId();
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const askInputRef = useRef<HTMLTextAreaElement>(null);
+  const runButtonRef = useRef<HTMLButtonElement>(null);
+  // "Show me" asked for the obligations before any check was run.
+  const [focusHint, setFocusHint] = useState<PainPointTarget | null>(null);
   const {
     checklists,
     checklistsLoaded,
@@ -83,7 +114,55 @@ export default function FileCheckPanel({
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [onClose]);
 
+  // "Show me": scroll to the part of the panel a pain-point card points to.
+  const focusKey = focus?.key;
+  const focusTarget = focus?.target;
+  useEffect(() => {
+    if (focusKey === undefined || !focusTarget) return;
+    const container = scrollRef.current;
+    if (!container) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const frame = requestAnimationFrame(() => {
+      if (focusTarget === 'file-check') {
+        container.scrollTo?.({ top: 0, behavior: 'smooth' });
+        setFocusHint(null);
+        return;
+      }
+      const el = container.querySelector<HTMLElement>(
+        `[data-focus="${focusTarget}"]`,
+      );
+      if (!el) {
+        // Obligations appear once a check has run: point at the Run button.
+        setFocusHint(focusTarget);
+        runButtonRef.current?.focus();
+        return;
+      }
+      setFocusHint(null);
+      el.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+      el.classList.add(...HIGHLIGHT_CLASSES);
+      timer = setTimeout(() => el.classList.remove(...HIGHLIGHT_CLASSES), 2000);
+      if (focusTarget === 'ask') {
+        askInputRef.current?.focus({ preventScroll: true });
+      }
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      if (timer) clearTimeout(timer);
+    };
+  }, [focusKey, focusTarget]);
+
+  // The hint is about running the check: drop it once a result is shown.
+  useEffect(() => {
+    if (result) setFocusHint(null);
+  }, [result]);
+
   const selected = checklists.find((c) => c.id === checklistId);
+  const selectedFoir = selected?.foir;
+  const foirLimitPct =
+    typeof selectedFoir?.value === 'number' &&
+    Number.isFinite(selectedFoir.value)
+      ? Math.round(selectedFoir.value * 1000) / 10
+      : null;
   const findings = useMemo(
     () => (result ? fileCheckFindings(result) : []),
     [result],
@@ -192,6 +271,18 @@ export default function FileCheckPanel({
               {selected.description}
             </p>
           )}
+          {foirLimitPct !== null && (
+            <p className="text-[10px] leading-snug text-slate-500 dark:text-slate-400">
+              {typeof selectedFoir?.source === 'string' && selectedFoir.source
+                ? t('fileCheck.obligations.checklistLimit', {
+                    limit: foirLimitPct,
+                    source: selectedFoir.source,
+                  })
+                : t('fileCheck.obligations.checklistLimitOnly', {
+                    limit: foirLimitPct,
+                  })}
+            </p>
+          )}
           {checklistsError != null && (
             <div className="flex items-start gap-2 text-[11px] text-red-600 dark:text-red-400">
               <span className="flex-1 break-words">
@@ -251,7 +342,17 @@ export default function FileCheckPanel({
           )}
         </div>
 
+        {focusHint === 'obligations' && !result && (
+          <p
+            role="status"
+            className="rounded-lg border border-violet-200 bg-violet-50 px-2.5 py-1.5 text-[11px] text-violet-800 dark:border-violet-800/50 dark:bg-violet-900/20 dark:text-violet-300"
+          >
+            {t('fileCheck.focusHint.obligations')}
+          </p>
+        )}
+
         <button
+          ref={runButtonRef}
           type="submit"
           disabled={running}
           className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 dark:bg-emerald-600 dark:hover:bg-emerald-500 shadow-sm transition-colors disabled:opacity-70 disabled:cursor-wait"
@@ -266,7 +367,10 @@ export default function FileCheckPanel({
       </form>
 
       {/* Result */}
-      <div className="flex-1 overflow-y-auto min-h-0 px-4 py-3 space-y-3">
+      <div
+        ref={scrollRef}
+        className="flex-1 overflow-y-auto min-h-0 px-4 py-3 space-y-3"
+      >
         {error != null && (
           <div
             role="alert"
@@ -290,7 +394,11 @@ export default function FileCheckPanel({
             className={running ? 'opacity-60 transition-opacity' : undefined}
             aria-busy={running}
           >
-            <VerdictCard result={result} lastRunAt={lastRunAt} />
+            <VerdictCard
+              result={result}
+              lastRunAt={lastRunAt}
+              onPainPoint={onPainPoint}
+            />
           </div>
         ) : running ? (
           <div className="flex flex-col items-center justify-center gap-2 py-10 text-xs text-slate-500">
@@ -310,6 +418,15 @@ export default function FileCheckPanel({
             </div>
           )
         )}
+
+        {/* Grounded Q&A; the deterministic verdict above stays as it is. */}
+        <AskSection
+          state={askState}
+          checklistName={selected?.name || result?.checklist?.name || ''}
+          checklistId={checklistId || undefined}
+          applicant={applicant.trim() || undefined}
+          inputRef={askInputRef}
+        />
       </div>
 
       {/* Footer */}
