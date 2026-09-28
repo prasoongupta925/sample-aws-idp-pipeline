@@ -645,5 +645,100 @@
     "apiKey": "API Key",
     "apiKeyHint": "Stored locally in your browser only",
     "voice": "Voice"
+  },
+  "fileCheck": {
+    "title": "File check",
+    "open": "Check the loan file against a lender checklist",
+    "subtitle": "Checklist verdict from the file-check engine",
+    "checklist": "Checklist",
+    "loadingChecklists": "Loading checklists…",
+    "defaultChecklist": "Default checklist",
+    "checklistsFailed": "Could not load checklists: {{message}}",
+    "retry": "Retry",
+    "applicant": "Applicant",
+    "applicantOptional": "(optional)",
+    "applicantPlaceholder": "Name or PAN – leave blank for all applicants",
+    "allApplicants": "All applicants",
+    "run": "Run check",
+    "running": "Checking…",
+    "runFailed": "The file check could not be run.",
+    "emptyTitle": "No check run yet",
+    "emptyHint": "Pick a checklist and click Run check. The verdict comes from the file-check engine, not from the chat model.",
+    "staleResult": "Showing the result for {{name}}. Run the check again for the selected checklist.",
+    "downloadCsv": "Download CSV",
+    "verdictLabel": "Verdict",
+    "checkedAt": "Checked at {{time}}",
+    "asOf": "As of {{date}}",
+    "referenceMonth": "Reference month {{month}}",
+    "documentsCount": "{{count}} documents",
+    "documentsCount_one": "{{count}} document",
+    "applicantsCount": "{{count}} applicants",
+    "applicantsCount_one": "{{count}} applicant",
+    "syntheticNote": "Demo data is synthetic. The verdict is decided by deterministic rules; the chat model only reports it.",
+    "needsPerson": "Needs a person",
+    "optional": "optional",
+    "missingMonthsLabel": "Missing:",
+    "documentsLabel": "Documents: {{names}}",
+    "unverified": "unverified: {{fields}}",
+    "verdict": {
+      "ready": "READY",
+      "notReady": "NOT READY",
+      "needsReview": "NEEDS REVIEW"
+    },
+    "verdictSub": {
+      "ready": "All required documents are present and consistent – ready for lender login.",
+      "notReady": "Fix the issues below before lender login.",
+      "needsReview": "A person must review the flagged items before lender login.",
+      "readyWithReview": "All required documents are present with no mismatch – a person should look at the flagged findings before lender login."
+    },
+    "sections": {
+      "reasons": "Issues to fix ({{count}})",
+      "checklist": "Document checklist",
+      "consistency": "Consistency checks",
+      "income": "Income (declared vs documents)",
+      "documents": "Documents read ({{count}})",
+      "notChecked": "Documents not checked",
+      "needsReview": "Needs a person ({{count}}) – does not change the verdict",
+      "foir": "FOIR (indicative)"
+    },
+    "status": {
+      "present": "Present",
+      "missing": "Missing",
+      "review": "Needs review",
+      "ok": "OK",
+      "mismatch": "Mismatch",
+      "info": "Info",
+      "na": "N/A",
+      "pending": "Still being analysed",
+      "failed": "Analysis failed",
+      "noFacts": "No facts extracted",
+      "unsupported": "Not supported",
+      "unassigned": "Not matched to an applicant"
+    },
+    "income": {
+      "declaredNet": "Declared net (application)",
+      "slipNet": "Salary slip net",
+      "bankCredit": "Bank salary credit",
+      "slipGross": "Salary slip gross",
+      "form16Gross": "Form-16 annual gross"
+    },
+    "errors": {
+      "unknownChecklist": "The file-check service does not know the selected checklist (HTTP 400). Reload the checklists and try again.",
+      "notFound": "The project or the file-check API was not found (HTTP 404).",
+      "notConfigured": "The file check is not configured for this deployment (HTTP 503).",
+      "unavailable": "The file-check service failed (HTTP {{status}}). Try again in a moment.",
+      "rejected": "The request was rejected (HTTP {{status}})."
+    },
+    "needsReviewBanner": "{{count}} findings need a person (the verdict is unchanged)",
+    "needsReviewBanner_one": "{{count}} finding needs a person (the verdict is unchanged)",
+    "foir": {
+      "netIncome": "Net monthly income",
+      "existingEmis": "Existing loan EMIs",
+      "ratio": "Existing EMIs / income",
+      "maxNewEmi": "Max new EMI (indicative)",
+      "maxNewEmiAt": "Max new EMI at FOIR {{limit}}% (indicative)",
+      "note": "Indicative – the lender's policy decides. Only loan EMIs count; rent, SIP, utilities and credit-card payments do not.",
+      "incomeSource": "Income: {{source}}."
+    }
   }
 }

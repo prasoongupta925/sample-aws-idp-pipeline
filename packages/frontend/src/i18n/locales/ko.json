@@ -645,5 +645,99 @@
     "apiKey": "API 키",
     "apiKeyHint": "브라우저에만 저장됩니다",
     "voice": "음성"
+  },
+  "fileCheck": {
+    "title": "파일 점검",
+    "open": "대출 서류를 대출기관 체크리스트로 점검",
+    "subtitle": "파일 점검 엔진의 체크리스트 판정",
+    "checklist": "체크리스트",
+    "loadingChecklists": "체크리스트 불러오는 중…",
+    "defaultChecklist": "기본 체크리스트",
+    "checklistsFailed": "체크리스트를 불러오지 못했습니다: {{message}}",
+    "retry": "다시 시도",
+    "applicant": "신청인",
+    "applicantOptional": "(선택)",
+    "applicantPlaceholder": "이름 또는 PAN – 비워 두면 전체 신청인",
+    "allApplicants": "전체 신청인",
+    "run": "점검 실행",
+    "running": "점검 중…",
+    "runFailed": "파일 점검을 실행하지 못했습니다.",
+    "emptyTitle": "아직 점검을 실행하지 않았습니다",
+    "emptyHint": "체크리스트를 선택하고 점검 실행을 누르세요. 판정은 채팅 모델이 아니라 파일 점검 엔진이 내립니다.",
+    "staleResult": "{{name}}의 결과를 표시하고 있습니다. 선택한 체크리스트로 다시 점검하세요.",
+    "downloadCsv": "CSV 다운로드",
+    "verdictLabel": "판정",
+    "checkedAt": "{{time}} 점검",
+    "asOf": "기준일 {{date}}",
+    "referenceMonth": "기준 월 {{month}}",
+    "documentsCount": "문서 {{count}}건",
+    "documentsCount_one": "문서 {{count}}건",
+    "applicantsCount": "신청인 {{count}}명",
+    "applicantsCount_one": "신청인 {{count}}명",
+    "syntheticNote": "데모 데이터는 합성 데이터입니다. 판정은 결정적 규칙으로 내려지며, 채팅 모델은 결과를 전달할 뿐입니다.",
+    "needsPerson": "담당자 확인 필요",
+    "optional": "선택",
+    "missingMonthsLabel": "누락:",
+    "documentsLabel": "문서: {{names}}",
+    "unverified": "미검증: {{fields}}",
+    "verdict": {
+      "ready": "준비 완료",
+      "notReady": "준비 안 됨",
+      "needsReview": "검토 필요"
+    },
+    "verdictSub": {
+      "ready": "필수 서류가 모두 있고 내용이 일치합니다 – 대출기관 접수 준비 완료.",
+      "notReady": "대출기관 접수 전에 아래 문제를 해결하세요.",
+      "needsReview": "대출기관 접수 전에 표시된 항목을 담당자가 검토해야 합니다.",
+      "readyWithReview": "필수 서류가 모두 있고 불일치가 없습니다 – 대출기관 접수 전에 표시된 항목을 담당자가 확인해야 합니다."
+    },
+    "sections": {
+      "reasons": "해결할 문제 ({{count}})",
+      "checklist": "서류 체크리스트",
+      "consistency": "일관성 점검",
+      "income": "소득 (신고액 대비 서류)",
+      "documents": "읽은 문서 ({{count}})",
+      "notChecked": "점검되지 않은 문서",
+      "needsReview": "담당자 확인 필요 ({{count}}) – 판정에 영향 없음",
+      "foir": "FOIR (참고용)"
+    },
+    "status": {
+      "present": "있음",
+      "missing": "누락",
+      "review": "검토 필요",
+      "ok": "일치",
+      "mismatch": "불일치",
+      "info": "참고",
+      "na": "해당 없음",
+      "pending": "분석 중",
+      "failed": "분석 실패",
+      "noFacts": "추출된 정보 없음",
+      "unsupported": "지원되지 않음",
+      "unassigned": "신청인과 연결되지 않음"
+    },
+    "income": {
+      "declaredNet": "신고 실수령액 (신청서)",
+      "slipNet": "급여명세서 실수령액",
+      "bankCredit": "은행 급여 입금액",
+      "slipGross": "급여명세서 총액",
+      "form16Gross": "Form-16 연간 총액"
+    },
+    "errors": {
+      "unknownChecklist": "파일 점검 서비스가 선택한 체크리스트를 알지 못합니다 (HTTP 400). 체크리스트를 다시 불러온 후 다시 시도하세요.",
+      "notFound": "프로젝트 또는 파일 점검 API를 찾을 수 없습니다 (HTTP 404).",
+      "notConfigured": "이 배포에는 파일 점검이 구성되어 있지 않습니다 (HTTP 503).",
+      "unavailable": "파일 점검 서비스에 오류가 발생했습니다 (HTTP {{status}}). 잠시 후 다시 시도하세요.",
+      "rejected": "요청이 거부되었습니다 (HTTP {{status}})."
+    },
+    "needsReviewBanner": "{{count}}건은 담당자 확인 필요 (판정은 바뀌지 않음)",
+    "foir": {
+      "netIncome": "월 실수령 소득",
+      "existingEmis": "기존 대출 EMI",
+      "ratio": "기존 EMI / 소득",
+      "maxNewEmi": "신규 EMI 최대 (참고용)",
+      "maxNewEmiAt": "FOIR {{limit}}% 기준 신규 EMI 최대 (참고용)",
+      "note": "참고용 – 최종 판단은 대출기관 정책에 따릅니다. 대출 EMI만 포함하며 월세, SIP, 공과금, 신용카드 결제는 포함하지 않습니다.",
+      "incomeSource": "소득 근거: {{source}}."
+    }
   }
 }

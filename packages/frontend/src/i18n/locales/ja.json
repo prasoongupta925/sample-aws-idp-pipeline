@@ -645,5 +645,99 @@
     "apiKey": "APIキー",
     "apiKeyHint": "ブラウザにのみ保存されます",
     "voice": "音声"
+  },
+  "fileCheck": {
+    "title": "ファイルチェック",
+    "open": "ローン書類を金融機関のチェックリストで確認",
+    "subtitle": "ファイルチェックエンジンによるチェックリスト判定",
+    "checklist": "チェックリスト",
+    "loadingChecklists": "チェックリストを読み込み中…",
+    "defaultChecklist": "既定のチェックリスト",
+    "checklistsFailed": "チェックリストを読み込めませんでした: {{message}}",
+    "retry": "再試行",
+    "applicant": "申込者",
+    "applicantOptional": "(任意)",
+    "applicantPlaceholder": "氏名または PAN – 空欄で全申込者",
+    "allApplicants": "すべての申込者",
+    "run": "チェック実行",
+    "running": "チェック中…",
+    "runFailed": "ファイルチェックを実行できませんでした。",
+    "emptyTitle": "まだチェックを実行していません",
+    "emptyHint": "チェックリストを選んで「チェック実行」をクリックしてください。判定はチャットモデルではなく、ファイルチェックエンジンが行います。",
+    "staleResult": "{{name}} の結果を表示しています。選択したチェックリストで再度チェックしてください。",
+    "downloadCsv": "CSV をダウンロード",
+    "verdictLabel": "判定",
+    "checkedAt": "{{time}} にチェック",
+    "asOf": "基準日 {{date}}",
+    "referenceMonth": "基準月 {{month}}",
+    "documentsCount": "文書 {{count}} 件",
+    "documentsCount_one": "文書 {{count}} 件",
+    "applicantsCount": "申込者 {{count}} 名",
+    "applicantsCount_one": "申込者 {{count}} 名",
+    "syntheticNote": "デモデータは合成データです。判定は決定的なルールで行われ、チャットモデルは結果を伝えるだけです。",
+    "needsPerson": "担当者の確認が必要",
+    "optional": "任意",
+    "missingMonthsLabel": "不足:",
+    "documentsLabel": "文書: {{names}}",
+    "unverified": "未検証: {{fields}}",
+    "verdict": {
+      "ready": "準備完了",
+      "notReady": "準備未完了",
+      "needsReview": "要確認"
+    },
+    "verdictSub": {
+      "ready": "必要書類がすべて揃い、内容も一致しています – 金融機関への提出準備完了。",
+      "notReady": "金融機関へ提出する前に、以下の問題を解決してください。",
+      "needsReview": "金融機関へ提出する前に、フラグの付いた項目を担当者が確認する必要があります。",
+      "readyWithReview": "必要書類はすべて揃い、不一致もありません – 金融機関へ提出する前に、フラグの付いた項目を担当者が確認してください。"
+    },
+    "sections": {
+      "reasons": "解決すべき問題 ({{count}})",
+      "checklist": "書類チェックリスト",
+      "consistency": "整合性チェック",
+      "income": "収入 (申告額と書類)",
+      "documents": "読み取った文書 ({{count}})",
+      "notChecked": "チェックされていない文書",
+      "needsReview": "担当者の確認が必要 ({{count}}) – 判定には影響しません",
+      "foir": "FOIR (参考値)"
+    },
+    "status": {
+      "present": "あり",
+      "missing": "不足",
+      "review": "要確認",
+      "ok": "一致",
+      "mismatch": "不一致",
+      "info": "参考",
+      "na": "該当なし",
+      "pending": "分析中",
+      "failed": "分析失敗",
+      "noFacts": "抽出情報なし",
+      "unsupported": "非対応",
+      "unassigned": "申込者と未照合"
+    },
+    "income": {
+      "declaredNet": "申告手取り額 (申込書)",
+      "slipNet": "給与明細の手取り額",
+      "bankCredit": "銀行の給与入金額",
+      "slipGross": "給与明細の総支給額",
+      "form16Gross": "Form-16 年間総支給額"
+    },
+    "errors": {
+      "unknownChecklist": "ファイルチェックサービスは選択したチェックリストを認識できません (HTTP 400)。チェックリストを再読み込みしてから再試行してください。",
+      "notFound": "プロジェクトまたはファイルチェック API が見つかりません (HTTP 404)。",
+      "notConfigured": "このデプロイではファイルチェックが構成されていません (HTTP 503)。",
+      "unavailable": "ファイルチェックサービスでエラーが発生しました (HTTP {{status}})。しばらくしてから再試行してください。",
+      "rejected": "リクエストが拒否されました (HTTP {{status}})。"
+    },
+    "needsReviewBanner": "{{count}} 件は担当者の確認が必要 (判定は変わりません)",
+    "foir": {
+      "netIncome": "月間手取り収入",
+      "existingEmis": "既存ローンの EMI",
+      "ratio": "既存 EMI / 収入",
+      "maxNewEmi": "新規 EMI の上限 (参考値)",
+      "maxNewEmiAt": "FOIR {{limit}}% での新規 EMI の上限 (参考値)",
+      "note": "参考値 – 最終的な判断は金融機関のポリシーによります。ローンの EMI のみを含み、家賃、SIP、公共料金、クレジットカードの支払いは含みません。",
+      "incomeSource": "収入の根拠: {{source}}。"
+    }
   }
 }

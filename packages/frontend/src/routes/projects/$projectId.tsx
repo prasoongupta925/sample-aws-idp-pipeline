@@ -21,6 +21,7 @@ import {
 import AgentSelectModal from '../../components/AgentSelectModal';
 import DocumentUploadModal from '../../components/DocumentUploadModal';
 import ArtifactViewer from '../../components/ArtifactViewer';
+import FileCheckPanel from '../../components/FileCheckPanel';
 import SystemPromptModal from '../../components/SystemPromptModal';
 import ProjectGraphModal from '../../components/ProjectGraphModal';
 import { useSetSidebarSessions } from '../../contexts/SidebarSessionContext';
@@ -39,6 +40,7 @@ import { useVoiceChatManager } from '../../hooks/useVoiceChatManager';
 import { useAgents } from '../../hooks/useAgents';
 import { useArtifacts } from '../../hooks/useArtifacts';
 import { useDocuments } from '../../hooks/useDocuments';
+import { useFileCheck } from '../../hooks/useFileCheck';
 
 export const Route = createFileRoute('/projects/$projectId')({
   component: ProjectDetailPage,
@@ -113,6 +115,12 @@ function ProjectDetailPage() {
     wsStatus,
   });
 
+  // 7. File check (deterministic checklist verdict from the backend)
+  const fileCheck = useFileCheck({ fetchApi, projectId });
+  const [showFileCheck, setShowFileCheck] = useState(false);
+  const openFileCheck = useCallback(() => setShowFileCheck(true), []);
+  const closeFileCheck = useCallback(() => setShowFileCheck(false), []);
+
   // --- System prompt modal state ---
   const [showSystemPrompt, setShowSystemPrompt] = useState(false);
   const [showProjectGraph, setShowProjectGraph] = useState(false);
@@ -133,6 +141,7 @@ function ProjectDetailPage() {
     chatSession.setStreamingBlocks([]);
     agentsHook.setSelectedAgent(null);
     artifactsHook.setSelectedArtifact(null);
+    setShowFileCheck(false);
     voiceChatManager.setVoiceChatMode(false);
     chatSession.pendingMessagesRef.current = [];
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -460,8 +469,16 @@ function ProjectDetailPage() {
                     onRefreshDocuments={documentsHook.loadDocuments}
                     onViewWorkflow={documentsHook.loadWorkflowDetail}
                     onDeleteDocument={documentsHook.handleDeleteDocument}
+                    onOpenFileCheck={openFileCheck}
                     // onViewProjectGraph={() => setShowProjectGraph(true)}
                   />
+                  {/* File Check - overlays SidePanel (an open artifact stays on top) */}
+                  {showFileCheck && !artifactsHook.selectedArtifact && (
+                    <FileCheckPanel
+                      state={fileCheck}
+                      onClose={closeFileCheck}
+                    />
+                  )}
                   {/* Artifact Viewer - overlays SidePanel */}
                   {artifactsHook.selectedArtifact && (
                     <ArtifactViewer

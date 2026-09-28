@@ -26,6 +26,7 @@ import {
   Search,
   X,
   Network,
+  ClipboardCheck,
 } from 'lucide-react';
 import ConfirmModal from './ConfirmModal';
 import {
@@ -562,6 +563,7 @@ interface SidePanelProps {
   onViewWorkflow?: (documentId: string, workflowId: string) => void;
   onDeleteDocument?: (documentId: string) => void;
   onViewProjectGraph?: () => void;
+  onOpenFileCheck?: () => void;
 }
 
 export default function SidePanel({
@@ -582,6 +584,7 @@ export default function SidePanel({
   onViewWorkflow,
   onDeleteDocument,
   onViewProjectGraph,
+  onOpenFileCheck,
 }: SidePanelProps) {
   const { t } = useTranslation();
   const [openArtifactMenuId, setOpenArtifactMenuId] = useState<string | null>(
@@ -745,6 +748,16 @@ export default function SidePanel({
                 className="px-2.5 py-1 text-xs font-medium rounded-lg text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors truncate min-w-0"
               >
                 {t('documents.addDocument', 'Add Document')}
+              </button>
+            )}
+            {onOpenFileCheck && (
+              <button
+                onClick={onOpenFileCheck}
+                className="flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-lg text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 transition-colors min-w-0"
+                title={t('fileCheck.open')}
+              >
+                <ClipboardCheck className="h-3.5 w-3.5 flex-shrink-0" />
+                <span className="truncate">{t('fileCheck.title')}</span>
               </button>
             )}
             {onRefreshDocuments && (
