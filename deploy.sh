@@ -15,10 +15,11 @@ echo ""
 REPO_URL="https://github.com/aws-samples/sample-aws-idp-pipeline.git"
 VERSION="main"
 STACK_NAME="sample-aws-idp-pipeline-codebuild"
-TEMPLATE_URL_BASE="https://raw.githubusercontent.com/aws-samples/sample-aws-idp-pipeline"
+TEMPLATE_URL_BASE=""
 TEMPLATE_FILE="/tmp/deploy-codebuild.yml"
 ADMIN_USER_EMAIL=""
 DEPLOY_STACKS=""
+CDK_CONTEXT_ARGS=""
 
 # Parse command-line arguments
 while [[ "$#" -gt 0 ]]; do
@@ -27,6 +28,13 @@ while [[ "$#" -gt 0 ]]; do
         --repo-url) REPO_URL="$2"; shift ;;
         --version) VERSION="$2"; shift ;;
         --stack-name) STACK_NAME="$2"; shift ;;
+        --template-url-base) TEMPLATE_URL_BASE="$2"; shift ;;
+        --context)
+            if [[ ! "$2" =~ ^[A-Za-z][A-Za-z0-9:._-]*=[A-Za-z0-9:._/-]*$ ]]; then
+                echo "Invalid --context value: '$2' (expected KEY=VALUE, e.g. lancedbExpressAzId=aps1-az3)"
+                exit 1
+            fi
+            CDK_CONTEXT_ARGS="${CDK_CONTEXT_ARGS:+$CDK_CONTEXT_ARGS }-c $2"; shift ;;
         --stacks) DEPLOY_STACKS="$2"; shift ;;
         --info)
             FRONTEND_DOMAIN=$(aws cloudformation describe-stacks --stack-name IDP-V2-Application \
@@ -53,6 +61,8 @@ while [[ "$#" -gt 0 ]]; do
             echo "  --version VERSION     Branch or tag to deploy (default: main)"
             echo "  --stack-name NAME     CloudFormation stack name (default: sample-aws-idp-pipeline-codebuild)"
             echo "  --stacks STACKS       Deploy specific CDK stacks only (e.g. 'IDP-V2-Workflow IDP-V2-Storage')"
+            echo "  --template-url-base URL  Raw base URL of the CodeBuild template (default: derived from --repo-url)"
+            echo "  --context KEY=VALUE   CDK context for the build, repeatable (e.g. lancedbExpressAzId=aps1-az3)"
             echo "  --info                Show deployed application URL"
             echo "  --help                Show this help message"
             exit 0
@@ -61,6 +71,21 @@ while [[ "$#" -gt 0 ]]; do
     esac
     shift
 done
+
+# The CodeBuild template comes from the repository being deployed (--repo-url
+# at --version), so a fork's own template changes are used, not upstream's.
+# For a repository outside GitHub, pass --template-url-base.
+if [[ -z "$TEMPLATE_URL_BASE" ]]; then
+    REPO_PATH="${REPO_URL%/}"
+    REPO_PATH="${REPO_PATH%.git}"
+    if [[ "$REPO_PATH" =~ ^https://github\.com/([^/]+/[^/]+)$ ]]; then
+        TEMPLATE_URL_BASE="https://raw.githubusercontent.com/${BASH_REMATCH[1]}"
+    else
+        echo "Cannot derive the template URL from $REPO_URL; pass --template-url-base URL."
+        exit 1
+    fi
+fi
+TEMPLATE_URL="${TEMPLATE_URL_BASE%/}/${VERSION}/deploy-codebuild.yml"
 
 # Prompt for email if not provided (skip for targeted stack deploys)
 if [[ -z "$ADMIN_USER_EMAIL" && -z "$DEPLOY_STACKS" ]]; then
@@ -82,6 +107,10 @@ echo "Admin Email: $ADMIN_USER_EMAIL"
 echo "Repository:  $REPO_URL"
 echo "Version:     $VERSION"
 echo "Stack Name:  $STACK_NAME"
+echo "Template:    $TEMPLATE_URL"
+if [[ -n "$CDK_CONTEXT_ARGS" ]]; then
+echo "CDK context: $CDK_CONTEXT_ARGS"
+fi
 if [[ -n "$DEPLOY_STACKS" ]]; then
 echo "Stacks:      $DEPLOY_STACKS"
 fi
@@ -98,7 +127,6 @@ while true; do
 done
 
 # Download CloudFormation template
-TEMPLATE_URL="${TEMPLATE_URL_BASE}/${VERSION}/deploy-codebuild.yml"
 echo ""
 echo "Downloading CloudFormation template..."
 echo "  $TEMPLATE_URL"
@@ -163,10 +191,14 @@ fi
 # Start CodeBuild
 echo ""
 echo "Starting CodeBuild: $PROJECT_NAME ..."
-CODEBUILD_ENV_OVERRIDES="[{\"name\":\"NODE_OPTIONS\",\"value\":\"--max-old-space-size=6144\",\"type\":\"PLAINTEXT\"},{\"name\":\"IDP_RESERVED_CONCURRENCY\",\"value\":\"off\",\"type\":\"PLAINTEXT\"}]"
+CODEBUILD_ENV_OVERRIDES="[{\"name\":\"NODE_OPTIONS\",\"value\":\"--max-old-space-size=6144\",\"type\":\"PLAINTEXT\"},{\"name\":\"IDP_RESERVED_CONCURRENCY\",\"value\":\"off\",\"type\":\"PLAINTEXT\"}"
 if [[ -n "$DEPLOY_STACKS" ]]; then
-    CODEBUILD_ENV_OVERRIDES="[{\"name\":\"NODE_OPTIONS\",\"value\":\"--max-old-space-size=6144\",\"type\":\"PLAINTEXT\"},{\"name\":\"IDP_RESERVED_CONCURRENCY\",\"value\":\"off\",\"type\":\"PLAINTEXT\"},{\"name\":\"DEPLOY_STACKS\",\"value\":\"$DEPLOY_STACKS\",\"type\":\"PLAINTEXT\"}]"
+    CODEBUILD_ENV_OVERRIDES+=",{\"name\":\"DEPLOY_STACKS\",\"value\":\"$DEPLOY_STACKS\",\"type\":\"PLAINTEXT\"}"
 fi
+if [[ -n "$CDK_CONTEXT_ARGS" ]]; then
+    CODEBUILD_ENV_OVERRIDES+=",{\"name\":\"CDK_CONTEXT_ARGS\",\"value\":\"$CDK_CONTEXT_ARGS\",\"type\":\"PLAINTEXT\"}"
+fi
+CODEBUILD_ENV_OVERRIDES+="]"
 BUILD_ID=$(aws codebuild start-build --project-name "$PROJECT_NAME" --environment-variables-override "$CODEBUILD_ENV_OVERRIDES" --query 'build.id' --output text)
 
 if [[ -z "$BUILD_ID" ]]; then

@@ -29,6 +29,35 @@ Deployment is recommended in the following regions:
 |--------|-------|
 | **us-east-1** (N. Virginia) | All models supported |
 | **us-west-2** (Oregon) | All models supported |
+| **ap-south-1** (Mumbai) | Supported with the per-Region defaults below. No AgentCore Web Search tool and no voice (Nova Sonic) |
+
+### Deploying Outside us-east-1
+
+Region-specific settings are chosen per deploy Region
+(`packages/common/constructs/src/core/region-config.ts`). Each one can be
+overridden with CDK context, which `deploy.sh`/`destroy.sh` pass through with
+`--context KEY=VALUE` (repeatable).
+
+| Context key | ap-south-1 default | Purpose |
+|-------------|--------------------|---------|
+| `lancedbExpressAzId` | `aps1-az1` (`aps1-az3` also works) | Availability Zone ID of the S3 Express One Zone bucket for LanceDB. Must be a zone ID of the deploy Region; synth fails otherwise. Required for Regions without a default (us-east-1 uses `use1-az4`) |
+| `embeddingRegion` | `us-east-1` | Region for Nova multimodal embeddings, which ap-south-1 does not offer. Chunk text is sent there for embedding; nothing is stored there |
+| `rerankRegion` | `ap-northeast-1` | Region for Amazon Rerank. If rerank fails, search falls back to the hybrid order |
+| `voiceModelRegion` | `ap-south-1` | Region for Nova Sonic. It is not offered in ap-south-1, so voice is off unless you set, for example, `ap-northeast-1` |
+| `enableWebSearch` | `false` | Create the AgentCore Web Search gateway target. The default is `true` only in us-east-1, eu-west-1 and ap-northeast-1, where the tool is offered |
+| `retentionDays` | `7` | Maximum age of client data, logs and queues |
+
+Also note:
+
+- Named S3 buckets end in `-<account>-<region>` (for example `idp-v2-document-storage-<account>-ap-south-1`), so names cannot collide across Regions.
+- The CloudFront WAF stack is always deployed to us-east-1. The CodeBuild deploy bootstraps CDK in us-east-1 as well as in the deploy Region.
+- `deploy.sh` and `destroy.sh` download their CodeBuild template from the repository given with `--repo-url` (at `--version`), so a fork uses its own templates.
+
+```bash
+./deploy.sh --admin-email user@example.com \
+  --repo-url https://github.com/<owner>/sample-aws-idp-pipeline.git \
+  --context lancedbExpressAzId=aps1-az3
+```
 
 ---
 
@@ -176,6 +205,9 @@ Options:
   --repo-url URL        Repository URL (default: github.com/aws-samples/...)
   --version VERSION     Branch or tag to deploy (default: main)
   --stack-name NAME     CloudFormation stack name (default: sample-aws-idp-pipeline-codebuild)
+  --stacks STACKS       Deploy specific CDK stacks only
+  --template-url-base URL  Raw base URL of the CodeBuild template (default: derived from --repo-url)
+  --context KEY=VALUE   CDK context for the build, repeatable (see "Deploying Outside us-east-1")
   --info                Show deployed application URL
   --help                Show help message
 ```
