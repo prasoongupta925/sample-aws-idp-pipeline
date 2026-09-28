@@ -1,7 +1,12 @@
-import { Stack, StackProps } from 'aws-cdk-lib';
+import { RemovalPolicy, Stack, StackProps } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import { StringParameter } from 'aws-cdk-lib/aws-ssm';
-import { SSM_KEYS } from ':idp-v2/common-constructs';
+import { LogGroup } from 'aws-cdk-lib/aws-logs';
+import {
+  getRetentionDays,
+  SSM_KEYS,
+  toLogRetention,
+} from ':idp-v2/common-constructs';
 import {
   Vpc,
   SubnetType,
@@ -39,8 +44,15 @@ export class VpcStack extends Stack {
       ],
     });
 
+    // Flow logs expire with the other logs (retentionDays, default 7); the
+    // CDK default log group would keep them for 2 years.
+    const flowLogGroup = new LogGroup(this, 'VpcFlowLogGroup', {
+      retention: toLogRetention(getRetentionDays(this)),
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+
     this.vpc.addFlowLog('FlowLog', {
-      destination: FlowLogDestination.toCloudWatchLogs(),
+      destination: FlowLogDestination.toCloudWatchLogs(flowLogGroup),
       trafficType: FlowLogTrafficType.REJECT,
     });
 

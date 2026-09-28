@@ -16,6 +16,7 @@ import { fileURLToPath } from 'url';
 import {
   SSM_KEYS,
   PADDLEOCR_ENDPOINT_NAME_VALUE,
+  getRetentionDays,
 } from ':idp-v2/common-constructs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -60,10 +61,13 @@ export class EventStack extends Stack {
     // SQS Queues with Dead Letter Queues
     // ========================================
 
+    // Retention: the DLQ keeps messages at most retentionDays (SQS max 14).
+    // The main queues keep the SQS default of 4 days, which is <= 7.
+
     // Workflow Queue (for Step Functions to consume)
     const workflowDlq = new sqs.Queue(this, 'WorkflowDLQ', {
       queueName: 'idp-v2-workflow-dlq',
-      retentionPeriod: Duration.days(14),
+      retentionPeriod: Duration.days(Math.min(getRetentionDays(this), 14)),
     });
     this.workflowQueue = new sqs.Queue(this, 'WorkflowQueue', {
       queueName: 'idp-v2-workflow-queue',

@@ -2,6 +2,10 @@
 
 Checks the status of a Transcribe job. On completion, downloads and saves transcript text.
 Called by Step Functions polling loop.
+
+Retention: once the job has finished (COMPLETED or FAILED) the job record is
+deleted from Amazon Transcribe. The transcript JSON/text stay in the document
+bucket under the document prefix, where the 7-day retention applies.
 """
 import json
 import os
@@ -29,6 +33,16 @@ def get_transcribe_client():
             region_name=os.environ.get('AWS_REGION', 'us-east-1')
         )
     return transcribe_client
+
+
+def _delete_job(client, job_name: str) -> None:
+    """Delete a finished transcription job. Never raises."""
+    if not job_name:
+        return
+    try:
+        client.delete_transcription_job(TranscriptionJobName=job_name)
+    except Exception as e:
+        print(f'Warning: could not delete transcription job {job_name}: {e}')
 
 
 def save_transcript_text(transcript_uri: str, project_id: str, document_id: str, workflow_id: str) -> str:
@@ -103,6 +117,7 @@ def handler(event, context):
             job_name=job_name
         )
         record_step_complete(workflow_id, StepName.TRANSCRIBE)
+        _delete_job(client, job_name)
         return {**event, 'transcribe_status': 'COMPLETED', 'transcribe_text_uri': text_uri}
 
     elif status == 'FAILED':
@@ -120,6 +135,7 @@ def handler(event, context):
                 job_name=job_name
             )
             record_step_complete(workflow_id, StepName.TRANSCRIBE)
+            _delete_job(client, job_name)
             return {**event, 'transcribe_status': 'SKIPPED', 'transcribe_skip_reason': failure_reason}
 
         update_preprocess_status(
@@ -131,6 +147,7 @@ def handler(event, context):
             job_name=job_name
         )
         record_step_error(workflow_id, StepName.TRANSCRIBE, failure_reason)
+        _delete_job(client, job_name)
         raise Exception(f'Transcription failed: {failure_reason}')
 
     # Still in progress

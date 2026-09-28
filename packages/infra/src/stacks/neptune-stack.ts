@@ -46,6 +46,9 @@ export class NeptuneStack extends Stack {
       vpcSecurityGroupIds: [neptuneSg.securityGroupId],
       iamAuthEnabled: true,
       deletionProtection: false,
+      // Automated backups hold graph data derived from documents: keep the
+      // minimum (1 day).
+      backupRetentionPeriod: 1,
       serverlessScalingConfiguration: {
         minCapacity: 1,
         maxCapacity: 8,

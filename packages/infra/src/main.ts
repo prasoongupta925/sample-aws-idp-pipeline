@@ -14,6 +14,7 @@ import { WebcrawlerStack } from './stacks/webcrawler-stack.js';
 import { NeptuneStack } from './stacks/neptune-stack.js';
 import { WebsocketStack } from './stacks/websocket-stack.js';
 import { LanceServiceStack } from './stacks/lance-service-stack.js';
+import { RetentionStack } from './stacks/retention-stack.js';
 
 const app = new App();
 
@@ -99,6 +100,14 @@ applicationStack.addDependency(mcpStack);
 applicationStack.addDependency(workflowStack);
 applicationStack.addDependency(vpcStack);
 
+// Retention (daily sweeper + log retention enforcer). Deployed last so every
+// resource it cleans up, and every log group it caps, already exists.
+const retentionStack = new RetentionStack(app, 'IDP-V2-Retention', { env });
+retentionStack.addDependency(storageStack);
+retentionStack.addDependency(workflowStack);
+retentionStack.addDependency(agentStack);
+retentionStack.addDependency(applicationStack);
+
 // ============================================================
 // [Without Dependencies] - for independent stack deployment (dev)
 // ============================================================
@@ -123,5 +132,6 @@ applicationStack.addDependency(vpcStack);
 //   env,
 //   crossRegionReferences: true,
 // });
+// new RetentionStack(app, 'IDP-V2-Retention', { env });
 
 app.synth();

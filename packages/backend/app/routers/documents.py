@@ -16,6 +16,7 @@ from app.ddb import (
     query_documents,
     update_document_data,
 )
+from app.ddb.facts import delete_facts_item
 from app.ddb.workflows import delete_workflow_item, get_steps_batch, query_workflows
 from app.lancedb import DeleteByWorkflowInput, LanceDbError
 from app.lancedb import delete_by_workflow as lancedb_delete_by_workflow
@@ -334,7 +335,9 @@ def delete_document(project_id: str, document_id: str) -> DeleteDocumentResponse
         except LanceDbError as e:
             deleted_info.lancedb_error = str(e)
 
-    # 1b. Queue graph deletion via SQS (async, handles large documents)
+    # 1b. Queue graph deletion via SQS (async, handles large documents).
+    # Start at "clusters" (PHASE_ORDER[0] in graph-delete-consumer) so Cluster
+    # nodes are removed too.
     if workflow_id and config.graph_delete_queue_url:
         try:
             import json
@@ -348,7 +351,7 @@ def delete_document(project_id: str, document_id: str) -> DeleteDocumentResponse
                     {
                         "project_id": project_id,
                         "workflow_id": workflow_id,
-                        "phase": "analyses",
+                        "phase": "clusters",
                         "batch_size": 500,
                     }
                 ),
@@ -375,5 +378,9 @@ def delete_document(project_id: str, document_id: str) -> DeleteDocumentResponse
 
     # 5. Delete document item from DynamoDB
     delete_document_item(project_id, document_id)
+
+    # 6. Delete extracted document facts (PROJ#/FACTS#)
+    with contextlib.suppress(Exception):
+        delete_facts_item(project_id, document_id)
 
     return DeleteDocumentResponse(message=f"Document {document_id} deleted", details=deleted_info)

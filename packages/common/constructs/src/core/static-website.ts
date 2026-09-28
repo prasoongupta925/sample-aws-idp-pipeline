@@ -1,4 +1,11 @@
-import { Aws, CfnOutput, CfnResource, RemovalPolicy, Stack } from 'aws-cdk-lib';
+import {
+  Aws,
+  CfnOutput,
+  CfnResource,
+  Duration,
+  RemovalPolicy,
+  Stack,
+} from 'aws-cdk-lib';
 import { Distribution, ViewerProtocolPolicy } from 'aws-cdk-lib/aws-cloudfront';
 import { S3BucketOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import {
@@ -14,6 +21,7 @@ import { RuntimeConfig } from './runtime-config.js';
 import { Key } from 'aws-cdk-lib/aws-kms';
 import { CfnWebACL } from 'aws-cdk-lib/aws-wafv2';
 import { suppressRules } from './checkov.js';
+import { getRetentionDays } from '../app/retention-config.js';
 
 const DEFAULT_RUNTIME_CONFIG_FILENAME = 'runtime-config.json';
 
@@ -50,8 +58,11 @@ export class StaticWebsite extends Construct {
       enableKeyRotation: true,
     });
 
+    // Access and CloudFront logs expire after retentionDays (default 7).
+    const logRetentionDays = getRetentionDays(this);
+
     const accessLogsBucket = new Bucket(this, 'AccessLogsBucket', {
-      bucketName: `idp-v2-frontend-access-logs-${Aws.ACCOUNT_ID}`,
+      bucketName: `idp-v2-frontend-access-logs-${Aws.ACCOUNT_ID}-${Aws.REGION}`,
       versioned: false,
       enforceSSL: true,
       autoDeleteObjects: true,
@@ -61,6 +72,13 @@ export class StaticWebsite extends Construct {
       objectOwnership: ObjectOwnership.OBJECT_WRITER,
       publicReadAccess: false,
       blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
+      lifecycleRules: [
+        {
+          id: 'expire-logs',
+          expiration: Duration.days(logRetentionDays),
+          abortIncompleteMultipartUploadAfter: Duration.days(1),
+        },
+      ],
     });
     suppressRules(
       accessLogsBucket,
@@ -75,7 +93,7 @@ export class StaticWebsite extends Construct {
 
     // S3 Bucket to hold website files
     this.websiteBucket = new Bucket(this, 'WebsiteBucket', {
-      bucketName: `idp-v2-frontend-${Aws.ACCOUNT_ID}`,
+      bucketName: `idp-v2-frontend-${Aws.ACCOUNT_ID}-${Aws.REGION}`,
       versioned: true,
       enforceSSL: true,
       autoDeleteObjects: true,
@@ -87,13 +105,21 @@ export class StaticWebsite extends Construct {
       blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
       serverAccessLogsPrefix: 'website-access-logs',
       serverAccessLogsBucket: accessLogsBucket,
+      // Only replaced (noncurrent) site versions expire; live files stay.
+      lifecycleRules: [
+        {
+          id: 'noncurrent-1d',
+          noncurrentVersionExpiration: Duration.days(1),
+          abortIncompleteMultipartUploadAfter: Duration.days(1),
+        },
+      ],
     });
     // Web ACL
     const wafStack = new CloudfrontWebAcl(this, 'waf');
 
     // Cloudfront Distribution
     const logBucket = new Bucket(this, 'DistributionLogBucket', {
-      bucketName: `idp-v2-frontend-cf-logs-${Aws.ACCOUNT_ID}`,
+      bucketName: `idp-v2-frontend-cf-logs-${Aws.ACCOUNT_ID}-${Aws.REGION}`,
       enforceSSL: true,
       autoDeleteObjects: true,
       removalPolicy: RemovalPolicy.DESTROY,
@@ -104,6 +130,13 @@ export class StaticWebsite extends Construct {
       blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
       serverAccessLogsPrefix: 'distribution-access-logs',
       serverAccessLogsBucket: accessLogsBucket,
+      lifecycleRules: [
+        {
+          id: 'expire-logs',
+          expiration: Duration.days(logRetentionDays),
+          abortIncompleteMultipartUploadAfter: Duration.days(1),
+        },
+      ],
     });
     suppressRules(
       logBucket,

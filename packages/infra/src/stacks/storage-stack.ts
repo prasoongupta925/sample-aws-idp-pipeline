@@ -3,6 +3,8 @@ import { Construct } from 'constructs';
 import { StringParameter } from 'aws-cdk-lib/aws-ssm';
 import {
   ElastiCache,
+  getRegionConfig,
+  getRetentionDays,
   S3Bucket,
   S3DirectoryBucket,
   SSM_KEYS,
@@ -20,6 +22,11 @@ import { Queue } from 'aws-cdk-lib/aws-sqs';
 export class StorageStack extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
     super(scope, id, props);
+
+    // Client data (documents, derived analysis, chat sessions) is kept at
+    // most retentionDays (CDK context, default 7).
+    const retentionDays = getRetentionDays(this);
+    const regionConfig = getRegionConfig(this);
 
     const vpcId = StringParameter.valueFromLookup(this, SSM_KEYS.VPC_ID);
     const vpc = Vpc.fromLookup(this, 'Vpc', { vpcId });
@@ -40,6 +47,7 @@ export class StorageStack extends Stack {
     const documentStorage = new S3Bucket(this, 'DocumentStorage', {
       bucketPrefix: 'document-storage',
       bucketName: 'document-storage',
+      expireObjectsAfterDays: retentionDays,
       cors: [
         {
           allowedOrigins: ['*'],
@@ -78,6 +86,7 @@ export class StorageStack extends Stack {
         },
       ],
       versioned: true,
+      expireObjectsAfterDays: retentionDays,
     });
 
     new StringParameter(this, 'SessionStorageBucketNameParam', {
@@ -87,6 +96,9 @@ export class StorageStack extends Stack {
 
     // Agent Storage Bucket (for custom agent prompts)
     // Structure: /{user_id}/{project_id}/agents/{agent_name}.md
+    // No age-based expiry: this bucket also holds __prompts/ and custom-agent
+    // config (app configuration). Chat artifacts
+    // ({user_id}/{project_id}/artifacts/) are removed by the retention sweeper.
     const agentStorage = new S3Bucket(this, 'AgentStorage', {
       bucketPrefix: 'agent-storage',
       bucketName: 'agent-storage',
@@ -106,6 +118,7 @@ export class StorageStack extends Stack {
     });
 
     // Model Artifacts Bucket (for ML models like PaddleOCR)
+    // No age-based expiry: model files are app configuration, not client data.
     const modelArtifacts = new S3Bucket(this, 'ModelArtifacts', {
       bucketPrefix: 'model-artifacts',
       bucketName: 'model-artifacts',
@@ -147,9 +160,11 @@ export class StorageStack extends Stack {
     });
 
     // Express One Zone Storage Bucket
+    // No age-based lifecycle: LanceDB data is deleted through LanceDB
+    // (delete_by_workflow / drop_table) so table manifests stay consistent.
     const expressStorage = new S3DirectoryBucket(this, 'ExpressStorage', {
       bucketPrefix: 'lancedb-ex',
-      availabilityZoneId: 'use1-az4',
+      availabilityZoneId: regionConfig.lancedbExpressAzId,
     });
 
     new StringParameter(this, 'LancedbExpressBucketNameParam', {
@@ -159,7 +174,7 @@ export class StorageStack extends Stack {
 
     new StringParameter(this, 'LancedbExpressAzIdParam', {
       parameterName: SSM_KEYS.LANCEDB_EXPRESS_AZ_ID,
-      stringValue: 'use1-az4',
+      stringValue: regionConfig.lancedbExpressAzId,
     });
 
     // ElastiCache Serverless (Redis)
@@ -172,15 +187,17 @@ export class StorageStack extends Stack {
       stringValue: elasticache.cache.serverlessCacheEndpointAddress,
     });
 
-    // WebSocket Message Queue
+    // WebSocket Message Queue (SQS allows at most 14 days)
+    const queueRetention = Duration.days(Math.min(retentionDays, 14));
     const websocketMessageDlq = new Queue(this, 'WebsocketMessageDLQ', {
       queueName: 'idp-v2-websocket-message-dlq',
-      retentionPeriod: Duration.days(14),
+      retentionPeriod: queueRetention,
     });
 
     const websocketMessageQueue = new Queue(this, 'WebsocketMessageQueue', {
       queueName: 'idp-v2-websocket-message-queue',
       visibilityTimeout: Duration.minutes(5),
+      retentionPeriod: queueRetention,
       deadLetterQueue: {
         queue: websocketMessageDlq,
         maxReceiveCount: 3,

@@ -11,6 +11,10 @@ import {
 } from 'aws-cdk-lib/aws-apigatewayv2';
 import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import { suppressRules } from '../checkov.js';
+import {
+  getRetentionDays,
+  toLogRetention,
+} from '../../app/retention-config.js';
 
 /**
  * Properties for creating an HttpApi construct.
@@ -79,7 +83,9 @@ export class HttpApi<
       ...props,
     });
 
-    const accessLogGroup = new LogGroup(this, 'AccessLogs');
+    const accessLogGroup = new LogGroup(this, 'AccessLogs', {
+      retention: toLogRetention(getRetentionDays(this)),
+    });
     suppressRules(
       accessLogGroup,
       ['CKV_AWS_158'],
@@ -88,7 +94,7 @@ export class HttpApi<
     suppressRules(
       accessLogGroup,
       ['CKV_AWS_66', 'CKV_AWS_338'],
-      'Logs are retained forever',
+      'Access logs expire after retentionDays',
     );
 
     this.defaultStage = new HttpStage(this, 'DefaultStage', {
