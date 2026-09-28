@@ -7,6 +7,7 @@ from app.routers import (
     chat,
     datasets,
     documents,
+    file_check,
     graph,
     health,
     projects,
@@ -28,6 +29,10 @@ app = FastAPI(
         {"name": "sagemaker", "description": "SageMaker 엔드포인트 관리"},
         {"name": "graph", "description": "지식 그래프 관리"},
         {"name": "datasets", "description": "정형 데이터셋 조회"},
+        {
+            "name": "file-check",
+            "description": "Deterministic loan-file check (READY / NOT READY) for external systems such as a CRM",
+        },
     ]
 )
 
@@ -44,6 +49,7 @@ app.include_router(artifacts.router)
 app.include_router(chat.router)
 app.include_router(datasets.router)
 app.include_router(documents.router)
+app.include_router(file_check.router)
 app.include_router(graph.router)
 app.include_router(health.router)
 app.include_router(projects.router)

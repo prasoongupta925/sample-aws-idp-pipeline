@@ -129,6 +129,12 @@ export class Backend extends Construct {
       this,
       SSM_KEYS.GRAPH_DELETE_QUEUE_URL,
     );
+    // Deterministic loan-file check Lambda (McpStack, deployed before this
+    // stack) behind GET /projects/{id}/checklists and POST .../file-check.
+    const fileCheckFunctionArn = StringParameter.valueForStringParameter(
+      this,
+      SSM_KEYS.FILE_CHECK_MCP_FUNCTION_ARN,
+    );
 
     this.service = new ApplicationLoadBalancedFargateService(this, 'Service', {
       cluster,
@@ -155,6 +161,7 @@ export class Backend extends Construct {
           LANCEDB_FUNCTION_NAME: lancedbFunctionArn,
           GRAPH_SERVICE_FUNCTION_NAME: graphServiceFunctionArn,
           GRAPH_DELETE_QUEUE_URL: graphDeleteQueueUrl,
+          FILE_CHECK_FUNCTION_NAME: fileCheckFunctionArn,
         },
       },
       runtimePlatform: {
@@ -257,6 +264,15 @@ export class Backend extends Construct {
           graphServiceFunctionArn,
           graphBuilderFunctionArn,
         ],
+      }),
+    );
+
+    // File-check integration API: invoke only the file-check function.
+    taskRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'InvokeFileCheck',
+        actions: ['lambda:InvokeFunction'],
+        resources: [fileCheckFunctionArn],
       }),
     );
 

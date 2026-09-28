@@ -17,7 +17,9 @@ import { SSM_KEYS } from '../../constants/ssm-keys.js';
  * (PROJ#{pid} DOC# and FACTS# items), groups documents by applicant and applies
  * a bundled loan-product checklist, returning READY / NOT READY with findings
  * that cite document names. Pure Python standard library plus the runtime's
- * boto3, so no layer is needed.
+ * boto3, so no layer is needed. The backend's integration API
+ * (POST /projects/{id}/file-check) invokes the same function, with the tool
+ * name in ClientContext as the Gateway sends it.
  */
 export class FileCheckMcp extends Construct {
   public readonly function: LambdaFunction;
@@ -53,5 +55,12 @@ export class FileCheckMcp extends Construct {
 
     // Base-table Query on PK=PROJ#{pid} only (no GSI access needed).
     backendTable.grantReadData(this.function);
+
+    // The backend's file-check integration API invokes this function directly.
+    new StringParameter(this, 'FunctionArnParam', {
+      parameterName: SSM_KEYS.FILE_CHECK_MCP_FUNCTION_ARN,
+      stringValue: this.function.functionArn,
+      description: 'ARN of the File Check MCP Lambda function',
+    });
   }
 }

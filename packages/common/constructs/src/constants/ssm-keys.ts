@@ -17,6 +17,8 @@ export const SSM_KEYS = {
   BACKEND_URL: '/idp-v2/backend/url',
   SEARCH_MCP_FUNCTION_ARN: '/idp-v2/mcp/search/function-arn',
   SEARCH_MCP_ROLE_ARN: '/idp-v2/mcp/search/role-arn',
+  // Deterministic loan-file check Lambda (McpStack); the backend invokes it
+  FILE_CHECK_MCP_FUNCTION_ARN: '/idp-v2/mcp/file-check/function-arn',
   ELASTICACHE_ENDPOINT: '/idp-v2/elasticache/endpoint',
   STEP_FUNCTION_ARN: '/idp-v2/stepfunction/arn',
   WEBSOCKET_API_ID: '/idp-v2/websocket/api-id',

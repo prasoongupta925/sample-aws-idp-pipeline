@@ -20,6 +20,8 @@ class Config(BaseSettings):
     paddleocr_scale_in_alarm_name: str = "idp-v2-paddleocr-scale-in"
     graph_service_function_name: str = ""
     graph_delete_queue_url: str = ""
+    # Deterministic file-check Lambda (McpStack, idp-v2-file-check-mcp): name or ARN.
+    file_check_function_name: str = ""
 
 
 @lru_cache
