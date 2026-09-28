@@ -4,7 +4,7 @@ Description: CodeBuild project for destroying Sample AWS IDP Pipeline
 Parameters:
   RepoUrl:
     Type: String
-    Default: 'https://github.com/aws-samples/sample-aws-idp-pipeline.git'
+    Default: 'https://github.com/prasoongupta925/sample-aws-idp-pipeline.git'
     Description: Repository URL
 
   Version:

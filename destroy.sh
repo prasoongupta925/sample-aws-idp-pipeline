@@ -12,7 +12,7 @@ echo "==========================================================================
 echo ""
 
 # Default parameters
-REPO_URL="https://github.com/aws-samples/sample-aws-idp-pipeline.git"
+REPO_URL="https://github.com/prasoongupta925/sample-aws-idp-pipeline.git"
 VERSION="main"
 STACK_NAME="sample-aws-idp-pipeline-destroy-codebuild"
 TEMPLATE_URL_BASE=""
@@ -36,7 +36,7 @@ while [[ "$#" -gt 0 ]]; do
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  --repo-url URL        Repository URL (default: github.com/aws-samples/sample-aws-idp-pipeline)"
+            echo "  --repo-url URL        Repository URL (default: github.com/prasoongupta925/sample-aws-idp-pipeline)"
             echo "  --version VERSION     Branch or tag (default: main)"
             echo "  --stack-name NAME     CloudFormation stack name (default: sample-aws-idp-pipeline-destroy-codebuild)"
             echo "  --template-url-base URL  Raw base URL of the CodeBuild template (default: derived from --repo-url)"
