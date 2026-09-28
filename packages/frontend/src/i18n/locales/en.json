@@ -218,6 +218,7 @@
       "segmentAiAnalysis": "AI Analysis",
       "graphBuilder": "Knowledge Graph",
       "documentSummary": "Document Summary",
+      "documentFacts": "Document Facts",
       "datasetProcess": "Dataset Processing"
     },
     "inProgress": "Processing...",

@@ -227,6 +227,7 @@ function StepProgressBar({
     'segment_analyzer',
     'graph_builder',
     'document_summarizer',
+    'document_facts',
     'dataset_process',
   ];
 

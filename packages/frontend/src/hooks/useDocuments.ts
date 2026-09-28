@@ -137,6 +137,7 @@ export function useDocuments({
       segment_analyzer: t('workflow.steps.segmentAiAnalysis'),
       graph_builder: t('workflow.steps.graphBuilder'),
       document_summarizer: t('workflow.steps.documentSummary'),
+      document_facts: t('workflow.steps.documentFacts', 'Document Facts'),
       dataset_process: t('workflow.steps.datasetProcess', 'Dataset Processing'),
     }),
     [t],

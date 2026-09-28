@@ -1,0 +1,41 @@
+[
+  {
+    "name": "run_file_check",
+    "description": "Deterministic loan-file readiness check for the current project. Loads the structured facts extracted from every analysed document, groups documents by applicant (PAN, else compatible name), applies a loan-product checklist (default: salaried personal loan) and returns READY / NOT READY per applicant with the exact missing items (months) and consistency findings (PAN, name, employer, declared vs actual net salary), each citing document names. ALWAYS call this for any question about whether a file is complete, ready, consistent or what is missing. Report its verdict and findings exactly; never decide the verdict yourself.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "type": "string",
+          "description": "The unique identifier of the project"
+        },
+        "checklist_id": {
+          "type": "string",
+          "description": "Checklist id from list_checklists. Omit to use the default (salaried personal loan)."
+        },
+        "applicant": {
+          "type": "string",
+          "description": "Optional applicant name or PAN to check only that applicant"
+        },
+        "reference_month": {
+          "type": "string",
+          "description": "Optional YYYY-MM month that 'last N months' counts back from. Omit to use the latest salary-slip month."
+        }
+      },
+      "required": ["project_id"]
+    }
+  },
+  {
+    "name": "list_checklists",
+    "description": "List the loan-product checklists that run_file_check can apply (id, name, product, applicant type, required documents and rules).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "type": "string",
+          "description": "The unique identifier of the project"
+        }
+      }
+    }
+  }
+]

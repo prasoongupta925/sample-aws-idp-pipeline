@@ -1,6 +1,6 @@
 """Workflow Finalizer Lambda
 
-Called after PostAnalysisParallel (GraphBuilder + Summarizer) completes.
+Called after PostAnalysisParallel (GraphBuilder + Summarizer + DocumentFacts) completes.
 Records workflow as COMPLETED in DynamoDB.
 """
 import json

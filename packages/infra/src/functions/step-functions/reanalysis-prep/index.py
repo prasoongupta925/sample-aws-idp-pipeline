@@ -92,6 +92,7 @@ def _reset_analysis_steps(workflow_id: str):
         StepName.SEGMENT_ANALYZER,
         StepName.GRAPH_BUILDER,
         StepName.DOCUMENT_SUMMARIZER,
+        StepName.DOCUMENT_FACTS,
     ]:
         if step_name in data:
             data[step_name]['status'] = 'pending'

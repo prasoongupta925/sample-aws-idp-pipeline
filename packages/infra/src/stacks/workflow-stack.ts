@@ -17,6 +17,8 @@ import * as fs from 'fs';
 import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import {
+  BLOCKED_BEDROCK_MODEL_RESOURCES,
+  getRegionConfig,
   PADDLEOCR_ENDPOINT_NAME_VALUE,
   SSM_KEYS,
 } from ':idp-v2/common-constructs';
@@ -359,6 +361,9 @@ export class WorkflowStack extends Stack {
     // Lambda Functions
     // ========================================
 
+    // Cross-region model settings (ap-south-1 has no Amazon embedding model)
+    const regionConfig = getRegionConfig(this);
+
     const commonLambdaProps = {
       runtime: lambda.Runtime.PYTHON_3_14,
       architecture: lambda.Architecture.ARM_64,
@@ -368,6 +373,7 @@ export class WorkflowStack extends Stack {
         BDA_OUTPUT_BUCKET: this.documentBucket.bucketName,
         BACKEND_TABLE_NAME: backendTableName,
         EMBEDDING_MODEL_ID: models.embedding,
+        EMBEDDING_REGION: regionConfig.embeddingRegion,
       },
     };
 
@@ -558,6 +564,7 @@ export class WorkflowStack extends Stack {
       memorySize: 256,
       code: lambda.Code.fromAsset(
         path.join(__dirname, '../functions/preprocessing/transcribe-check'),
+        { exclude: ['test_*.py', '__pycache__', '.pytest_cache'] },
       ),
       layers: [sharedLayer],
     });
@@ -569,6 +576,7 @@ export class WorkflowStack extends Stack {
           actions: [
             'transcribe:StartTranscriptionJob',
             'transcribe:GetTranscriptionJob',
+            'transcribe:DeleteTranscriptionJob',
           ],
           resources: ['*'],
         }),
@@ -811,6 +819,25 @@ export class WorkflowStack extends Stack {
         ...commonLambdaProps.environment,
         LANCEDB_FUNCTION_NAME: lancedbService.functionName,
         SUMMARIZER_MODEL_ID: models.docSummarizer,
+      },
+    });
+
+    // Document Facts (structured loan-file facts per document, non-fatal)
+    const documentFacts = new lambda.Function(this, 'DocumentFacts', {
+      ...commonLambdaProps,
+      functionName: 'idp-v2-document-facts',
+      handler: 'index.handler',
+      timeout: Duration.minutes(5),
+      memorySize: 512,
+      code: lambda.Code.fromAsset(
+        path.join(__dirname, '../functions/step-functions/document-facts'),
+        { exclude: ['test_*.py', '__pycache__', '.pytest_cache'] },
+      ),
+      layers: [coreLayer, sharedLayer],
+      environment: {
+        ...commonLambdaProps.environment,
+        FACTS_MODEL_ID: models.facts,
+        FACTS_MAX_CHARS: '60000',
       },
     });
 
@@ -1151,7 +1178,7 @@ export class WorkflowStack extends Stack {
       lambdaFunction: segmentAnalyzer,
       outputPath: '$.Payload',
       comment:
-        'Run AI analysis on a single segment using Bedrock Claude: generate Q&A pairs from BDA/OCR/text content with document prompt and language settings',
+        'Run AI analysis on a single segment using Amazon Nova: generate Q&A pairs from BDA/OCR/text content with document prompt and language settings',
     });
     segmentAnalyzerTask.addRetry({
       errors: [
@@ -1217,7 +1244,7 @@ export class WorkflowStack extends Stack {
         lambdaFunction: documentSummarizer,
         outputPath: '$.Payload',
         comment:
-          'Generate a comprehensive document summary using Bedrock Claude based on all segment analyses. Updates workflow status to completed',
+          'Generate a comprehensive document summary using Amazon Nova based on all segment analyses. Updates workflow status to completed',
         payload: sfn.TaskInput.fromObject({
           'workflow_id.$': '$.workflow_id',
           'document_id.$': '$.document_id',
@@ -1227,6 +1254,41 @@ export class WorkflowStack extends Stack {
           'segment_count.$': '$.segment_count',
         }),
       },
+    );
+
+    const documentFactsTask = new tasks.LambdaInvoke(
+      this,
+      'ExtractDocumentFacts',
+      {
+        lambdaFunction: documentFacts,
+        outputPath: '$.Payload',
+        comment:
+          'Extract structured loan-file facts (doc type, applicant, PAN, salary, periods) with Amazon Nova 2 Lite and ground them against the document text. Non-fatal.',
+        payload: sfn.TaskInput.fromObject({
+          'workflow_id.$': '$.workflow_id',
+          'document_id.$': '$.document_id',
+          'project_id.$': '$.project_id',
+          'file_uri.$': '$.file_uri',
+          'file_type.$': '$.file_type',
+          'segment_count.$': '$.segment_count',
+          'language.$': '$.language',
+        }),
+      },
+    );
+    // The handler never throws, but a Lambda-level failure (throttle, timeout)
+    // must not fail the whole document workflow: retry, then continue.
+    documentFactsTask.addRetry({
+      errors: ['Lambda.TooManyRequestsException'],
+      interval: Duration.seconds(5),
+      maxAttempts: 3,
+      backoffRate: 2,
+      jitterStrategy: sfn.JitterType.FULL,
+    });
+    documentFactsTask.addCatch(
+      new sfn.Pass(this, 'DocumentFactsFailed', {
+        comment: 'Facts extraction is non-fatal',
+      }),
+      { resultPath: sfn.JsonPath.DISCARD },
     );
 
     // PrepareGraph: load segments, deduplicate, save work to S3
@@ -1578,21 +1640,22 @@ export class WorkflowStack extends Stack {
     );
     workflowFinalizerTask.addCatch(errorHandlerTask, catchConfig);
 
-    // Post-analysis: GraphBuilder and Summarizer run in parallel (independent)
+    // Post-analysis: GraphBuilder, Summarizer and DocumentFacts run in parallel
     const postAnalysisParallel = new sfn.Parallel(
       this,
       'PostAnalysisParallel',
       {
         comment:
-          'Run knowledge graph building and document summarization in parallel since they are independent post-analysis tasks',
+          'Run knowledge graph building, document summarization and document facts extraction in parallel since they are independent post-analysis tasks',
         resultPath: sfn.JsonPath.DISCARD,
       },
     );
     postAnalysisParallel.branch(graphBuilderChain);
     postAnalysisParallel.branch(documentSummarizerTask);
+    postAnalysisParallel.branch(documentFactsTask);
     postAnalysisParallel.addCatch(errorHandlerTask, catchConfig);
 
-    // Chain: SegmentBuilder → Map(Analyze) → Parallel(GraphBuilder, Summarize) → FinalizeWorkflow
+    // Chain: SegmentBuilder → Map(Analyze) → Parallel(GraphBuilder, Summarize, ExtractFacts) → FinalizeWorkflow
     segmentBuilderTask
       .next(parallelSegmentProcessing)
       .next(postAnalysisParallel)
@@ -1777,6 +1840,7 @@ export class WorkflowStack extends Stack {
       pageDescriptionGenerator,
       entityExtractor,
       documentSummarizer,
+      documentFacts,
       graphBuilder,
       graphBatchSender,
       graphBuilderFinalizer,
@@ -1859,6 +1923,19 @@ export class WorkflowStack extends Stack {
             'bedrock:InvokeModelWithResponseStream',
           ],
           resources: ['*'],
+        }),
+      );
+
+      // AWS-sold models only: deny Marketplace / third-party-billed providers
+      fn.addToRolePolicy(
+        new iam.PolicyStatement({
+          sid: 'DenyNonAwsSoldModels',
+          effect: iam.Effect.DENY,
+          actions: [
+            'bedrock:InvokeModel',
+            'bedrock:InvokeModelWithResponseStream',
+          ],
+          resources: BLOCKED_BEDROCK_MODEL_RESOURCES,
         }),
       );
     }

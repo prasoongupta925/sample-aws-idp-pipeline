@@ -1,0 +1,289 @@
+"""Handler tests for the document-facts Lambda (index.py).
+
+All AWS-touching module-level functions are monkeypatched with recorders;
+synthetic data only.
+
+Run: python -m pytest -q   (from this folder)
+"""
+import json
+import os
+import sys
+
+os.environ['BACKEND_TABLE_NAME'] = 'test-table'
+os.environ['AWS_DEFAULT_REGION'] = 'ap-south-1'
+os.environ['AWS_REGION'] = 'ap-south-1'
+os.environ['AWS_ACCESS_KEY_ID'] = 'testing'
+os.environ['AWS_SECRET_ACCESS_KEY'] = 'testing'
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.abspath(os.path.join(HERE, '..', '..')))
+sys.path.insert(0, HERE)
+
+import pytest  # noqa: E402
+
+import index  # noqa: E402
+from tool_schema import FIELD_NAMES  # noqa: E402
+
+MODEL_ID = 'global.amazon.nova-2-lite-v1:0'
+DOC_NAME = '05_salary_slip_2026-08_aug.pdf'
+FILE_URI = 's3://doc-bucket/projects/p1/documents/d1/d1.pdf'
+
+SLIP_PAGE_TEXT = (
+    'Salary Slip - Page 1\nKonkan Softworks Pvt Ltd\n'
+    'Salary slip for the month of August 2026\n'
+    'Employee name\nRahul Vijay Deshmukh\nPAN\nBQXPD4821K\n'
+    'Gross Earnings\n95,000\nNET PAY (take-home)\n₹82,500\n'
+)
+
+RAW_FIELDS = {
+    'doc_type': 'salary_slip',
+    'applicant_name': 'Rahul Vijay Deshmukh',
+    'pan': 'BQXP4821K',  # model misread (section 12)
+    'employer': 'Konkan Softworks Pvt Ltd',
+    'month': 'August 2026',
+    'gross_salary': '95,000',
+    'net_salary': 82500,
+    'product': 'null',
+}
+
+EVENT = {
+    'workflow_id': 'wf_1',
+    'document_id': 'd1',
+    'project_id': 'p1',
+    'file_uri': FILE_URI,
+    'file_type': 'application/pdf',
+    'segment_count': 1,
+    'language': 'en',
+}
+
+
+class Recorder:
+    def __init__(self, result=None, exc=None):
+        self.calls = []
+        self.result = result
+        self.exc = exc
+
+    def __call__(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        if self.exc:
+            raise self.exc
+        return self.result
+
+
+@pytest.fixture
+def env(monkeypatch):
+    monkeypatch.setenv('FACTS_MODEL_ID', MODEL_ID)
+    monkeypatch.setenv('FACTS_MAX_CHARS', '60000')
+    rec = {
+        'get_document': Recorder({'name': DOC_NAME, 'status': 'in_progress'}),
+        'get_all_segment_analyses': Recorder([{
+            'segment_index': 0,
+            'segment_type': 'PAGE',
+            'format_parser': SLIP_PAGE_TEXT,
+            'paddleocr': '',
+            'ai_analysis': [{'analysis_query': 'Page 1 Analysis', 'content': 'A salary slip.'}],
+        }]),
+        'call_nova': Recorder((RAW_FIELDS, {'input_tokens': 900, 'output_tokens': 120})),
+        'save_facts': Recorder('projects/p1/documents/d1/analysis/facts.json'),
+        'save_document_facts': Recorder({}),
+        'record_step_start': Recorder({}),
+        'record_step_complete': Recorder({}),
+        'record_step_error': Recorder({}),
+    }
+    for name, fn in rec.items():
+        monkeypatch.setattr(index, name, fn)
+    yield rec
+    for name in ('record_step_start', 'record_step_complete', 'record_step_error'):
+        for args, _ in rec[name].calls:
+            assert args[1] != 'segment_analyzer', 'only the summarizer completes segment_analyzer'
+
+
+def _only_call(recorder):
+    assert len(recorder.calls) == 1, recorder.calls
+    return recorder.calls[0]
+
+
+def test_completed_path(env, capsys):
+    result = index.handler(dict(EVENT), None)
+    assert result == {'workflow_id': 'wf_1', 'status': 'completed'}
+    assert set(result) == {'workflow_id', 'status'}
+
+    assert _only_call(env['record_step_start'])[0] == ('wf_1', 'document_facts')
+    args, kwargs = _only_call(env['get_all_segment_analyses'])
+    assert args == (FILE_URI, 1)
+    assert set(kwargs['fields']) == {'segment_type', 'format_parser', 'paddleocr', 'bda_indexer',
+                                     'text_content', 'webcrawler_content', 'ai_analysis'}
+
+    (model_text, model_id), _ = _only_call(env['call_nova'])
+    assert model_id == MODEL_ID
+    assert model_text.startswith('--- Page 1 ---\n')
+    assert DOC_NAME not in model_text, 'the file name is never sent to the model'
+
+    (pid, did, record), _ = _only_call(env['save_document_facts'])
+    assert (pid, did) == ('p1', 'd1')
+    assert record['schema_version'] == 1
+    assert record['document_name'] == DOC_NAME
+    assert record['document_id'] == 'd1' and record['project_id'] == 'p1' and record['workflow_id'] == 'wf_1'
+    assert record['file_type'] == 'application/pdf'
+    assert record['status'] == 'completed'
+    assert record['source'] == 'nova-2-lite'
+    assert record['model_id'] == MODEL_ID
+    assert record['doc_type'] == 'salary_slip'
+    assert record['reason'] is None and record['error'] is None
+    assert record['usage'] == {'input_tokens': 900, 'output_tokens': 120}
+    assert record['extracted_at'].endswith('+00:00')
+    fields = record['fields']
+    assert list(fields) == FIELD_NAMES
+    assert fields['pan'] == 'BQXPD4821K'  # grounded against the text layer
+    assert fields['month'] == '2026-08'
+    assert fields['gross_salary'] == 95000.0 and fields['net_salary'] == 82500.0
+    assert fields['product'] is None
+    grounding = record['grounding']
+    assert grounding['grounded'] is True
+    assert grounding['truncated'] is False
+    assert grounding['unverified_fields'] == []
+    assert grounding['text_chars'] == len(SLIP_PAGE_TEXT)
+    assert any('PAN corrected' in n for n in grounding['notes'])
+    assert 'model_fields' not in record
+    assert 'Salary slip for the month' not in json.dumps(record), 'DDB copy stores no document text'
+
+    (uri, s3_record), _ = _only_call(env['save_facts'])
+    assert uri == FILE_URI
+    assert s3_record['model_fields']['pan'] == 'BQXP4821K'  # before grounding, for audit
+    assert {k: v for k, v in s3_record.items() if k != 'model_fields'} == record
+
+    args, kwargs = _only_call(env['record_step_complete'])
+    assert args == ('wf_1', 'document_facts')
+    assert kwargs == {'doc_type': 'salary_slip'}
+    assert env['record_step_error'].calls == []
+
+    out = capsys.readouterr().out
+    for secret in ('Rahul', 'BQXPD4821K', 'BQXP4821K', '82500', '82,500', '95,000', DOC_NAME):
+        assert secret not in out, f'{secret!r} leaked into logs'
+
+
+def test_document_name_falls_back_to_file_basename(env):
+    env['get_document'].result = None
+    index.handler(dict(EVENT), None)
+    (_, _, record), _ = _only_call(env['save_document_facts'])
+    assert record['document_name'] == 'd1.pdf'
+
+
+def test_document_id_falls_back_to_file_uri(env):
+    event = dict(EVENT)
+    event.pop('document_id')
+    index.handler(event, None)
+    (_, did, record), _ = _only_call(env['save_document_facts'])
+    assert did == 'd1' and record['document_id'] == 'd1'
+
+
+def test_truncation_and_ungrounded_notes(env, monkeypatch):
+    monkeypatch.setenv('FACTS_MAX_CHARS', '30')
+    env['get_all_segment_analyses'].result = [{
+        'segment_index': 0, 'segment_type': 'PAGE', 'format_parser': 'tiny',
+        'ai_analysis': [{'analysis_query': 'Page 1 Analysis', 'content': 'Vision transcription ' * 10}],
+    }]
+    env['call_nova'].result = ({'doc_type': 'identity_details', 'pan': 'bqxpd 4821k'}, {'input_tokens': 5, 'output_tokens': 5})
+    assert index.handler(dict(EVENT), None)['status'] == 'completed'
+    (model_text, _), _ = _only_call(env['call_nova'])
+    assert len(model_text) <= 30
+    (_, _, record), _ = _only_call(env['save_document_facts'])
+    assert record['grounding']['grounded'] is False
+    assert record['grounding']['truncated'] is True
+    assert 'input truncated to 30 chars' in record['grounding']['notes']
+    assert 'no machine text layer; values not verified' in record['grounding']['notes']
+    assert record['grounding']['unverified_fields'] == []
+    assert record['fields']['pan'] == 'BQXPD4821K'
+
+
+def test_failure_is_non_fatal(env):
+    env['call_nova'].exc = RuntimeError('ThrottlingException: slow down')
+    result = index.handler(dict(EVENT), None)
+    assert result == {'workflow_id': 'wf_1', 'status': 'failed'}
+
+    args, _ = _only_call(env['record_step_error'])
+    assert args == ('wf_1', 'document_facts', 'ThrottlingException: slow down')
+    assert env['record_step_complete'].calls == []
+    assert env['save_facts'].calls == []
+
+    (pid, did, record), _ = _only_call(env['save_document_facts'])
+    assert (pid, did) == ('p1', 'd1')
+    assert record['status'] == 'failed'
+    assert record['doc_type'] == 'other'
+    assert record['error'] == 'ThrottlingException: slow down'
+    assert record['document_name'] == DOC_NAME
+    assert record['source'] == 'none'
+
+
+def test_failure_error_is_capped_and_bookkeeping_errors_are_swallowed(env):
+    env['call_nova'].exc = ValueError('x' * 2000)
+    env['record_step_error'].exc = RuntimeError('ddb down')
+    env['save_document_facts'].exc = RuntimeError('ddb down')
+    assert index.handler(dict(EVENT), None) == {'workflow_id': 'wf_1', 'status': 'failed'}
+    (_, _, record), _ = env['save_document_facts'].calls[0]
+    assert len(record['error']) == 500
+
+
+def test_step_start_failure_does_not_stop_extraction(env):
+    env['record_step_start'].exc = RuntimeError('ddb blip')
+    assert index.handler(dict(EVENT), None)['status'] == 'completed'
+
+
+def test_missing_model_env_fails_softly(env, monkeypatch):
+    monkeypatch.delenv('FACTS_MODEL_ID')
+    assert index.handler(dict(EVENT), None) == {'workflow_id': 'wf_1', 'status': 'failed'}
+    assert env['call_nova'].calls == []
+
+
+def test_media_only_is_skipped(env):
+    env['get_all_segment_analyses'].result = [
+        {'segment_index': 0, 'segment_type': 'VIDEO', 'ai_analysis': [{'content': 'a scene'}]},
+        {'segment_index': 1, 'segment_type': 'CHAPTER', 'ai_analysis': [{'content': 'chapter 1'}]},
+    ]
+    event = dict(EVENT, file_type='video/mp4', segment_count=2)
+    assert index.handler(event, None) == {'workflow_id': 'wf_1', 'status': 'skipped'}
+    assert env['call_nova'].calls == []
+
+    (_, _, record), _ = _only_call(env['save_document_facts'])
+    assert record['status'] == 'skipped'
+    assert record['reason'] == 'media'
+    assert record['doc_type'] == 'other'
+    assert record['source'] == 'none'
+    assert all(record['fields'][k] is None for k in FIELD_NAMES if k not in ('doc_type', 'salary_credits'))
+    (_, s3_record), _ = _only_call(env['save_facts'])
+    assert s3_record['status'] == 'skipped'
+
+    args, kwargs = _only_call(env['record_step_complete'])
+    assert args == ('wf_1', 'document_facts')
+    assert kwargs == {'skipped': True, 'reason': 'media'}
+
+
+def test_web_page_is_skipped_without_reading_s3(env):
+    # create_workflow marks document_facts skipped for web pages; keep it so.
+    event = dict(EVENT, file_type='application/x-webreq', segment_count=3)
+    assert index.handler(event, None) == {'workflow_id': 'wf_1', 'status': 'skipped'}
+    assert env['get_all_segment_analyses'].calls == []
+    assert env['call_nova'].calls == []
+    (_, _, record), _ = _only_call(env['save_document_facts'])
+    assert record['status'] == 'skipped' and record['reason'] == 'webreq'
+    args, kwargs = _only_call(env['record_step_complete'])
+    assert args == ('wf_1', 'document_facts')
+    assert kwargs == {'skipped': True, 'reason': 'webreq'}
+
+
+def test_no_text_is_skipped(env):
+    env['get_all_segment_analyses'].result = [
+        {'segment_index': 0, 'segment_type': 'PAGE', 'format_parser': '', 'ai_analysis': []}]
+    assert index.handler(dict(EVENT), None) == {'workflow_id': 'wf_1', 'status': 'skipped'}
+    (_, _, record), _ = _only_call(env['save_document_facts'])
+    assert record['reason'] == 'no_text'
+    _, kwargs = _only_call(env['record_step_complete'])
+    assert kwargs == {'skipped': True, 'reason': 'no_text'}
+
+
+def test_zero_segments_does_not_read_s3(env):
+    event = dict(EVENT, segment_count=0)
+    assert index.handler(event, None) == {'workflow_id': 'wf_1', 'status': 'skipped'}
+    assert env['get_all_segment_analyses'].calls == []
+    (_, _, record), _ = _only_call(env['save_document_facts'])
+    assert record['reason'] == 'no_text'

@@ -218,6 +218,7 @@
       "segmentAiAnalysis": "AI 분석",
       "graphBuilder": "지식 그래프 구축",
       "documentSummary": "문서 요약",
+      "documentFacts": "문서 정보 추출",
       "datasetProcess": "데이터 처리"
     },
     "inProgress": "처리 중...",

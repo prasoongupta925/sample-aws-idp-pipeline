@@ -9,7 +9,9 @@ import {
   ImageMcp,
   QaMcp,
   DataMcp,
+  FileCheckMcp,
   SSM_KEYS,
+  getRegionConfig,
 } from ':idp-v2/common-constructs';
 import * as agentcore from '@aws-cdk/aws-bedrock-agentcore-alpha';
 import * as path from 'path';
@@ -18,6 +20,7 @@ export class McpStack extends Stack {
   public readonly searchMcp: SearchMcp;
   public readonly qaMcp: QaMcp;
   public readonly dataMcp: DataMcp;
+  public readonly fileCheckMcp: FileCheckMcp;
   public readonly imageMcp?: ImageMcp;
   public readonly gateway: agentcore.Gateway;
 
@@ -96,6 +99,59 @@ export class McpStack extends Stack {
     this.dataMcp.function.grantInvoke(this.gateway.role);
     dataTarget.node.addDependency(this.gateway.role);
 
+    // Deterministic loan-file check (no LLM): READY / NOT READY computed by
+    // rules from the per-document facts. The chat model only reports it.
+    this.fileCheckMcp = new FileCheckMcp(this, 'FileCheckMcp');
+
+    // Gateway target descriptions are limited to 200 characters.
+    const fileCheckTarget = this.gateway.addLambdaTarget('FileCheckMcpTarget', {
+      gatewayTargetName: 'filecheck',
+      description:
+        'Rules-based loan-file check: READY / NOT READY per applicant, exact missing documents (months), PAN / name / employer / salary consistency. Use for loan-file completeness, readiness or consistency.',
+      lambdaFunction: this.fileCheckMcp.function,
+      toolSchema: agentcore.ToolSchema.fromLocalAsset(
+        path.resolve(
+          process.cwd(),
+          '../../packages/lambda/file-check-mcp/schema.json',
+        ),
+      ),
+    });
+    this.fileCheckMcp.function.grantInvoke(this.gateway.role);
+    fileCheckTarget.node.addDependency(this.gateway.role);
+
+    // AgentCore offers the Web Search Tool only in some regions (not in
+    // ap-south-1); context enableWebSearch=true|false overrides. Without it
+    // the agents simply have no WebSearch tool.
+    if (getRegionConfig(this).webSearchEnabled) {
+      this.addWebSearchTarget();
+    }
+
+    // ImageMcp is optional - enable with context: enableImageMcp=true in cdk.json
+    if (this.node.tryGetContext('enableImageMcp')) {
+      this.imageMcp = new ImageMcp(this, 'ImageMcp', {
+        storageBucket: agentStorageBucket,
+      });
+
+      const imageTarget = this.gateway.addLambdaTarget('ImageMcpTarget', {
+        gatewayTargetName: 'image',
+        description:
+          'Image search tool: Search for images on Unsplash and optionally save to S3. Use this tool when the user needs images for presentations or documents.',
+        lambdaFunction: this.imageMcp.function,
+        toolSchema: agentcore.ToolSchema.fromLocalAsset(
+          path.resolve(
+            process.cwd(),
+            '../../packages/lambda/image-mcp/schema.json',
+          ),
+        ),
+      });
+
+      // Workaround: CDK timing issue - explicitly grant and add dependency
+      this.imageMcp.function.grantInvoke(this.gateway.role);
+      imageTarget.node.addDependency(this.gateway.role);
+    }
+  }
+
+  private addWebSearchTarget(): void {
     // Web Search built-in connector target. The AgentCore Web Search connector
     // is not yet supported by the CDK L2/L1 target APIs, so it is created via a
     // control-plane call. The Gateway IAM role invokes the managed tool.
@@ -161,29 +217,5 @@ export class McpStack extends Stack {
     });
     webSearchTarget.node.addDependency(this.gateway.role);
     webSearchTarget.node.addDependency(this.gateway);
-
-    // ImageMcp is optional - enable with context: enableImageMcp=true in cdk.json
-    if (this.node.tryGetContext('enableImageMcp')) {
-      this.imageMcp = new ImageMcp(this, 'ImageMcp', {
-        storageBucket: agentStorageBucket,
-      });
-
-      const imageTarget = this.gateway.addLambdaTarget('ImageMcpTarget', {
-        gatewayTargetName: 'image',
-        description:
-          'Image search tool: Search for images on Unsplash and optionally save to S3. Use this tool when the user needs images for presentations or documents.',
-        lambdaFunction: this.imageMcp.function,
-        toolSchema: agentcore.ToolSchema.fromLocalAsset(
-          path.resolve(
-            process.cwd(),
-            '../../packages/lambda/image-mcp/schema.json',
-          ),
-        ),
-      });
-
-      // Workaround: CDK timing issue - explicitly grant and add dependency
-      this.imageMcp.function.grantInvoke(this.gateway.role);
-      imageTarget.node.addDependency(this.gateway.role);
-    }
   }
 }

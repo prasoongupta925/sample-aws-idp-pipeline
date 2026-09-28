@@ -8,5 +8,6 @@
   "embedding": "amazon.nova-2-multimodal-embeddings-v1:0",
   "videoAnalysis": "global.amazon.nova-2-lite-v1:0",
   "scriptExtractor": "global.amazon.nova-2-lite-v1:0",
-  "webcrawler": "global.amazon.nova-2-lite-v1:0"
+  "webcrawler": "global.amazon.nova-2-lite-v1:0",
+  "facts": "global.amazon.nova-2-lite-v1:0"
 }

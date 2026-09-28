@@ -1,0 +1,3858 @@
+{
+  "schema_version": 1,
+  "default_checklist": "salaried_personal_loan",
+  "checklists": [
+    {
+      "id": "salaried_personal_loan",
+      "name": "Personal Loan - Salaried",
+      "product": "personal_loan",
+      "applicant_type": "salaried",
+      "description": "Salaried personal loan file: application form, identity details (PAN + masked Aadhaar), last 3 months' salary slips, last 6 months' bank statement, latest Form-16 / ITR.",
+      "tolerance_pct": 5,
+      "form16_tolerance_pct": 10,
+      "items": [
+        {
+          "id": "loan_application",
+          "label": "Loan application form",
+          "doc_types": ["loan_application"],
+          "required": true,
+          "rule": {
+            "kind": "present"
+          }
+        },
+        {
+          "id": "identity_details",
+          "label": "Identity details (PAN + masked Aadhaar)",
+          "doc_types": ["identity_details"],
+          "required": true,
+          "rule": {
+            "kind": "present"
+          }
+        },
+        {
+          "id": "salary_slips",
+          "label": "Last 3 months' salary slips",
+          "doc_types": ["salary_slip"],
+          "required": true,
+          "missing_label": "Salary slip",
+          "rule": {
+            "kind": "monthly",
+            "months": 3,
+            "field": "month"
+          }
+        },
+        {
+          "id": "bank_statement",
+          "label": "Last 6 months' bank statement",
+          "doc_types": ["bank_statement"],
+          "required": true,
+          "missing_label": "Bank statement",
+          "rule": {
+            "kind": "period",
+            "months": 6,
+            "from_field": "statement_from",
+            "to_field": "statement_to"
+          }
+        },
+        {
+          "id": "form16_itr",
+          "label": "Form-16 / ITR (latest FY)",
+          "doc_types": ["form16_itr"],
+          "required": true,
+          "rule": {
+            "kind": "present"
+          }
+        }
+      ],
+      "consistency_checks": [
+        "pan",
+        "aadhaar_last4",
+        "applicant_name",
+        "employer",
+        "employer_vs_bank_credits",
+        "declared_vs_slip_net",
+        "declared_vs_bank_credits",
+        "slip_net_vs_bank_credits",
+        "form16_vs_slip_gross"
+      ]
+    },
+    {
+      "id": "ss_pl_sal",
+      "name": "Smart Solutions - Personal Loan - Salaried",
+      "product": "personal_loan",
+      "applicant_type": "salaried",
+      "description": "Smart Solutions Personal Loan (SS-PL-SAL), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.smartsolutionsmumbai.com/loan/personal-loan",
+      "tolerance_pct": 5,
+      "form16_tolerance_pct": 10,
+      "items": [
+        {
+          "id": "ss_pl_01",
+          "label": "Identity Proof (Aadhar/PAN)",
+          "doc_types": ["identity_details"],
+          "required": true,
+          "rule": {
+            "kind": "present"
+          }
+        },
+        {
+          "id": "ss_pl_02",
+          "label": "Address Proof (Passport/Utility Bill)",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_pl_03",
+          "label": "Last 3 months salary slips",
+          "doc_types": ["salary_slip"],
+          "required": true,
+          "missing_label": "Salary slip",
+          "rule": {
+            "kind": "monthly",
+            "months": 3,
+            "field": "month"
+          }
+        },
+        {
+          "id": "ss_pl_04",
+          "label": "Last 6 months bank statement",
+          "doc_types": ["bank_statement"],
+          "required": true,
+          "missing_label": "Bank statement",
+          "rule": {
+            "kind": "period",
+            "months": 6,
+            "from_field": "statement_from",
+            "to_field": "statement_to"
+          }
+        },
+        {
+          "id": "ss_pl_e01",
+          "label": "Eligibility: Salaried individuals with minimum income of ₹25,000/month",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_pl_e03",
+          "label": "Eligibility: Credit score of 750+",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_pl_e04",
+          "label": "Eligibility: Age between 21 and 60 years",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x02",
+          "label": "Cross-check: PAN format",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x05",
+          "label": "Cross-check: DOB match and age",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x12",
+          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x13",
+          "label": "Cross-check: Bounce / return entries",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x14",
+          "label": "Cross-check: FOIR (indicative)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        }
+      ],
+      "consistency_checks": [
+        "pan",
+        "aadhaar_last4",
+        "applicant_name",
+        "employer",
+        "employer_vs_bank_credits",
+        "declared_vs_slip_net",
+        "declared_vs_bank_credits",
+        "slip_net_vs_bank_credits"
+      ]
+    },
+    {
+      "id": "ss_pl_se",
+      "name": "Smart Solutions - Personal Loan - Self-employed",
+      "product": "personal_loan",
+      "applicant_type": "self_employed",
+      "description": "Smart Solutions Personal Loan (SS-PL-SE), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.smartsolutionsmumbai.com/loan/personal-loan",
+      "tolerance_pct": 5,
+      "form16_tolerance_pct": 10,
+      "items": [
+        {
+          "id": "ss_pl_01",
+          "label": "Identity Proof (Aadhar/PAN)",
+          "doc_types": ["identity_details"],
+          "required": true,
+          "rule": {
+            "kind": "present"
+          }
+        },
+        {
+          "id": "ss_pl_02",
+          "label": "Address Proof (Passport/Utility Bill)",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_pl_04",
+          "label": "Last 6 months bank statement",
+          "doc_types": ["bank_statement"],
+          "required": true,
+          "missing_label": "Bank statement",
+          "rule": {
+            "kind": "period",
+            "months": 6,
+            "from_field": "statement_from",
+            "to_field": "statement_to"
+          }
+        },
+        {
+          "id": "ss_pl_05",
+          "label": "Self-employed income proof: ITR for the latest 2 FYs",
+          "doc_types": ["form16_itr"],
+          "required": false,
+          "rule": {
+            "kind": "present",
+            "min_count": 2
+          }
+        },
+        {
+          "id": "ss_pl_e02",
+          "label": "Eligibility: Self-employed professionals with 2 years business vintage",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_pl_e03",
+          "label": "Eligibility: Credit score of 750+",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_pl_e04",
+          "label": "Eligibility: Age between 21 and 60 years",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x02",
+          "label": "Cross-check: PAN format",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x05",
+          "label": "Cross-check: DOB match and age",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x12",
+          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x13",
+          "label": "Cross-check: Bounce / return entries",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x14",
+          "label": "Cross-check: FOIR (indicative)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x15",
+          "label": "Cross-check: Declared income vs ITR (self-employed)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        }
+      ],
+      "consistency_checks": ["pan", "aadhaar_last4", "applicant_name"]
+    },
+    {
+      "id": "ss_bl_se",
+      "name": "Smart Solutions - Business Loan - Self-employed",
+      "product": "business_loan",
+      "applicant_type": "self_employed",
+      "description": "Smart Solutions Business Loan (SS-BL-SE), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.smartsolutionsmumbai.com/loan/business-loan",
+      "tolerance_pct": 5,
+      "form16_tolerance_pct": 10,
+      "items": [
+        {
+          "id": "ss_bl_01",
+          "label": "Business Registration Proof",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_bl_02",
+          "label": "GST Returns for last 12 months",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_bl_03",
+          "label": "Last 2 years ITR and Balance Sheet",
+          "doc_types": ["form16_itr"],
+          "required": true,
+          "rule": {
+            "kind": "present",
+            "min_count": 2
+          }
+        },
+        {
+          "id": "ss_bl_04",
+          "label": "Last 2 years ITR and Balance Sheet",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_bl_05",
+          "label": "KYC of promoters",
+          "doc_types": ["identity_details"],
+          "required": true,
+          "rule": {
+            "kind": "present"
+          }
+        },
+        {
+          "id": "ss_bl_e01",
+          "label": "Eligibility: Business vintage of at least 3 years",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_bl_e02",
+          "label": "Eligibility: Profitable for the last 2 years",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_bl_e03",
+          "label": "Eligibility: Minimum turnover of ₹40 Lakhs",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_bl_e04",
+          "label": "Eligibility: Age between 25 and 65 years",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_bl_i01",
+          "label": "Integrity: GSTIN on every GST return must equal the GSTIN on the registration proof (if a GST certificate is supplied)",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_bl_i02",
+          "label": "Integrity: Legal/trade name should match across registration, GST returns, ITR and balance sheet (suffixes such as Pvt Ltd/LLP ignored)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x02",
+          "label": "Cross-check: PAN format",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x05",
+          "label": "Cross-check: DOB match and age",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x12",
+          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x13",
+          "label": "Cross-check: Bounce / return entries",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x14",
+          "label": "Cross-check: FOIR (indicative)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x15",
+          "label": "Cross-check: Declared income vs ITR (self-employed)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        }
+      ],
+      "consistency_checks": ["pan", "aadhaar_last4", "applicant_name"]
+    },
+    {
+      "id": "ss_hl_sal",
+      "name": "Smart Solutions - Home Loan - Salaried",
+      "product": "home_loan",
+      "applicant_type": "salaried",
+      "description": "Smart Solutions Home Loan (SS-HL-SAL), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.smartsolutionsmumbai.com/loan/home-loan",
+      "tolerance_pct": 5,
+      "form16_tolerance_pct": 10,
+      "items": [
+        {
+          "id": "ss_hl_01",
+          "label": "Property Title Deeds",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_hl_02",
+          "label": "Agreement to Sell",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_hl_03",
+          "label": "Income Proof (Salary Slips/ITR)",
+          "doc_types": ["salary_slip"],
+          "required": true,
+          "missing_label": "Salary slip",
+          "rule": {
+            "kind": "monthly",
+            "months": 3,
+            "field": "month"
+          }
+        },
+        {
+          "id": "ss_hl_05",
+          "label": "KYC Documents",
+          "doc_types": ["identity_details"],
+          "required": true,
+          "rule": {
+            "kind": "present"
+          }
+        },
+        {
+          "id": "ss_hl_e01",
+          "label": "Eligibility: Minimum annual income of ₹3 Lakhs",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_hl_e02",
+          "label": "Eligibility: Age between 21 and 65 years",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_hl_e03",
+          "label": "Eligibility: Property should be within approved locations",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_hl_e04",
+          "label": "Eligibility: Salaried or self-employed individuals",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_hl_i01",
+          "label": "Integrity: Owner-vs-applicant for a purchase: an applicant must be a buyer on the Agreement to Sell, and the seller should match the owner on the title deed",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_hl_i02",
+          "label": "Integrity: Flag any missing link between successive owners in the deeds supplied",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x02",
+          "label": "Cross-check: PAN format",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x05",
+          "label": "Cross-check: DOB match and age",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x12",
+          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x13",
+          "label": "Cross-check: Bounce / return entries",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x14",
+          "label": "Cross-check: FOIR (indicative)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        }
+      ],
+      "consistency_checks": [
+        "pan",
+        "aadhaar_last4",
+        "applicant_name",
+        "employer",
+        "employer_vs_bank_credits",
+        "declared_vs_slip_net",
+        "declared_vs_bank_credits",
+        "slip_net_vs_bank_credits"
+      ]
+    },
+    {
+      "id": "ss_hl_se",
+      "name": "Smart Solutions - Home Loan - Self-employed",
+      "product": "home_loan",
+      "applicant_type": "self_employed",
+      "description": "Smart Solutions Home Loan (SS-HL-SE), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.smartsolutionsmumbai.com/loan/home-loan",
+      "tolerance_pct": 5,
+      "form16_tolerance_pct": 10,
+      "items": [
+        {
+          "id": "ss_hl_01",
+          "label": "Property Title Deeds",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_hl_02",
+          "label": "Agreement to Sell",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_hl_04",
+          "label": "Income Proof (Salary Slips/ITR)",
+          "doc_types": ["form16_itr"],
+          "required": true,
+          "rule": {
+            "kind": "present",
+            "min_count": 2
+          }
+        },
+        {
+          "id": "ss_hl_05",
+          "label": "KYC Documents",
+          "doc_types": ["identity_details"],
+          "required": true,
+          "rule": {
+            "kind": "present"
+          }
+        },
+        {
+          "id": "ss_hl_e01",
+          "label": "Eligibility: Minimum annual income of ₹3 Lakhs",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_hl_e02",
+          "label": "Eligibility: Age between 21 and 65 years",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_hl_e03",
+          "label": "Eligibility: Property should be within approved locations",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_hl_e04",
+          "label": "Eligibility: Salaried or self-employed individuals",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_hl_i01",
+          "label": "Integrity: Owner-vs-applicant for a purchase: an applicant must be a buyer on the Agreement to Sell, and the seller should match the owner on the title deed",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_hl_i02",
+          "label": "Integrity: Flag any missing link between successive owners in the deeds supplied",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x02",
+          "label": "Cross-check: PAN format",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x05",
+          "label": "Cross-check: DOB match and age",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x12",
+          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x13",
+          "label": "Cross-check: Bounce / return entries",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x14",
+          "label": "Cross-check: FOIR (indicative)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x15",
+          "label": "Cross-check: Declared income vs ITR (self-employed)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        }
+      ],
+      "consistency_checks": ["pan", "aadhaar_last4", "applicant_name"]
+    },
+    {
+      "id": "ss_lap_sal",
+      "name": "Smart Solutions - Mortgage Loan / Loan Against Property - Salaried",
+      "product": "lap",
+      "applicant_type": "salaried",
+      "description": "Smart Solutions Mortgage Loan / Loan Against Property (SS-LAP-SAL), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.smartsolutionsmumbai.com/loan/mortgage-loan",
+      "tolerance_pct": 5,
+      "form16_tolerance_pct": 10,
+      "items": [
+        {
+          "id": "ss_lap_01",
+          "label": "Property Title Documents",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_lap_02",
+          "label": "Latest Tax Paid Receipt",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_lap_03",
+          "label": "Proof of Income",
+          "doc_types": ["salary_slip"],
+          "required": true,
+          "missing_label": "Salary slip",
+          "rule": {
+            "kind": "monthly",
+            "months": 3,
+            "field": "month"
+          }
+        },
+        {
+          "id": "ss_lap_05",
+          "label": "Bank Statements",
+          "doc_types": ["bank_statement"],
+          "required": true,
+          "missing_label": "Bank statement",
+          "rule": {
+            "kind": "period",
+            "months": 6,
+            "from_field": "statement_from",
+            "to_field": "statement_to"
+          }
+        },
+        {
+          "id": "ss_lap_e01",
+          "label": "Eligibility: Property must be freehold and clear of disputes",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_lap_e02",
+          "label": "Eligibility: Salaried or self-employed applicants",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_lap_e03",
+          "label": "Eligibility: Clear repayment history",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_lap_e04",
+          "label": "Eligibility: Property value assessment required",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_lap_n01",
+          "label": "Informational: The loan amount is typically 60-70% of the property's market value.",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_lap_i01",
+          "label": "Integrity: Inference: a mortgage pledges the applicant's own property, so an owner on the title document should match an applicant",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_lap_i02",
+          "label": "Integrity: Flag any missing link between successive owners in the documents supplied",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x02",
+          "label": "Cross-check: PAN format",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x05",
+          "label": "Cross-check: DOB match and age",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x12",
+          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x13",
+          "label": "Cross-check: Bounce / return entries",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x14",
+          "label": "Cross-check: FOIR (indicative)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        }
+      ],
+      "consistency_checks": [
+        "pan",
+        "aadhaar_last4",
+        "applicant_name",
+        "employer",
+        "employer_vs_bank_credits",
+        "declared_vs_slip_net",
+        "declared_vs_bank_credits",
+        "slip_net_vs_bank_credits"
+      ]
+    },
+    {
+      "id": "ss_lap_se",
+      "name": "Smart Solutions - Mortgage Loan / Loan Against Property - Self-employed",
+      "product": "lap",
+      "applicant_type": "self_employed",
+      "description": "Smart Solutions Mortgage Loan / Loan Against Property (SS-LAP-SE), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.smartsolutionsmumbai.com/loan/mortgage-loan",
+      "tolerance_pct": 5,
+      "form16_tolerance_pct": 10,
+      "items": [
+        {
+          "id": "ss_lap_01",
+          "label": "Property Title Documents",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_lap_02",
+          "label": "Latest Tax Paid Receipt",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_lap_04",
+          "label": "Proof of Income",
+          "doc_types": ["form16_itr"],
+          "required": true,
+          "rule": {
+            "kind": "present",
+            "min_count": 2
+          }
+        },
+        {
+          "id": "ss_lap_05",
+          "label": "Bank Statements",
+          "doc_types": ["bank_statement"],
+          "required": true,
+          "missing_label": "Bank statement",
+          "rule": {
+            "kind": "period",
+            "months": 6,
+            "from_field": "statement_from",
+            "to_field": "statement_to"
+          }
+        },
+        {
+          "id": "ss_lap_e01",
+          "label": "Eligibility: Property must be freehold and clear of disputes",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_lap_e02",
+          "label": "Eligibility: Salaried or self-employed applicants",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_lap_e03",
+          "label": "Eligibility: Clear repayment history",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_lap_e04",
+          "label": "Eligibility: Property value assessment required",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_lap_n01",
+          "label": "Informational: The loan amount is typically 60-70% of the property's market value.",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_lap_i01",
+          "label": "Integrity: Inference: a mortgage pledges the applicant's own property, so an owner on the title document should match an applicant",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_lap_i02",
+          "label": "Integrity: Flag any missing link between successive owners in the documents supplied",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x02",
+          "label": "Cross-check: PAN format",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x05",
+          "label": "Cross-check: DOB match and age",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x12",
+          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x13",
+          "label": "Cross-check: Bounce / return entries",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x14",
+          "label": "Cross-check: FOIR (indicative)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x15",
+          "label": "Cross-check: Declared income vs ITR (self-employed)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        }
+      ],
+      "consistency_checks": ["pan", "aadhaar_last4", "applicant_name"]
+    },
+    {
+      "id": "ss_cl_sal",
+      "name": "Smart Solutions - Car Loan - Salaried",
+      "product": "car_loan",
+      "applicant_type": "salaried",
+      "description": "Smart Solutions Car Loan (SS-CL-SAL), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.smartsolutionsmumbai.com/loan/car-loan",
+      "tolerance_pct": 5,
+      "form16_tolerance_pct": 10,
+      "items": [
+        {
+          "id": "ss_cl_01",
+          "label": "Pro-forma Invoice from dealer",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_cl_02",
+          "label": "KYC Documents",
+          "doc_types": ["identity_details"],
+          "required": true,
+          "rule": {
+            "kind": "present"
+          }
+        },
+        {
+          "id": "ss_cl_03",
+          "label": "Income Proof",
+          "doc_types": ["salary_slip"],
+          "required": true,
+          "missing_label": "Salary slip",
+          "rule": {
+            "kind": "monthly",
+            "months": 3,
+            "field": "month"
+          }
+        },
+        {
+          "id": "ss_cl_05",
+          "label": "Bank Statements",
+          "doc_types": ["bank_statement"],
+          "required": true,
+          "missing_label": "Bank statement",
+          "rule": {
+            "kind": "period",
+            "months": 6,
+            "from_field": "statement_from",
+            "to_field": "statement_to"
+          }
+        },
+        {
+          "id": "ss_cl_e01",
+          "label": "Eligibility: Age 21 to 65 years",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_cl_e02",
+          "label": "Eligibility: Minimum annual income of ₹2.5 Lakhs",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_cl_e03",
+          "label": "Eligibility: Minimum 1 year of employment stability",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_cl_e05",
+          "label": "Eligibility: Good credit score",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x02",
+          "label": "Cross-check: PAN format",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x05",
+          "label": "Cross-check: DOB match and age",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x12",
+          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x13",
+          "label": "Cross-check: Bounce / return entries",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x14",
+          "label": "Cross-check: FOIR (indicative)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        }
+      ],
+      "consistency_checks": [
+        "pan",
+        "aadhaar_last4",
+        "applicant_name",
+        "employer",
+        "employer_vs_bank_credits",
+        "declared_vs_slip_net",
+        "declared_vs_bank_credits",
+        "slip_net_vs_bank_credits"
+      ]
+    },
+    {
+      "id": "ss_cl_se",
+      "name": "Smart Solutions - Car Loan - Self-employed",
+      "product": "car_loan",
+      "applicant_type": "self_employed",
+      "description": "Smart Solutions Car Loan (SS-CL-SE), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.smartsolutionsmumbai.com/loan/car-loan",
+      "tolerance_pct": 5,
+      "form16_tolerance_pct": 10,
+      "items": [
+        {
+          "id": "ss_cl_01",
+          "label": "Pro-forma Invoice from dealer",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_cl_02",
+          "label": "KYC Documents",
+          "doc_types": ["identity_details"],
+          "required": true,
+          "rule": {
+            "kind": "present"
+          }
+        },
+        {
+          "id": "ss_cl_04",
+          "label": "Income Proof",
+          "doc_types": ["form16_itr"],
+          "required": true,
+          "rule": {
+            "kind": "present",
+            "min_count": 2
+          }
+        },
+        {
+          "id": "ss_cl_05",
+          "label": "Bank Statements",
+          "doc_types": ["bank_statement"],
+          "required": true,
+          "missing_label": "Bank statement",
+          "rule": {
+            "kind": "period",
+            "months": 6,
+            "from_field": "statement_from",
+            "to_field": "statement_to"
+          }
+        },
+        {
+          "id": "ss_cl_e01",
+          "label": "Eligibility: Age 21 to 65 years",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_cl_e02",
+          "label": "Eligibility: Minimum annual income of ₹2.5 Lakhs",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_cl_e04",
+          "label": "Eligibility: Minimum 1 year of employment stability",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_cl_e05",
+          "label": "Eligibility: Good credit score",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x02",
+          "label": "Cross-check: PAN format",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x05",
+          "label": "Cross-check: DOB match and age",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x12",
+          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x13",
+          "label": "Cross-check: Bounce / return entries",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x14",
+          "label": "Cross-check: FOIR (indicative)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x15",
+          "label": "Cross-check: Declared income vs ITR (self-employed)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        }
+      ],
+      "consistency_checks": ["pan", "aadhaar_last4", "applicant_name"]
+    },
+    {
+      "id": "ss_el_stu_cosal",
+      "name": "Smart Solutions - Education Loan - Student (salaried co-applicant)",
+      "product": "education_loan",
+      "applicant_type": "student",
+      "description": "Smart Solutions Education Loan (SS-EL-STU-COSAL), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.smartsolutionsmumbai.com/loan/education-loan",
+      "tolerance_pct": 5,
+      "form16_tolerance_pct": 10,
+      "items": [
+        {
+          "id": "ss_el_01",
+          "label": "Admission Letter",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_el_02",
+          "label": "Fee Structure",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_el_03",
+          "label": "KYC of Student and Co-borrower",
+          "doc_types": ["identity_details"],
+          "required": true,
+          "rule": {
+            "kind": "present"
+          }
+        },
+        {
+          "id": "ss_el_04",
+          "label": "KYC of Student and Co-borrower",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_el_05",
+          "label": "Income proof of Co-borrower",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_el_07",
+          "label": "Collateral documents (types not published) (only if loan.amount > 750000)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_el_e01",
+          "label": "Eligibility: Confirmed admission in recognized university",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_el_e02",
+          "label": "Eligibility: Confirmed admission in recognized university",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_el_e03",
+          "label": "Eligibility: Co-borrower (parent/guardian) required",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_el_e04",
+          "label": "Eligibility: Good academic record",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_el_t01",
+          "label": "Trigger: Collateral required for loans above ₹7.5 Lakhs",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x02",
+          "label": "Cross-check: PAN format",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x05",
+          "label": "Cross-check: DOB match and age",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x12",
+          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x13",
+          "label": "Cross-check: Bounce / return entries",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x14",
+          "label": "Cross-check: FOIR (indicative)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        }
+      ],
+      "consistency_checks": [
+        "pan",
+        "aadhaar_last4",
+        "applicant_name",
+        "employer",
+        "employer_vs_bank_credits",
+        "declared_vs_slip_net",
+        "declared_vs_bank_credits",
+        "slip_net_vs_bank_credits"
+      ]
+    },
+    {
+      "id": "ss_el_stu_cose",
+      "name": "Smart Solutions - Education Loan - Student (self-employed co-applicant)",
+      "product": "education_loan",
+      "applicant_type": "student",
+      "description": "Smart Solutions Education Loan (SS-EL-STU-COSE), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.smartsolutionsmumbai.com/loan/education-loan",
+      "tolerance_pct": 5,
+      "form16_tolerance_pct": 10,
+      "items": [
+        {
+          "id": "ss_el_01",
+          "label": "Admission Letter",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_el_02",
+          "label": "Fee Structure",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_el_03",
+          "label": "KYC of Student and Co-borrower",
+          "doc_types": ["identity_details"],
+          "required": true,
+          "rule": {
+            "kind": "present"
+          }
+        },
+        {
+          "id": "ss_el_04",
+          "label": "KYC of Student and Co-borrower",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_el_06",
+          "label": "Income proof of Co-borrower",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_el_07",
+          "label": "Collateral documents (types not published) (only if loan.amount > 750000)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_el_e01",
+          "label": "Eligibility: Confirmed admission in recognized university",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_el_e02",
+          "label": "Eligibility: Confirmed admission in recognized university",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_el_e03",
+          "label": "Eligibility: Co-borrower (parent/guardian) required",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_el_e04",
+          "label": "Eligibility: Good academic record",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ss_el_t01",
+          "label": "Trigger: Collateral required for loans above ₹7.5 Lakhs",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x02",
+          "label": "Cross-check: PAN format",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x05",
+          "label": "Cross-check: DOB match and age",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x12",
+          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x13",
+          "label": "Cross-check: Bounce / return entries",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x14",
+          "label": "Cross-check: FOIR (indicative)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x15",
+          "label": "Cross-check: Declared income vs ITR (self-employed)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        }
+      ],
+      "consistency_checks": ["pan", "aadhaar_last4", "applicant_name"]
+    },
+    {
+      "id": "ls_pl_sal",
+      "name": "Loan Sarathi - Personal Loan - Salaried",
+      "product": "personal_loan",
+      "applicant_type": "salaried",
+      "description": "Loan Sarathi Personal Loan (LS-PL-SAL), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.loansarathi.com/loan/personal-loan",
+      "tolerance_pct": 5,
+      "form16_tolerance_pct": 10,
+      "items": [
+        {
+          "id": "ls_pl_01",
+          "label": "Identity Proof (PAN Card/Aadhaar)",
+          "doc_types": ["identity_details"],
+          "required": true,
+          "rule": {
+            "kind": "present"
+          }
+        },
+        {
+          "id": "ls_pl_02",
+          "label": "Address Proof (Aadhaar/Passport/Utility Bill)",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_pl_03",
+          "label": "Income Proof: Last 3 months Salary Slips",
+          "doc_types": ["salary_slip"],
+          "required": true,
+          "missing_label": "Salary slip",
+          "rule": {
+            "kind": "monthly",
+            "months": 3,
+            "field": "month"
+          }
+        },
+        {
+          "id": "ls_pl_04",
+          "label": "Bank Statements: Last 6 months",
+          "doc_types": ["bank_statement"],
+          "required": true,
+          "missing_label": "Bank statement",
+          "rule": {
+            "kind": "period",
+            "months": 6,
+            "from_field": "statement_from",
+            "to_field": "statement_to"
+          }
+        },
+        {
+          "id": "ls_pl_05",
+          "label": "Employment Proof: Company ID Card / Appointment Letter",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_pl_e01",
+          "label": "Eligibility: Age: 21 to 60 years",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_pl_e02",
+          "label": "Eligibility: Min. Monthly Income: ₹25,000 (Salaried)",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_pl_e03",
+          "label": "Eligibility: CIBIL Score: 700+ preferred",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_pl_e04",
+          "label": "Eligibility: Work Experience: Min. 2 years total, 1 year in current org",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_pl_e05",
+          "label": "Eligibility: Work Experience: Min. 2 years total, 1 year in current org",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_pl_e06",
+          "label": "Eligibility: Employment: Salaried (MNC/Pvt Ltd/Govt) or Self-Employed",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_pl_e07",
+          "label": "Eligibility: Citizenship: Indian Resident",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x02",
+          "label": "Cross-check: PAN format",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x05",
+          "label": "Cross-check: DOB match and age",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x12",
+          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x13",
+          "label": "Cross-check: Bounce / return entries",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x14",
+          "label": "Cross-check: FOIR (indicative)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        }
+      ],
+      "consistency_checks": [
+        "pan",
+        "aadhaar_last4",
+        "applicant_name",
+        "employer",
+        "employer_vs_bank_credits",
+        "declared_vs_slip_net",
+        "declared_vs_bank_credits",
+        "slip_net_vs_bank_credits"
+      ]
+    },
+    {
+      "id": "ls_pl_se",
+      "name": "Loan Sarathi - Personal Loan - Self-employed",
+      "product": "personal_loan",
+      "applicant_type": "self_employed",
+      "description": "Loan Sarathi Personal Loan (LS-PL-SE), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.loansarathi.com/loan/personal-loan",
+      "tolerance_pct": 5,
+      "form16_tolerance_pct": 10,
+      "items": [
+        {
+          "id": "ls_pl_01",
+          "label": "Identity Proof (PAN Card/Aadhaar)",
+          "doc_types": ["identity_details"],
+          "required": true,
+          "rule": {
+            "kind": "present"
+          }
+        },
+        {
+          "id": "ls_pl_02",
+          "label": "Address Proof (Aadhaar/Passport/Utility Bill)",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_pl_04",
+          "label": "Bank Statements: Last 6 months",
+          "doc_types": ["bank_statement"],
+          "required": true,
+          "missing_label": "Bank statement",
+          "rule": {
+            "kind": "period",
+            "months": 6,
+            "from_field": "statement_from",
+            "to_field": "statement_to"
+          }
+        },
+        {
+          "id": "ls_pl_06",
+          "label": "Self-employed income proof: ITR for the latest 2 FYs",
+          "doc_types": ["form16_itr"],
+          "required": false,
+          "rule": {
+            "kind": "present",
+            "min_count": 2
+          }
+        },
+        {
+          "id": "ls_pl_e01",
+          "label": "Eligibility: Age: 21 to 60 years",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_pl_e03",
+          "label": "Eligibility: CIBIL Score: 700+ preferred",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_pl_e06",
+          "label": "Eligibility: Employment: Salaried (MNC/Pvt Ltd/Govt) or Self-Employed",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_pl_e07",
+          "label": "Eligibility: Citizenship: Indian Resident",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x02",
+          "label": "Cross-check: PAN format",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x05",
+          "label": "Cross-check: DOB match and age",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x12",
+          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x13",
+          "label": "Cross-check: Bounce / return entries",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x14",
+          "label": "Cross-check: FOIR (indicative)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x15",
+          "label": "Cross-check: Declared income vs ITR (self-employed)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        }
+      ],
+      "consistency_checks": ["pan", "aadhaar_last4", "applicant_name"]
+    },
+    {
+      "id": "ls_bl_se",
+      "name": "Loan Sarathi - Business Loan - Self-employed",
+      "product": "business_loan",
+      "applicant_type": "self_employed",
+      "description": "Loan Sarathi Business Loan (LS-BL-SE), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.loansarathi.com/loan/business-loan",
+      "tolerance_pct": 5,
+      "form16_tolerance_pct": 10,
+      "items": [
+        {
+          "id": "ls_bl_01",
+          "label": "KYC of all applicants/co-applicants",
+          "doc_types": ["identity_details"],
+          "required": true,
+          "rule": {
+            "kind": "present"
+          }
+        },
+        {
+          "id": "ls_bl_02",
+          "label": "Business Registration Proof (GST Certificate/Udyam)",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_bl_03",
+          "label": "Last 2 years ITR with Computation & Financials (Audited)",
+          "doc_types": ["form16_itr"],
+          "required": true,
+          "rule": {
+            "kind": "present",
+            "min_count": 2
+          }
+        },
+        {
+          "id": "ls_bl_04",
+          "label": "Last 2 years ITR with Computation & Financials (Audited)",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_bl_05",
+          "label": "GST Returns (Last 12 months)",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_bl_06",
+          "label": "Bank Statements (Last 6 months - Current Account)",
+          "doc_types": ["bank_statement"],
+          "required": true,
+          "missing_label": "Bank statement",
+          "rule": {
+            "kind": "period",
+            "months": 6,
+            "from_field": "statement_from",
+            "to_field": "statement_to"
+          }
+        },
+        {
+          "id": "ls_bl_07",
+          "label": "Ownership Proof of Residence or Office",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_bl_e01",
+          "label": "Eligibility: Business Vintage: Minimum 3 years in operation",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_bl_e02",
+          "label": "Eligibility: Annual Turnover: Minimum ₹40 Lakhs",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_bl_e03",
+          "label": "Eligibility: Profitability: Profitable for last 2 years",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_bl_e04",
+          "label": "Eligibility: GST Registration: Mandatory",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_bl_e05",
+          "label": "Eligibility: Age: 24 to 65 years",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_bl_e06",
+          "label": "Eligibility: CIBIL Score: 700+ for main applicants",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_bl_i01",
+          "label": "Integrity: GSTIN on every GST return must equal the GST Certificate",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_bl_i02",
+          "label": "Integrity: Legal/trade name should match across registration, GST, ITR, financials and the current-account holder name",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x02",
+          "label": "Cross-check: PAN format",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x05",
+          "label": "Cross-check: DOB match and age",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x12",
+          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x13",
+          "label": "Cross-check: Bounce / return entries",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x14",
+          "label": "Cross-check: FOIR (indicative)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x15",
+          "label": "Cross-check: Declared income vs ITR (self-employed)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        }
+      ],
+      "consistency_checks": ["pan", "aadhaar_last4", "applicant_name"]
+    },
+    {
+      "id": "ls_hl_sal",
+      "name": "Loan Sarathi - Home Loan - Salaried",
+      "product": "home_loan",
+      "applicant_type": "salaried",
+      "description": "Loan Sarathi Home Loan (LS-HL-SAL), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.loansarathi.com/loan/home-loan",
+      "tolerance_pct": 5,
+      "form16_tolerance_pct": 10,
+      "items": [
+        {
+          "id": "ls_hl_01",
+          "label": "KYC Documents (PAN/Aadhaar)",
+          "doc_types": ["identity_details"],
+          "required": true,
+          "rule": {
+            "kind": "present"
+          }
+        },
+        {
+          "id": "ls_hl_02",
+          "label": "Income Proof (Salary Slips/ITR)",
+          "doc_types": ["salary_slip"],
+          "required": true,
+          "missing_label": "Salary slip",
+          "rule": {
+            "kind": "monthly",
+            "months": 3,
+            "field": "month"
+          }
+        },
+        {
+          "id": "ls_hl_04",
+          "label": "Bank Statements (Last 6 months)",
+          "doc_types": ["bank_statement"],
+          "required": true,
+          "missing_label": "Bank statement",
+          "rule": {
+            "kind": "period",
+            "months": 6,
+            "from_field": "statement_from",
+            "to_field": "statement_to"
+          }
+        },
+        {
+          "id": "ls_hl_05",
+          "label": "Property Documents: Sale Agreement/Index II",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_hl_06",
+          "label": "Sanction Plan & OC/CC (for Under Construction) (only if property.status == 'under_construction')",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_hl_07",
+          "label": "Sanction Plan & OC/CC (for Under Construction) (only if property.status == 'under_construction')",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_hl_08",
+          "label": "Processing Fee Cheque",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_hl_e01",
+          "label": "Eligibility: Age: 21 to 65 years",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_hl_e02",
+          "label": "Eligibility: Min. Monthly Income: ₹30,000",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_hl_n01",
+          "label": "Eligibility: CIBIL Score: 750+ for best rates",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_hl_e03",
+          "label": "Eligibility: Property Status: Ready to Move or Under Construction",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_hl_e04",
+          "label": "Eligibility: Employment: Salaried or Self-Employed",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_hl_e05",
+          "label": "Eligibility: Citizenship: Indian Resident",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_hl_i01",
+          "label": "Integrity: Owner-vs-applicant for a purchase: an applicant must be a buyer on the Sale Agreement / Index II",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x02",
+          "label": "Cross-check: PAN format",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x05",
+          "label": "Cross-check: DOB match and age",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x12",
+          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x13",
+          "label": "Cross-check: Bounce / return entries",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x14",
+          "label": "Cross-check: FOIR (indicative)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        }
+      ],
+      "consistency_checks": [
+        "pan",
+        "aadhaar_last4",
+        "applicant_name",
+        "employer",
+        "employer_vs_bank_credits",
+        "declared_vs_slip_net",
+        "declared_vs_bank_credits",
+        "slip_net_vs_bank_credits"
+      ]
+    },
+    {
+      "id": "ls_hl_se",
+      "name": "Loan Sarathi - Home Loan - Self-employed",
+      "product": "home_loan",
+      "applicant_type": "self_employed",
+      "description": "Loan Sarathi Home Loan (LS-HL-SE), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.loansarathi.com/loan/home-loan",
+      "tolerance_pct": 5,
+      "form16_tolerance_pct": 10,
+      "items": [
+        {
+          "id": "ls_hl_01",
+          "label": "KYC Documents (PAN/Aadhaar)",
+          "doc_types": ["identity_details"],
+          "required": true,
+          "rule": {
+            "kind": "present"
+          }
+        },
+        {
+          "id": "ls_hl_03",
+          "label": "Income Proof (Salary Slips/ITR)",
+          "doc_types": ["form16_itr"],
+          "required": true,
+          "rule": {
+            "kind": "present",
+            "min_count": 2
+          }
+        },
+        {
+          "id": "ls_hl_04",
+          "label": "Bank Statements (Last 6 months)",
+          "doc_types": ["bank_statement"],
+          "required": true,
+          "missing_label": "Bank statement",
+          "rule": {
+            "kind": "period",
+            "months": 6,
+            "from_field": "statement_from",
+            "to_field": "statement_to"
+          }
+        },
+        {
+          "id": "ls_hl_05",
+          "label": "Property Documents: Sale Agreement/Index II",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_hl_06",
+          "label": "Sanction Plan & OC/CC (for Under Construction) (only if property.status == 'under_construction')",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_hl_07",
+          "label": "Sanction Plan & OC/CC (for Under Construction) (only if property.status == 'under_construction')",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_hl_08",
+          "label": "Processing Fee Cheque",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_hl_e01",
+          "label": "Eligibility: Age: 21 to 65 years",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_hl_e02",
+          "label": "Eligibility: Min. Monthly Income: ₹30,000",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_hl_n01",
+          "label": "Eligibility: CIBIL Score: 750+ for best rates",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_hl_e03",
+          "label": "Eligibility: Property Status: Ready to Move or Under Construction",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_hl_e04",
+          "label": "Eligibility: Employment: Salaried or Self-Employed",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_hl_e05",
+          "label": "Eligibility: Citizenship: Indian Resident",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_hl_i01",
+          "label": "Integrity: Owner-vs-applicant for a purchase: an applicant must be a buyer on the Sale Agreement / Index II",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x02",
+          "label": "Cross-check: PAN format",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x05",
+          "label": "Cross-check: DOB match and age",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x12",
+          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x13",
+          "label": "Cross-check: Bounce / return entries",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x14",
+          "label": "Cross-check: FOIR (indicative)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x15",
+          "label": "Cross-check: Declared income vs ITR (self-employed)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        }
+      ],
+      "consistency_checks": ["pan", "aadhaar_last4", "applicant_name"]
+    },
+    {
+      "id": "ls_lap_sal",
+      "name": "Loan Sarathi - Loan Against Property - Salaried",
+      "product": "lap",
+      "applicant_type": "salaried",
+      "description": "Loan Sarathi Loan Against Property (LS-LAP-SAL), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.loansarathi.com/loan/loan-against-property",
+      "tolerance_pct": 5,
+      "form16_tolerance_pct": 10,
+      "items": [
+        {
+          "id": "ls_lap_01",
+          "label": "KYC Documents (PAN/Aadhaar)",
+          "doc_types": ["identity_details"],
+          "required": true,
+          "rule": {
+            "kind": "present"
+          }
+        },
+        {
+          "id": "ls_lap_02",
+          "label": "Original Property Title Deeds & Chain Documents",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_lap_03",
+          "label": "Original Property Title Deeds & Chain Documents",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_lap_04",
+          "label": "Income Proof (ITR/Salary Slips)",
+          "doc_types": ["salary_slip"],
+          "required": true,
+          "missing_label": "Salary slip",
+          "rule": {
+            "kind": "monthly",
+            "months": 3,
+            "field": "month"
+          }
+        },
+        {
+          "id": "ls_lap_06",
+          "label": "Bank Statements (Last 6 months)",
+          "doc_types": ["bank_statement"],
+          "required": true,
+          "missing_label": "Bank statement",
+          "rule": {
+            "kind": "period",
+            "months": 6,
+            "from_field": "statement_from",
+            "to_field": "statement_to"
+          }
+        },
+        {
+          "id": "ls_lap_07",
+          "label": "Property Tax Receipts / Electricity Bill",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_lap_e01",
+          "label": "Eligibility: Age: 25 to 65 years",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_lap_e02",
+          "label": "Eligibility: Property Ownership: Must be owned by applicant(s)",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_lap_e03",
+          "label": "Eligibility: Property Title: Clear and marketable title",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_lap_n01",
+          "label": "Informational: Min. Income: As per lender norms",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_lap_e04",
+          "label": "Eligibility: Employment: Salaried or Self-Employed",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_lap_i01",
+          "label": "Integrity: Each transferee must be the next transferor; list every gap with the deed dates on either side",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x02",
+          "label": "Cross-check: PAN format",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x05",
+          "label": "Cross-check: DOB match and age",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x12",
+          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x13",
+          "label": "Cross-check: Bounce / return entries",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x14",
+          "label": "Cross-check: FOIR (indicative)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        }
+      ],
+      "consistency_checks": [
+        "pan",
+        "aadhaar_last4",
+        "applicant_name",
+        "employer",
+        "employer_vs_bank_credits",
+        "declared_vs_slip_net",
+        "declared_vs_bank_credits",
+        "slip_net_vs_bank_credits"
+      ]
+    },
+    {
+      "id": "ls_lap_se",
+      "name": "Loan Sarathi - Loan Against Property - Self-employed",
+      "product": "lap",
+      "applicant_type": "self_employed",
+      "description": "Loan Sarathi Loan Against Property (LS-LAP-SE), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.loansarathi.com/loan/loan-against-property",
+      "tolerance_pct": 5,
+      "form16_tolerance_pct": 10,
+      "items": [
+        {
+          "id": "ls_lap_01",
+          "label": "KYC Documents (PAN/Aadhaar)",
+          "doc_types": ["identity_details"],
+          "required": true,
+          "rule": {
+            "kind": "present"
+          }
+        },
+        {
+          "id": "ls_lap_02",
+          "label": "Original Property Title Deeds & Chain Documents",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_lap_03",
+          "label": "Original Property Title Deeds & Chain Documents",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_lap_05",
+          "label": "Income Proof (ITR/Salary Slips)",
+          "doc_types": ["form16_itr"],
+          "required": true,
+          "rule": {
+            "kind": "present",
+            "min_count": 2
+          }
+        },
+        {
+          "id": "ls_lap_06",
+          "label": "Bank Statements (Last 6 months)",
+          "doc_types": ["bank_statement"],
+          "required": true,
+          "missing_label": "Bank statement",
+          "rule": {
+            "kind": "period",
+            "months": 6,
+            "from_field": "statement_from",
+            "to_field": "statement_to"
+          }
+        },
+        {
+          "id": "ls_lap_07",
+          "label": "Property Tax Receipts / Electricity Bill",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_lap_e01",
+          "label": "Eligibility: Age: 25 to 65 years",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_lap_e02",
+          "label": "Eligibility: Property Ownership: Must be owned by applicant(s)",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_lap_e03",
+          "label": "Eligibility: Property Title: Clear and marketable title",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_lap_n01",
+          "label": "Informational: Min. Income: As per lender norms",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_lap_e04",
+          "label": "Eligibility: Employment: Salaried or Self-Employed",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_lap_i01",
+          "label": "Integrity: Each transferee must be the next transferor; list every gap with the deed dates on either side",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x02",
+          "label": "Cross-check: PAN format",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x05",
+          "label": "Cross-check: DOB match and age",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x12",
+          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x13",
+          "label": "Cross-check: Bounce / return entries",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x14",
+          "label": "Cross-check: FOIR (indicative)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x15",
+          "label": "Cross-check: Declared income vs ITR (self-employed)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        }
+      ],
+      "consistency_checks": ["pan", "aadhaar_last4", "applicant_name"]
+    },
+    {
+      "id": "ls_el_stu_cosal",
+      "name": "Loan Sarathi - Education Loan - Student (salaried co-applicant)",
+      "product": "education_loan",
+      "applicant_type": "student",
+      "description": "Loan Sarathi Education Loan (LS-EL-STU-COSAL), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.loansarathi.com/loan/education-loan",
+      "tolerance_pct": 5,
+      "form16_tolerance_pct": 10,
+      "items": [
+        {
+          "id": "ls_el_01",
+          "label": "Student & Co-applicant KYC (PAN/Aadhaar)",
+          "doc_types": ["identity_details"],
+          "required": true,
+          "rule": {
+            "kind": "present"
+          }
+        },
+        {
+          "id": "ls_el_02",
+          "label": "Student & Co-applicant KYC (PAN/Aadhaar)",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_el_03",
+          "label": "Admission Letter from recognized institution",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_el_04",
+          "label": "Course Fee Structure & Schedule",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_el_05",
+          "label": "Co-applicant Income Proof (Salary Slips/ITR)",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_el_07",
+          "label": "Bank Statements (Last 6 months)",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_el_08",
+          "label": "Academic Records (10th, 12th, Graduation marksheets)",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_el_e01",
+          "label": "Eligibility: Student Age: 16 to 35 years",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_el_e02",
+          "label": "Eligibility: Co-applicant: Parent/Guardian required",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_el_e03",
+          "label": "Eligibility: Co-applicant Income: Minimum ₹25,000/month",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_el_e04",
+          "label": "Eligibility: CIBIL Score: 700+ for co-applicant",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_el_e05",
+          "label": "Eligibility: Admission: Confirmed admission letter required",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_el_e06",
+          "label": "Eligibility: Course: Recognized institutions in India/Abroad",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_el_t01",
+          "label": "Trigger: No collateral required for loans up to ₹7.5 Lakhs",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x02",
+          "label": "Cross-check: PAN format",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x05",
+          "label": "Cross-check: DOB match and age",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x12",
+          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x13",
+          "label": "Cross-check: Bounce / return entries",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x14",
+          "label": "Cross-check: FOIR (indicative)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        }
+      ],
+      "consistency_checks": [
+        "pan",
+        "aadhaar_last4",
+        "applicant_name",
+        "employer",
+        "employer_vs_bank_credits",
+        "declared_vs_slip_net",
+        "declared_vs_bank_credits",
+        "slip_net_vs_bank_credits"
+      ]
+    },
+    {
+      "id": "ls_el_stu_cose",
+      "name": "Loan Sarathi - Education Loan - Student (self-employed co-applicant)",
+      "product": "education_loan",
+      "applicant_type": "student",
+      "description": "Loan Sarathi Education Loan (LS-EL-STU-COSE), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.loansarathi.com/loan/education-loan",
+      "tolerance_pct": 5,
+      "form16_tolerance_pct": 10,
+      "items": [
+        {
+          "id": "ls_el_01",
+          "label": "Student & Co-applicant KYC (PAN/Aadhaar)",
+          "doc_types": ["identity_details"],
+          "required": true,
+          "rule": {
+            "kind": "present"
+          }
+        },
+        {
+          "id": "ls_el_02",
+          "label": "Student & Co-applicant KYC (PAN/Aadhaar)",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_el_03",
+          "label": "Admission Letter from recognized institution",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_el_04",
+          "label": "Course Fee Structure & Schedule",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_el_06",
+          "label": "Co-applicant Income Proof (Salary Slips/ITR)",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_el_07",
+          "label": "Bank Statements (Last 6 months)",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_el_08",
+          "label": "Academic Records (10th, 12th, Graduation marksheets)",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_el_e01",
+          "label": "Eligibility: Student Age: 16 to 35 years",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_el_e02",
+          "label": "Eligibility: Co-applicant: Parent/Guardian required",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_el_e03",
+          "label": "Eligibility: Co-applicant Income: Minimum ₹25,000/month",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_el_e04",
+          "label": "Eligibility: CIBIL Score: 700+ for co-applicant",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_el_e05",
+          "label": "Eligibility: Admission: Confirmed admission letter required",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_el_e06",
+          "label": "Eligibility: Course: Recognized institutions in India/Abroad",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_el_t01",
+          "label": "Trigger: No collateral required for loans up to ₹7.5 Lakhs",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x02",
+          "label": "Cross-check: PAN format",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x05",
+          "label": "Cross-check: DOB match and age",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x12",
+          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x13",
+          "label": "Cross-check: Bounce / return entries",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x14",
+          "label": "Cross-check: FOIR (indicative)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x15",
+          "label": "Cross-check: Declared income vs ITR (self-employed)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        }
+      ],
+      "consistency_checks": ["pan", "aadhaar_last4", "applicant_name"]
+    },
+    {
+      "id": "ls_cl_sal",
+      "name": "Loan Sarathi - Car Loan - Salaried",
+      "product": "car_loan",
+      "applicant_type": "salaried",
+      "description": "Loan Sarathi Car Loan (LS-CL-SAL), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.loansarathi.com/loan/car-loan",
+      "tolerance_pct": 5,
+      "form16_tolerance_pct": 10,
+      "items": [
+        {
+          "id": "ls_cl_01",
+          "label": "Identity Proof (PAN Card/Aadhaar)",
+          "doc_types": ["identity_details"],
+          "required": true,
+          "rule": {
+            "kind": "present"
+          }
+        },
+        {
+          "id": "ls_cl_02",
+          "label": "Address Proof (Aadhaar/Passport/Utility Bill)",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_cl_03",
+          "label": "Income Proof: Last 3 months Salary Slips (Salaried) / Last 2 years ITR (Self-Employed)",
+          "doc_types": ["salary_slip"],
+          "required": true,
+          "missing_label": "Salary slip",
+          "rule": {
+            "kind": "monthly",
+            "months": 3,
+            "field": "month"
+          }
+        },
+        {
+          "id": "ls_cl_05",
+          "label": "Bank Statements (Last 6 months)",
+          "doc_types": ["bank_statement"],
+          "required": true,
+          "missing_label": "Bank statement",
+          "rule": {
+            "kind": "period",
+            "months": 6,
+            "from_field": "statement_from",
+            "to_field": "statement_to"
+          }
+        },
+        {
+          "id": "ls_cl_06",
+          "label": "Car Quotation/Proforma Invoice",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_cl_07",
+          "label": "Existing Loan Statements (if any) (only if loan.has_existing_loans)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_cl_08",
+          "label": "Passport size photographs",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_cl_e01",
+          "label": "Eligibility: Age: 21 to 65 years",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_cl_e02",
+          "label": "Eligibility: Min. Monthly Income: ₹25,000 (Salaried) / ₹50,000 (Self-Employed)",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_cl_n01",
+          "label": "Eligibility: CIBIL Score: 700+ for best rates",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_cl_e04",
+          "label": "Eligibility: Existing loans: Should not exceed 50% of net income",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_cl_e05",
+          "label": "Eligibility: Covers: New Cars & Used Cars (up to 7 years old)",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_cl_e06",
+          "label": "Eligibility: Employment: Salaried or Self-Employed",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_cl_e07",
+          "label": "Eligibility: Citizenship: Indian Resident",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x02",
+          "label": "Cross-check: PAN format",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x05",
+          "label": "Cross-check: DOB match and age",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x12",
+          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x13",
+          "label": "Cross-check: Bounce / return entries",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x14",
+          "label": "Cross-check: FOIR (indicative)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        }
+      ],
+      "consistency_checks": [
+        "pan",
+        "aadhaar_last4",
+        "applicant_name",
+        "employer",
+        "employer_vs_bank_credits",
+        "declared_vs_slip_net",
+        "declared_vs_bank_credits",
+        "slip_net_vs_bank_credits"
+      ]
+    },
+    {
+      "id": "ls_cl_se",
+      "name": "Loan Sarathi - Car Loan - Self-employed",
+      "product": "car_loan",
+      "applicant_type": "self_employed",
+      "description": "Loan Sarathi Car Loan (LS-CL-SE), from the ready-made research file captured 2026-09-27; draft for client confirmation. Items the rules cannot verify are marked REVIEW. Source: https://www.loansarathi.com/loan/car-loan",
+      "tolerance_pct": 5,
+      "form16_tolerance_pct": 10,
+      "items": [
+        {
+          "id": "ls_cl_01",
+          "label": "Identity Proof (PAN Card/Aadhaar)",
+          "doc_types": ["identity_details"],
+          "required": true,
+          "rule": {
+            "kind": "present"
+          }
+        },
+        {
+          "id": "ls_cl_02",
+          "label": "Address Proof (Aadhaar/Passport/Utility Bill)",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_cl_04",
+          "label": "Income Proof: Last 3 months Salary Slips (Salaried) / Last 2 years ITR (Self-Employed)",
+          "doc_types": ["form16_itr"],
+          "required": true,
+          "rule": {
+            "kind": "present",
+            "min_count": 2
+          }
+        },
+        {
+          "id": "ls_cl_05",
+          "label": "Bank Statements (Last 6 months)",
+          "doc_types": ["bank_statement"],
+          "required": true,
+          "missing_label": "Bank statement",
+          "rule": {
+            "kind": "period",
+            "months": 6,
+            "from_field": "statement_from",
+            "to_field": "statement_to"
+          }
+        },
+        {
+          "id": "ls_cl_06",
+          "label": "Car Quotation/Proforma Invoice",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_cl_07",
+          "label": "Existing Loan Statements (if any) (only if loan.has_existing_loans)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_cl_08",
+          "label": "Passport size photographs",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_cl_e01",
+          "label": "Eligibility: Age: 21 to 65 years",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_cl_e03",
+          "label": "Eligibility: Min. Monthly Income: ₹25,000 (Salaried) / ₹50,000 (Self-Employed)",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_cl_n01",
+          "label": "Eligibility: CIBIL Score: 700+ for best rates",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_cl_e04",
+          "label": "Eligibility: Existing loans: Should not exceed 50% of net income",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_cl_e05",
+          "label": "Eligibility: Covers: New Cars & Used Cars (up to 7 years old)",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_cl_e06",
+          "label": "Eligibility: Employment: Salaried or Self-Employed",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "ls_cl_e07",
+          "label": "Eligibility: Citizenship: Indian Resident",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x02",
+          "label": "Cross-check: PAN format",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x05",
+          "label": "Cross-check: DOB match and age",
+          "doc_types": [],
+          "required": true,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x12",
+          "label": "Cross-check: EMI / NACH debits vs declared EMIs",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x13",
+          "label": "Cross-check: Bounce / return entries",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x14",
+          "label": "Cross-check: FOIR (indicative)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        },
+        {
+          "id": "x15",
+          "label": "Cross-check: Declared income vs ITR (self-employed)",
+          "doc_types": [],
+          "required": false,
+          "rule": {
+            "kind": "manual"
+          }
+        }
+      ],
+      "consistency_checks": ["pan", "aadhaar_last4", "applicant_name"]
+    }
+  ]
+}

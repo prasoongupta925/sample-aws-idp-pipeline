@@ -1,3 +1,4 @@
+import json
 import os
 import secrets
 import string
@@ -177,6 +178,7 @@ class StepName:
     SEGMENT_ANALYZER = 'segment_analyzer'
     GRAPH_BUILDER = 'graph_builder'
     DOCUMENT_SUMMARIZER = 'document_summarizer'
+    DOCUMENT_FACTS = 'document_facts'
     DATASET_PROCESS = 'dataset_process'
 
     ORDER = [
@@ -190,6 +192,7 @@ class StepName:
         'segment_analyzer',
         'graph_builder',
         'document_summarizer',
+        'document_facts',
     ]
 
     LABELS = {
@@ -203,6 +206,7 @@ class StepName:
         'segment_analyzer': 'Segment Analysis',
         'graph_builder': 'Building Knowledge Graph',
         'document_summarizer': 'Document Summary',
+        'document_facts': 'Document Facts',
         'dataset_process': 'Dataset Processing',
     }
 
@@ -311,6 +315,7 @@ def create_workflow(
             StepName.FORMAT_PARSER: not (is_pdf or is_dxf_file) or is_webreq,
             StepName.WEBCRAWLER: not is_webreq,
             StepName.SEGMENT_ANALYZER: False,
+            StepName.DOCUMENT_FACTS: (is_video or is_audio) or is_webreq,
         }
         for step_name in StepName.ORDER:
             should_skip = skip_conditions.get(step_name, False)
@@ -541,9 +546,44 @@ def update_workflow_total_segments(
     return decimal_to_python(response.get('Attributes', {}))
 
 
+def _write_step(
+    workflow_id: str,
+    step_name: str,
+    step_data: dict,
+    current_step: Optional[str],
+    now: str,
+    gsi1sk: Optional[str] = None,
+) -> dict:
+    """Write ONE step map (and current_step) of the STEP row via nested paths.
+
+    Parallel branches (graph builder, summarizer, facts) update the same STEP
+    row, so each writer sets only data.<step> instead of the whole data map;
+    otherwise concurrent read-modify-write cycles lose each other's updates.
+    current_step=None leaves data.current_step untouched.
+    """
+    update_expr = 'SET #data.#step = :step'
+    expr_names = {'#data': 'data', '#step': step_name}
+    expr_values = {':step': step_data, ':updated_at': now}
+    if current_step is not None:
+        update_expr += ', #data.current_step = :cs'
+        expr_values[':cs'] = current_step
+    update_expr += ', updated_at = :updated_at'
+    if gsi1sk is not None:
+        update_expr += ', GSI1SK = :gsi1sk'
+        expr_values[':gsi1sk'] = gsi1sk
+
+    response = get_table().update_item(
+        Key={'PK': f'WF#{workflow_id}', 'SK': 'STEP'},
+        UpdateExpression=update_expr,
+        ExpressionAttributeNames=expr_names,
+        ExpressionAttributeValues=expr_values,
+        ReturnValues='ALL_NEW',
+    )
+    return decimal_to_python(response.get('Attributes', {}))
+
+
 def record_step_start(workflow_id: str, step_name: str, **kwargs) -> dict:
     """Update step status to in_progress in STEP row"""
-    table = get_table()
     now = now_iso()
 
     steps = get_steps(workflow_id)
@@ -557,30 +597,19 @@ def record_step_start(workflow_id: str, step_name: str, **kwargs) -> dict:
     step_data.setdefault('label', StepName.LABELS.get(step_name, step_name))
     for key, value in kwargs.items():
         step_data[key] = value
-    data[step_name] = step_data
-    data['current_step'] = step_name
 
-    update_expr = 'SET #data = :data'
-    expr_names = {'#data': 'data'}
-    expr_values = {':data': data}
-
-    if step_name == StepName.SEGMENT_ANALYZER:
-        update_expr += ', GSI1SK = :gsi1sk'
-        expr_values[':gsi1sk'] = 'in_progress'
-
-    response = table.update_item(
-        Key={'PK': f'WF#{workflow_id}', 'SK': 'STEP'},
-        UpdateExpression=update_expr,
-        ExpressionAttributeNames=expr_names,
-        ExpressionAttributeValues=expr_values,
-        ReturnValues='ALL_NEW',
+    return _write_step(
+        workflow_id,
+        step_name,
+        step_data,
+        current_step=step_name,
+        now=now,
+        gsi1sk='in_progress' if step_name == StepName.SEGMENT_ANALYZER else None,
     )
-    return decimal_to_python(response.get('Attributes', {}))
 
 
 def record_step_complete(workflow_id: str, step_name: str, **kwargs) -> dict:
     """Update step status to completed in STEP row"""
-    table = get_table()
     now = now_iso()
 
     steps = get_steps(workflow_id)
@@ -591,39 +620,30 @@ def record_step_complete(workflow_id: str, step_name: str, **kwargs) -> dict:
     step_data = data.get(step_name, {})
     step_data['status'] = WorkflowStatus.COMPLETED
     step_data['ended_at'] = now
+    step_data.setdefault('label', StepName.LABELS.get(step_name, step_name))
     for key, value in kwargs.items():
         step_data[key] = value
     data[step_name] = step_data
 
-    # Find current in_progress step
+    # Find current in_progress step (read snapshot + this step's new state)
     current_step = ''
     for sn in StepName.ORDER:
         if data.get(sn, {}).get('status') == WorkflowStatus.IN_PROGRESS:
             current_step = sn
             break
-    data['current_step'] = current_step
 
-    update_expr = 'SET #data = :data, updated_at = :updated_at'
-    expr_names = {'#data': 'data'}
-    expr_values = {':data': data, ':updated_at': now}
-
-    if step_name == StepName.SEGMENT_ANALYZER:
-        update_expr += ', GSI1SK = :gsi1sk'
-        expr_values[':gsi1sk'] = 'completed'
-
-    response = table.update_item(
-        Key={'PK': f'WF#{workflow_id}', 'SK': 'STEP'},
-        UpdateExpression=update_expr,
-        ExpressionAttributeNames=expr_names,
-        ExpressionAttributeValues=expr_values,
-        ReturnValues='ALL_NEW',
+    return _write_step(
+        workflow_id,
+        step_name,
+        step_data,
+        current_step=current_step,
+        now=now,
+        gsi1sk='completed' if step_name == StepName.SEGMENT_ANALYZER else None,
     )
-    return decimal_to_python(response.get('Attributes', {}))
 
 
 def record_step_error(workflow_id: str, step_name: str, error: str) -> dict:
     """Update step status to failed in STEP row"""
-    table = get_table()
     now = now_iso()
 
     steps = get_steps(workflow_id)
@@ -634,30 +654,20 @@ def record_step_error(workflow_id: str, step_name: str, error: str) -> dict:
     step_data = data.get(step_name, {})
     step_data['status'] = WorkflowStatus.FAILED
     step_data['error'] = error
-    data[step_name] = step_data
-    data['current_step'] = ''
+    step_data.setdefault('label', StepName.LABELS.get(step_name, step_name))
 
-    update_expr = 'SET #data = :data, updated_at = :updated_at'
-    expr_names = {'#data': 'data'}
-    expr_values = {':data': data, ':updated_at': now}
-
-    if step_name == StepName.SEGMENT_ANALYZER:
-        update_expr += ', GSI1SK = :gsi1sk'
-        expr_values[':gsi1sk'] = 'failed'
-
-    response = table.update_item(
-        Key={'PK': f'WF#{workflow_id}', 'SK': 'STEP'},
-        UpdateExpression=update_expr,
-        ExpressionAttributeNames=expr_names,
-        ExpressionAttributeValues=expr_values,
-        ReturnValues='ALL_NEW',
+    return _write_step(
+        workflow_id,
+        step_name,
+        step_data,
+        current_step='',
+        now=now,
+        gsi1sk='failed' if step_name == StepName.SEGMENT_ANALYZER else None,
     )
-    return decimal_to_python(response.get('Attributes', {}))
 
 
 def record_step_skipped(workflow_id: str, step_name: str, reason: str = '') -> dict:
-    """Update step status to skipped in STEP row"""
-    table = get_table()
+    """Update step status to skipped in STEP row (current_step is left unchanged)"""
     now = now_iso()
 
     steps = get_steps(workflow_id)
@@ -667,18 +677,11 @@ def record_step_skipped(workflow_id: str, step_name: str, reason: str = '') -> d
     data = steps.get('data', {})
     step_data = data.get(step_name, {})
     step_data['status'] = WorkflowStatus.SKIPPED
+    step_data.setdefault('label', StepName.LABELS.get(step_name, step_name))
     if reason:
         step_data['reason'] = reason
-    data[step_name] = step_data
 
-    response = table.update_item(
-        Key={'PK': f'WF#{workflow_id}', 'SK': 'STEP'},
-        UpdateExpression='SET #data = :data, updated_at = :updated_at',
-        ExpressionAttributeNames={'#data': 'data'},
-        ExpressionAttributeValues={':data': data, ':updated_at': now},
-        ReturnValues='ALL_NEW',
-    )
-    return decimal_to_python(response.get('Attributes', {}))
+    return _write_step(workflow_id, step_name, step_data, current_step=None, now=now)
 
 
 def record_step_needs_fix(workflow_id: str, step_name: str, reason: str, details: dict | None = None) -> dict:
@@ -1063,4 +1066,35 @@ def get_document(project_id: str, document_id: str) -> Optional[dict]:
     if item:
         result = decimal_to_python(item)
         return result.get('data', {})
+    return None
+
+
+def save_document_facts(project_id: str, document_id: str, data: dict) -> dict:
+    """Save the structured facts record of one document as PROJ#/FACTS# (no GSI keys).
+
+    Floats are stored as Decimal. The record never contains document text.
+    """
+    table = get_table()
+    now = now_iso()
+
+    item = {
+        'PK': f'PROJ#{project_id}',
+        'SK': f'FACTS#{document_id}',
+        'data': json.loads(json.dumps(data), parse_float=Decimal),
+        'created_at': now,
+        'updated_at': now,
+    }
+    table.put_item(Item=item)
+    return decimal_to_python(item)
+
+
+def get_document_facts(project_id: str, document_id: str) -> Optional[dict]:
+    """Get the facts record (data) of one document, or None."""
+    table = get_table()
+    response = table.get_item(
+        Key={'PK': f'PROJ#{project_id}', 'SK': f'FACTS#{document_id}'}
+    )
+    item = response.get('Item')
+    if item:
+        return decimal_to_python(item).get('data', {})
     return None

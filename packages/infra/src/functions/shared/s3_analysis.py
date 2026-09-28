@@ -337,6 +337,77 @@ def get_summary(file_uri: str) -> Optional[dict]:
         return None
 
 
+def get_facts_s3_key(file_uri: str) -> str:
+    """
+    Generate S3 key for the document facts file.
+
+    Args:
+        file_uri: Original file URI
+
+    Returns:
+        S3 key like: projects/{project_id}/documents/{document_id}/analysis/facts.json
+    """
+    _, key = parse_s3_uri(file_uri)
+
+    # If /analysis/ already in path, extract base directory before it
+    if '/analysis/' in key:
+        base_dir = key.split('/analysis/')[0]
+    else:
+        # Remove file name, get directory
+        base_dir = key.rsplit('/', 1)[0]
+
+    return f'{base_dir}/analysis/facts.json'
+
+
+def save_facts(file_uri: str, data: dict) -> str:
+    """
+    Save the structured document facts record to S3 (next to summary.json).
+
+    Args:
+        file_uri: Original file URI
+        data: Facts record (plus model_fields for audit)
+
+    Returns:
+        S3 key where facts were saved
+    """
+    client = get_s3_client()
+    bucket, _ = parse_s3_uri(file_uri)
+    s3_key = get_facts_s3_key(file_uri)
+
+    client.put_object(
+        Bucket=bucket,
+        Key=s3_key,
+        Body=json.dumps(data, ensure_ascii=False, indent=2),
+        ContentType='application/json'
+    )
+
+    return s3_key
+
+
+def get_facts(file_uri: str) -> Optional[dict]:
+    """
+    Get the document facts record from S3.
+
+    Args:
+        file_uri: Original file URI
+
+    Returns:
+        Facts dict or None if not found
+    """
+    client = get_s3_client()
+    bucket, _ = parse_s3_uri(file_uri)
+    s3_key = get_facts_s3_key(file_uri)
+
+    try:
+        response = client.get_object(Bucket=bucket, Key=s3_key)
+        return json.loads(response['Body'].read().decode('utf-8'))
+    except client.exceptions.NoSuchKey:
+        return None
+    except Exception as e:
+        print(f'Error getting facts from {s3_key}: {e}')
+        return None
+
+
 def get_segment_count_from_s3(file_uri: str) -> int:
     """
     Count segment analysis files in S3.

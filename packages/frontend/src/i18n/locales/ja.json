@@ -218,6 +218,7 @@
       "segmentAiAnalysis": "AI分析",
       "graphBuilder": "ナレッジグラフ構築",
       "documentSummary": "ドキュメント要約",
+      "documentFacts": "ドキュメント情報抽出",
       "datasetProcess": "データ処理"
     },
     "inProgress": "処理中...",
