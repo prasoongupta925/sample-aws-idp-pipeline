@@ -198,6 +198,40 @@ def rahul():
     return docs
 
 
+def rahul_with_obligations():
+    """Rahul analysed after the obligations extraction: declared EMI plus the bank debits."""
+    docs = rahul()
+    for d in docs:
+        f = d["fields"]
+        if d["doc_type"] == "loan_application":
+            f["declared_existing_emis"] = [
+                {"lender": "Mulshi Auto Finance Ltd (sample)", "loan_type": "Car loan", "amount": 8200.0}
+            ]
+            f["declared_total_existing_emi"] = 8200.0
+            f["loan_tenure_months"] = 48
+        elif d["doc_type"] == "bank_statement":
+            f["recurring_debits"] = [
+                {
+                    "date": f"2026-0{m}-05",
+                    "amount": 8200.0,
+                    "narration": "ACH DR/MULSHI AUTO FINANCE/CAR LOAN EMI",
+                    "channel": "ACH",
+                    "category": "loan_emi",
+                }
+                for m in range(3, 9)
+            ] + [
+                {
+                    "date": f"2026-0{m}-03",
+                    "amount": 18000.0,
+                    "narration": "NEFT DR/RENT/VASANT JOSHI",
+                    "channel": "other",
+                    "category": "rent",
+                }
+                for m in range(3, 9)
+            ]
+    return docs
+
+
 def _to_ddb(value):
     """Numbers come back from the boto3 resource layer as Decimal."""
     if isinstance(value, bool) or value is None:
@@ -337,7 +371,8 @@ class TestRunFileCheck:
         assert data["project_id"] == PROJECT_ID
         assert data["checklist"] == {"id": "salaried_personal_loan", "name": "Personal Loan - Salaried"}
         assert data["overall_verdict"] == "NOT READY"
-        assert data["summary"].startswith("1 applicant: Sneha Anil Kulkarni NOT READY (5 issues")
+        # Her facts predate the obligations extraction: EMIs and FOIR are "to review", never a pass.
+        assert data["summary"] == "1 applicant: Sneha Anil Kulkarni NOT READY (5 issues, 2 to review)"
         assert "assistant_instructions" not in data  # chat-only guidance is not part of the API
 
         (sneha_result,) = data["applicants"]
@@ -428,6 +463,56 @@ class TestRunFileCheck:
         assert result["needs_review"] == ["FOIR (indicative): indicative"]
         assert result["obligations"] == {"declared": [], "undeclared": [], "documents": []}
         assert result["foir"] == foir
+
+    def test_real_engine_review_rows_obligations_and_foir_pass_through(self, monkeypatch, configured, project):
+        """The real engine's REVIEW rows, needs_review, obligations and FOIR reach the caller unchanged."""
+        monkeypatch.setattr(fc_index, "_table", FakeTable(project_items(sneha() + rahul_with_obligations())))
+        with use_lambda(HandlerLambda()):
+            response = client.post(f"/projects/{PROJECT_ID}/file-check", headers=HEADERS, json={})
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["summary"] == (
+            "2 applicants: Rahul Vijay Deshmukh READY; Sneha Anil Kulkarni NOT READY (5 issues, 2 to review)"
+        )
+        by_name = {a["applicant"]: a for a in data["applicants"]}
+
+        # Analysed with obligations: EMI matched in the bank, FOIR computed (indicative).
+        rahul_result = by_name["Rahul Vijay Deshmukh"]
+        assert rahul_result["verdict"] == "READY"
+        assert rahul_result["needs_review"] == []
+        checks = {c["check_id"]: c for c in rahul_result["consistency"]}
+        assert checks["declared_emis_vs_bank_debits"]["status"] == "OK"
+        assert checks["foir"]["status"] == "OK"
+        assert "max new EMI is ₹49,550" in checks["foir"]["detail"]
+        foir = rahul_result["foir"]
+        assert (foir["existing_emis"], foir["max_new_emi"], foir["existing_emi_ratio_pct"]) == (8200, 49550, 9.9)
+        assert foir["indicative"] is True and foir["hard_limit"] is False
+        (emi,) = rahul_result["obligations"]["fixed_loan_emis"]
+        assert (emi["amount"], emi["day_of_month"], emi["months_seen"]) == (8200, 5, 6)
+        assert rahul_result["obligations"]["declared_emis"][0]["status"] == "matched"
+
+        # Analysed before the obligations extraction: REVIEW (never a silent pass), verdict unchanged.
+        sneha_result = by_name["Sneha Anil Kulkarni"]
+        checks = {c["check_id"]: c for c in sneha_result["consistency"]}
+        assert checks["declared_emis_vs_bank_debits"]["status"] == "REVIEW"
+        assert checks["foir"]["status"] == "REVIEW"
+        assert [r.split(":")[0] for r in sneha_result["needs_review"]] == [
+            "Declared EMIs vs bank debits",
+            "FOIR (indicative)",
+        ]
+        assert "re-run the analysis" in sneha_result["needs_review"][0]
+        assert sneha_result["obligations"]["available"] is False
+        assert sneha_result["foir"]["status"] == "REVIEW"
+        assert len(sneha_result["reasons"]) == 5
+
+    def test_checklists_carry_foir_policy(self, handler_lambda):
+        response = client.get(f"/projects/{PROJECT_ID}/checklists", headers=HEADERS)
+
+        assert response.status_code == 200
+        pl = next(c for c in response.json()["checklists"] if c["id"] == "salaried_personal_loan")
+        assert (pl["foir"]["value"], pl["foir"]["hard_limit"]) == (0.7, False)
+        assert {"declared_emis_vs_bank_debits", "foir"} <= set(pl["consistency_checks"])
 
     def test_unknown_checklist_is_400_with_valid_ids(self, handler_lambda):
         response = client.post(

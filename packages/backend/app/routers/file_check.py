@@ -4,6 +4,10 @@ Lets an external system (e.g. a DSA CRM before "send loan login") get the
 deterministic READY / NOT READY verdict without the chat. The verdict comes from
 the file-check Lambda (the chat's run_file_check tool); this router validates
 the request, checks the project exists and returns the engine's result.
+
+POST .../file-check/ask answers one question about the file from that verdict
+and the documents' facts and page text only (Amazon Nova 2 Lite), and
+GET .../file-check/usage reports the Ask calls' tokens and cost (last 7 days).
 """
 
 import datetime as dt
@@ -13,6 +17,7 @@ from fastapi import APIRouter, Body, Header, HTTPException, Path
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.ddb import get_project_item
+from app.ddb.ask_usage import sum_ask_usage
 from app.file_check import (
     TOOL_LIST_CHECKLISTS,
     TOOL_RUN_FILE_CHECK,
@@ -21,6 +26,7 @@ from app.file_check import (
     UnknownChecklistError,
     invoke_file_check_tool,
 )
+from app.file_check_ask import USAGE_WINDOW_DAYS, AskModelError, answer_question
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["file-check"])
 
@@ -279,6 +285,82 @@ class FileCheckResponse(BaseModel):
     unassigned_documents: list[UnassignedDocument]
 
 
+# ------------------------------------------------------------------ ask
+class AskHistoryMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=8000)
+
+
+class AskRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+        json_schema_extra={
+            "examples": [
+                {"question": "Summarise the monthly obligations", "applicant": "Rahul Vijay Deshmukh"},
+                {
+                    "question": "And the FOIR?",
+                    "applicant": "BQXPD4821K",
+                    "history": [
+                        {"role": "user", "content": "Summarise the monthly obligations"},
+                        {"role": "assistant", "content": "Car loan EMI Rs 8,200 on the 5th ..."},
+                    ],
+                },
+            ]
+        },
+    )
+
+    question: str = Field(min_length=1, max_length=1000, description="The question about this loan file")
+    checklist_id: str | None = Field(
+        default=None,
+        pattern=r"^[a-z0-9_]+$",
+        max_length=64,
+        description="Checklist of the verdict the answer uses. Default: default_checklist.",
+    )
+    applicant: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description="Answer about this applicant only (name or PAN). Default: every applicant in the project.",
+    )
+    history: list[AskHistoryMessage] = Field(
+        default=[],
+        max_length=6,
+        description="Earlier turns of this conversation, oldest first (at most 6)",
+    )
+
+
+class AskPricing(BaseModel):
+    input_per_million_usd: float
+    output_per_million_usd: float
+    region: str
+
+
+class AskGroundedOn(BaseModel):
+    applicants: list[str] = Field(description="Applicants whose verdict the answer was given")
+    documents: list[str] = Field(description="Documents whose verdict, facts and page text the answer was given")
+
+
+class AskResponse(BaseModel):
+    answer: str = Field(description='Answer from the file only; "not in the file" when it is absent')
+    model_id: str
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float = Field(description="Cost of this call from its token usage and `pricing`")
+    pricing: AskPricing
+    grounded_on: AskGroundedOn
+
+
+class AskUsageResponse(BaseModel):
+    window_days: int
+    calls: int
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float
+
+
 # ------------------------------------------------------------------ helpers
 def _require_project(project_id: str) -> None:
     if not get_project_item(project_id):
@@ -345,3 +427,55 @@ def run_file_check(
         f"applicants={len(result.applicants)} verdict={result.overall_verdict}"
     )
     return result
+
+
+@router.post(
+    "/file-check/ask",
+    responses={400: {"model": UnknownChecklistResponse, "description": "Unknown checklist_id"}, **_ERRORS},
+    summary="Ask a question about the loan file (answered from the file only)",
+)
+def ask_file_check(project_id: ProjectId, user_id: UserId, request: AskRequest) -> AskResponse:
+    """Answer one question from the file-check verdict and the documents' facts and page text.
+
+    The model (Amazon Nova 2 Lite, temperature 0) gets only that material and
+    is told to say "not in the file" instead of using outside knowledge or
+    guessing. The verdict itself is decided by the rules, never by the model.
+    Each call's tokens and cost are recorded for GET .../file-check/usage.
+    """
+    _require_project(project_id)
+    arguments: dict[str, Any] = {
+        "project_id": project_id,
+        **request.model_dump(include={"checklist_id", "applicant"}, exclude_none=True),
+    }
+    verdict = _invoke(TOOL_RUN_FILE_CHECK, arguments, FileCheckResponse)
+    try:
+        result = answer_question(
+            project_id,
+            verdict.model_dump(mode="json", exclude_none=True),
+            request.question,
+            [turn.model_dump() for turn in request.history],
+        )
+    except AskModelError as e:
+        print(f"file-check ask failed user={user_id} project={project_id}: {e}")
+        raise HTTPException(status_code=502, detail=f"Answer failed: {e}") from e
+    stats = result.pop("context", {})
+    # Counts only: the question, answer and file content are never logged.
+    print(
+        f"file-check ask user={user_id} project={project_id} checklist={verdict.checklist.id} "
+        f"applicants={len(result['grounded_on']['applicants'])} in={result['input_tokens']} "
+        f"out={result['output_tokens']} cost_usd={result['cost_usd']} truncated={stats.get('truncated')}"
+    )
+    return AskResponse.model_validate(result)
+
+
+@router.get(
+    "/file-check/usage",
+    responses={404: _ERRORS[404]},
+    summary="Tokens and cost of this project's Ask calls in the last 7 days",
+)
+def file_check_usage(project_id: ProjectId, user_id: UserId) -> AskUsageResponse:
+    """Sums the usage ledger: one item per Ask call, deleted by DynamoDB TTL after the retention period."""
+    _require_project(project_id)
+    usage = sum_ask_usage(project_id, window_days=USAGE_WINDOW_DAYS)
+    print(f"file-check usage user={user_id} project={project_id} calls={usage['calls']}")
+    return AskUsageResponse.model_validate(usage)

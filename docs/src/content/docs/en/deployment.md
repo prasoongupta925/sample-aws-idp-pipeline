@@ -46,6 +46,7 @@ overridden with CDK context, which `deploy.sh`/`destroy.sh` pass through with
 | `voiceModelRegion` | `ap-south-1` | Region for Nova Sonic. It is not offered in ap-south-1, so voice is off unless you set, for example, `ap-northeast-1` |
 | `enableWebSearch` | `false` | Create the AgentCore Web Search gateway target. The default is `true` only in us-east-1, eu-west-1 and ap-northeast-1, where the tool is offered |
 | `retentionDays` | `7` | Maximum age of client data, logs and queues |
+| `securityLogRetentionDays` | `retentionDays` (`7`) | Retention for security logs (access, audit and flow logs). Read by `getSecurityLogRetentionDays()` in `retention-config.ts`; no log group uses it yet, so it changes nothing today. See [Retention and security logs](#retention-and-security-logs) |
 
 Also note:
 
@@ -58,6 +59,29 @@ Also note:
   --repo-url https://github.com/<owner>/sample-aws-idp-pipeline.git \
   --context lancedbExpressAzId=aps1-az3
 ```
+
+### Retention and security logs
+
+- Nothing is kept longer than `retentionDays` (default 7): documents and
+  their analysis, chat sessions, artifacts, queues and every CloudWatch log
+  group (the RetentionStack sweeper and log-retention enforcer apply it).
+- The backend DynamoDB table has TTL on the attribute `expires_at` (epoch
+  seconds). The file-check Ask usage ledger (`PROJ#<project>` /
+  `FCASK#<timestamp>#<id>`: one item per question with the model, tokens and
+  cost, never the question or the answer) sets it to the call time plus
+  `retentionDays`, so those items delete themselves.
+  Items without `expires_at` never expire. TTL deletion is asynchronous
+  (usually within a few days of expiry); `GET .../file-check/usage` counts
+  only the last 7 days whatever TTL has removed.
+- Production in India: the Digital Personal Data Protection Rules, 2025,
+  Rule 6(1)(e), require a Data Fiduciary to keep the logs used to detect,
+  investigate and remediate unauthorised access, and the personal data they
+  hold, for one year unless another law requires otherwise. The demo keeps
+  7 days. Before production, set `--context securityLogRetentionDays=365`,
+  apply `toLogRetention(getSecurityLogRetentionDays(this))` to the security
+  log groups (API access logs, VPC flow logs, CloudFront/S3 access logs) and
+  exempt those groups from the log-retention enforcer, which otherwise caps
+  them back at `retentionDays`. Client data keeps `retentionDays`.
 
 ---
 

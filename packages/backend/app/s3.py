@@ -1,3 +1,4 @@
+import json
 from functools import lru_cache
 from urllib.parse import urlparse
 
@@ -123,3 +124,17 @@ def list_segment_keys(file_uri: str) -> list[str]:
     # Sort by segment index (segment_0000.json, segment_0001.json, ...)
     segment_keys.sort()
     return segment_keys
+
+
+def get_json_object(bucket: str, key: str) -> dict | None:
+    """Read one JSON object (e.g. a segment analysis file); None when missing or unreadable.
+
+    Logs the error type only: the object may hold document content.
+    """
+    try:
+        response = get_s3_client().get_object(Bucket=bucket, Key=key)
+        data = json.loads(response["Body"].read().decode("utf-8"))
+    except Exception as e:  # a page that cannot be read is skipped
+        print(f"s3 read failed for {key}: {type(e).__name__}")
+        return None
+    return data if isinstance(data, dict) else None

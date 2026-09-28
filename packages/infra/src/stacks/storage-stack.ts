@@ -130,10 +130,15 @@ export class StorageStack extends Stack {
     });
 
     // Backend Table (One Table Design)
+    // TTL on expires_at (epoch seconds): items that set it delete themselves
+    // (today the file-check Ask usage ledger, PROJ#/FCASK#, now + retentionDays).
+    // Items without the attribute are never expired. Enabling TTL is an
+    // in-place update; its REMOVE stream records match no WorkflowStream filter.
     const backendTable = new TableV2(this, 'BackendTable', {
       partitionKey: { name: 'PK', type: AttributeType.STRING },
       sortKey: { name: 'SK', type: AttributeType.STRING },
       billing: Billing.onDemand(),
+      timeToLiveAttribute: 'expires_at',
       dynamoStream: StreamViewType.NEW_AND_OLD_IMAGES,
       globalSecondaryIndexes: [
         {

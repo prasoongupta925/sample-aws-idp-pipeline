@@ -117,8 +117,9 @@ class TestCreateDocumentUpload:
         assert data["upload_url"] == "https://s3.amazonaws.com/presigned-url"
         mock_table.put_item.assert_called_once()
 
+    @patch("app.routers.documents.get_s3_client")
     @patch("app.ddb.projects.get_table")
-    def test_create_document_upload_project_not_found(self, mock_get_table):
+    def test_create_document_upload_project_not_found(self, mock_get_table, mock_get_s3):
         mock_table = MagicMock()
         mock_table.get_item.return_value = {}
         mock_get_table.return_value = mock_table
@@ -135,7 +136,8 @@ class TestCreateDocumentUpload:
         assert response.status_code == 404
         assert response.json()["detail"] == "Project not found"
 
-    def test_create_document_upload_file_too_large(self):
+    @patch("app.routers.documents.get_s3_client")
+    def test_create_document_upload_file_too_large(self, mock_get_s3):
         response = client.post(
             "/projects/proj-1/documents",
             json={
@@ -320,8 +322,9 @@ class TestDeleteDocument:
         mock_table.delete_item.assert_any_call(Key={"PK": "PROJ#proj-1", "SK": "FACTS#doc-1"})
         mock_table.delete_item.assert_any_call(Key={"PK": "PROJ#proj-1", "SK": "DOC#doc-1"})
 
+    @patch("app.routers.documents.get_s3_client")
     @patch("app.ddb.documents.get_table")
-    def test_delete_document_not_found(self, mock_get_table):
+    def test_delete_document_not_found(self, mock_get_table, mock_get_s3):
         mock_table = MagicMock()
         mock_table.get_item.return_value = {}
         mock_get_table.return_value = mock_table

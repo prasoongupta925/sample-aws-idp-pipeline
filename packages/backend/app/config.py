@@ -22,6 +22,16 @@ class Config(BaseSettings):
     graph_delete_queue_url: str = ""
     # Deterministic file-check Lambda (McpStack, idp-v2-file-check-mcp): name or ARN.
     file_check_function_name: str = ""
+    # POST /projects/{id}/file-check/ask: AWS-sold model only (Amazon Nova 2 Lite,
+    # global inference profile), called with Converse in aws_region.
+    file_check_ask_model_id: str = "global.amazon.nova-2-lite-v1:0"
+    # Hard cap on the estimated input tokens of one Ask call (verdict + facts +
+    # page text + history + question); page text is cut first.
+    file_check_ask_max_input_tokens: int = 12000
+    file_check_ask_max_output_tokens: int = 1024
+    # Days a stored item may live (CDK context retentionDays, default 7): the Ask
+    # usage ledger items get expires_at = now + retention_days (DynamoDB TTL).
+    retention_days: int = 7
 
 
 @lru_cache

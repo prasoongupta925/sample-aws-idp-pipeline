@@ -5,7 +5,12 @@ import { RuntimeConfig } from '../../core/runtime-config.js';
 import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { StringParameter } from 'aws-cdk-lib/aws-ssm';
 import { SSM_KEYS } from '../../constants/ssm-keys.js';
-import { BLOCKED_BEDROCK_MODEL_RESOURCES } from '../../constants/bedrock.js';
+import {
+  BLOCKED_BEDROCK_MODEL_RESOURCES,
+  FILE_CHECK_ASK_MODEL_ID,
+  bedrockModelInvokeResources,
+} from '../../constants/bedrock.js';
+import { getRetentionDays } from '../retention-config.js';
 import { Bucket, IBucket } from 'aws-cdk-lib/aws-s3';
 import { Table, ITable } from 'aws-cdk-lib/aws-dynamodb';
 import { IVpc, SubnetType, Port, SecurityGroup } from 'aws-cdk-lib/aws-ec2';
@@ -56,6 +61,11 @@ function getTableFromSsm(
 
 export interface BackendProps {
   vpc: IVpc;
+  /**
+   * Model of POST /projects/{id}/file-check/ask (AWS-sold models only).
+   * @default FILE_CHECK_ASK_MODEL_ID (Amazon Nova 2 Lite, global profile)
+   */
+  fileCheckAskModelId?: string;
 }
 
 export class Backend extends Construct {
@@ -66,6 +76,8 @@ export class Backend extends Construct {
     super(scope, id);
 
     const { vpc } = props;
+    const fileCheckAskModelId =
+      props.fileCheckAskModelId ?? FILE_CHECK_ASK_MODEL_ID;
 
     const cluster = new Cluster(this, 'Cluster', {
       vpc,
@@ -162,6 +174,10 @@ export class Backend extends Construct {
           GRAPH_SERVICE_FUNCTION_NAME: graphServiceFunctionArn,
           GRAPH_DELETE_QUEUE_URL: graphDeleteQueueUrl,
           FILE_CHECK_FUNCTION_NAME: fileCheckFunctionArn,
+          // File-check Ask: model, and the lifetime of its usage-ledger items
+          // (DynamoDB TTL attribute expires_at, see StorageStack).
+          FILE_CHECK_ASK_MODEL_ID: fileCheckAskModelId,
+          RETENTION_DAYS: String(getRetentionDays(this)),
         },
       },
       runtimePlatform: {
@@ -264,6 +280,21 @@ export class Backend extends Construct {
           graphServiceFunctionArn,
           graphBuilderFunctionArn,
         ],
+      }),
+    );
+
+    // File-check Ask: Converse on the Ask model's inference profile and the
+    // foundation models it routes to. (Also covered by the broad grant above;
+    // kept explicit so the Ask keeps working if that grant is narrowed.)
+    taskRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'InvokeFileCheckAskModel',
+        actions: ['bedrock:InvokeModel'],
+        resources: bedrockModelInvokeResources(
+          fileCheckAskModelId,
+          Stack.of(this).region,
+          Stack.of(this).account,
+        ),
       }),
     );
 
