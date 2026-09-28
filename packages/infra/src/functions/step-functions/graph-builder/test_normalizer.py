@@ -2,7 +2,7 @@
 
 Usage:
     python -m pytest test_normalizer.py -v
-    ENTITY_NORMALIZATION_MODEL_ID=global.anthropic.claude-sonnet-5 python -m pytest test_normalizer.py -v -s
+    ENTITY_NORMALIZATION_MODEL_ID=global.amazon.nova-2-lite-v1:0 python -m pytest test_normalizer.py -v -s
 """
 import json
 import sys

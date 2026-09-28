@@ -4,10 +4,9 @@ import { buildPrompt } from './prompt.js';
 import type { HybridResult, SearchAnswer } from '../types.js';
 
 const MODEL_ID =
-  process.env.SUMMARIZE_MODEL_ID ??
-  'global.amazon.nova-2-lite-v1:0';
+  process.env.SUMMARIZE_MODEL_ID ?? 'global.amazon.nova-2-lite-v1:0';
 
-export async function summarizeWithHaiku(
+export async function summarizeWithNova(
   query: string,
   results: HybridResult[],
 ): Promise<SearchAnswer> {

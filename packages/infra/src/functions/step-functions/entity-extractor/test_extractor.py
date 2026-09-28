@@ -4,7 +4,7 @@ Requires AWS credentials and Bedrock access.
 Set ENTITY_EXTRACTION_MODEL_ID env var before running.
 
 Usage:
-    ENTITY_EXTRACTION_MODEL_ID=global.anthropic.claude-haiku-4-5-20251001-v1:0 \
+    ENTITY_EXTRACTION_MODEL_ID=global.amazon.nova-2-lite-v1:0 \
     python -m pytest test_extractor.py -v -s
 """
 import json

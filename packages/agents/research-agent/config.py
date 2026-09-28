@@ -1,4 +1,5 @@
 import logging
+import os
 from functools import lru_cache
 
 import boto3
@@ -15,7 +16,11 @@ class Config(BaseSettings):
         env_file=".env.local", env_file_encoding="utf-8", extra="ignore"
     )
 
-    aws_region: str = "us-east-1"
+    aws_region: str = (
+        os.environ.get("AWS_REGION")
+        or os.environ.get("AWS_DEFAULT_REGION")
+        or "ap-south-1"
+    )
     agent_storage_bucket_name: str = ""
     session_storage_bucket_name: str = ""
     mcp_gateway_url: str = ""

@@ -14,7 +14,8 @@ import {
   Gateway,
   Runtime,
 } from '@aws-cdk/aws-bedrock-agentcore-alpha';
-import { IdpAgent, SSM_KEYS } from ':idp-v2/common-constructs';
+import { IdpAgent, SSM_KEYS, getRegionConfig } from ':idp-v2/common-constructs';
+import chatModels from '../chat-models.json' with { type: 'json' };
 
 export interface AgentStackProps extends StackProps {
   gateway: Gateway;
@@ -86,6 +87,15 @@ export class AgentStack extends Stack {
       'DocumentBucket',
       documentBucketName,
     );
+
+    // Selectable chat models (AWS-sold only). The backend (GET /chat/models)
+    // and the agent (model_id allowlist) read this parameter.
+    new StringParameter(this, 'ChatModelCatalogParam', {
+      parameterName: SSM_KEYS.CHAT_MODEL_CATALOG,
+      stringValue: JSON.stringify(chatModels),
+      description:
+        'Selectable chat models (AWS-sold only). First entry is the default.',
+    });
 
     // Initialize prompt files in S3 on first deployment
     const promptSeeds: { id: string; localPath: string; s3Key: string }[] = [
@@ -207,7 +217,7 @@ export class AgentStack extends Stack {
       sessionStorageBucket,
       backendTable,
       gateway,
-      bedrockModelId: 'global.amazon.nova-2-lite-v1:0',
+      bedrockModelId: 'zai.glm-5',
       agentStorageBucket,
       websocketMessageQueue,
       codeInterpreterIdentifier: idpCodeInterpreter.codeInterpreterId,
@@ -241,6 +251,11 @@ export class AgentStack extends Stack {
       backendTable,
       gateway,
       agentStorageBucket,
+      // Nova Sonic is not offered in every region (e.g. ap-south-1); region is
+      // config (context voiceModelRegion)
+      extraEnvironment: {
+        VOICE_MODEL_REGION: getRegionConfig(this).voiceModelRegion,
+      },
     });
 
     new StringParameter(this, 'BidiAgentRuntimeArnParam', {

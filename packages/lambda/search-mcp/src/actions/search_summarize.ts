@@ -1,5 +1,5 @@
 import { invokeLanceDB } from '../lib/clients.js';
-import { summarizeWithHaiku } from '../lib/summarize.js';
+import { summarizeWithNova } from '../lib/summarize.js';
 import type { SearchInput, HybridResult, SearchAnswer } from '../types.js';
 
 export const handler = async (event: SearchInput): Promise<SearchAnswer> => {
@@ -22,5 +22,5 @@ export const handler = async (event: SearchInput): Promise<SearchAnswer> => {
     };
   }
 
-  return summarizeWithHaiku(query, results);
+  return summarizeWithNova(query, results);
 };

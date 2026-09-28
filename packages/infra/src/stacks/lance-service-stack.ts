@@ -5,7 +5,11 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { StringParameter } from 'aws-cdk-lib/aws-ssm';
 import { RustFunction } from 'cargo-lambda-cdk';
 import { Construct } from 'constructs';
-import { SSM_KEYS } from ':idp-v2/common-constructs';
+import {
+  BLOCKED_BEDROCK_MODEL_RESOURCES,
+  SSM_KEYS,
+  getRegionConfig,
+} from ':idp-v2/common-constructs';
 
 export class LanceServiceStack extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
@@ -51,6 +55,9 @@ export class LanceServiceStack extends Stack {
           TOKA_FUNCTION_NAME: tokaFunction.functionName,
           LANCEDB_EXPRESS_BUCKET_NAME: lancedbExpressBucketName,
           LANCEDB_LOCK_TABLE_NAME: lancedbLockTableName,
+          // Amazon embedding models are not offered in every region (e.g.
+          // ap-south-1); region is config (context embeddingRegion)
+          EMBEDDING_REGION: getRegionConfig(this).embeddingRegion,
         },
         bundling: {
           forcedDockerBundling: true,
@@ -102,6 +109,19 @@ export class LanceServiceStack extends Stack {
           'bedrock:InvokeModelWithResponseStream',
         ],
         resources: ['*'],
+      }),
+    );
+
+    // Only AWS-sold models: explicitly deny non-AWS-sold model providers.
+    lanceDbServiceFunction.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'DenyNonAwsSoldModels',
+        effect: iam.Effect.DENY,
+        actions: [
+          'bedrock:InvokeModel',
+          'bedrock:InvokeModelWithResponseStream',
+        ],
+        resources: BLOCKED_BEDROCK_MODEL_RESOURCES,
       }),
     );
 

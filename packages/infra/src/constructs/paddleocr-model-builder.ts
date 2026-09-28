@@ -46,9 +46,11 @@ export interface PaddleOcrModelBuilderProps {
   repositoryName?: string;
 }
 
-// Dockerfile content for PaddleOCR SageMaker
-const DOCKERFILE_CONTENT = `# PaddleOCR Docker Image for AWS SageMaker
-FROM 763104351884.dkr.ecr.us-east-1.amazonaws.com/pytorch-inference:2.2.0-gpu-py310-cu118-ubuntu20.04-sagemaker
+// Dockerfile content for PaddleOCR SageMaker. The AWS Deep Learning Containers
+// base image (registry account 763104351884) is pulled from the stack region.
+function dockerfileContent(region: string): string {
+  return `# PaddleOCR Docker Image for AWS SageMaker
+FROM 763104351884.dkr.ecr.${region}.amazonaws.com/pytorch-inference:2.2.0-gpu-py310-cu118-ubuntu20.04-sagemaker
 
 WORKDIR /opt/ml/code
 ENV PADDLEOCR_HOME=/tmp/.paddleocr
@@ -71,6 +73,7 @@ RUN pip install --upgrade pip && \\
 RUN pip install "paddleocr[all]" "paddlex[ocr]"
 
 EXPOSE 8080`;
+}
 
 export class PaddleOcrModelBuilder extends Construct {
   public readonly repository: Repository;
@@ -85,6 +88,7 @@ export class PaddleOcrModelBuilder extends Construct {
     const repositoryName = props.repositoryName || 'paddleocr-sagemaker';
     const region = Stack.of(this).region;
     const account = Stack.of(this).account;
+    const dockerfile = dockerfileContent(region);
 
     // Read inference.py content
     const inferenceCode = fs.readFileSync(props.inferenceCodePath, 'utf-8');
@@ -92,7 +96,7 @@ export class PaddleOcrModelBuilder extends Construct {
     // Calculate hashes for change detection
     const dockerHash = crypto
       .createHash('md5')
-      .update(DOCKERFILE_CONTENT)
+      .update(dockerfile)
       .digest('hex')
       .substring(0, 8);
 
@@ -134,14 +138,14 @@ export class PaddleOcrModelBuilder extends Construct {
               'echo Logging in to Amazon ECR...',
               `aws ecr get-login-password --region ${region} | docker login --username AWS --password-stdin ${account}.dkr.ecr.${region}.amazonaws.com`,
               'echo Logging in to SageMaker ECR for base image...',
-              `aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 763104351884.dkr.ecr.us-east-1.amazonaws.com`,
+              `aws ecr get-login-password --region ${region} | docker login --username AWS --password-stdin 763104351884.dkr.ecr.${region}.amazonaws.com`,
             ],
           },
           build: {
             commands: [
               'echo Building Docker image...',
               `cat > Dockerfile << 'DOCKERFILE_EOF'
-${DOCKERFILE_CONTENT}
+${dockerfile}
 DOCKERFILE_EOF`,
               'cat Dockerfile',
               `docker build -t ${repositoryName}:latest .`,

@@ -69,15 +69,19 @@ def get_mcp_client():
 MODEL_CATALOG_SSM_KEY = "/idp-v2/chat/models"
 _MODEL_ALLOWLIST_TTL_SECONDS = 300
 # Built-in catalog of the shipped models: model id -> supportsReasoning. Mirrors
-# the backend's default catalog (packages/backend/app/routers/chat.py). Used
-# ONLY when the SSM catalog is missing/malformed/empty, so the default selector
-# works before the operator creates the parameter. A valid SSM catalog REPLACES
-# it (matching the backend), so removing a model from SSM actually disallows it.
+# packages/infra/src/chat-models.json and the backend's default catalog
+# (packages/backend/app/routers/chat.py); AWS-sold models only. Used ONLY when
+# the SSM catalog (created by CDK) is missing/malformed/empty. A valid SSM
+# catalog REPLACES it (matching the backend), so removing a model from SSM
+# actually disallows it.
 # We keep supportsReasoning (not just ids) so effort is gated on the RESOLVED
 # model's capability, not on the originally-requested one (which may have been
 # dropped and fallen back to a model that rejects effort).
 _DEFAULT_MODEL_CATALOG: dict[str, bool] = {
+    "zai.glm-5": False,
     "global.amazon.nova-2-lite-v1:0": False,
+    "deepseek.v3.2": False,
+    "moonshotai.kimi-k2.5": False,
 }
 # (catalog dict, fetched_at monotonic) - refreshed lazily past the TTL.
 _model_catalog_cache: tuple[dict[str, bool], float] | None = None
@@ -164,10 +168,10 @@ def _resolve_model(requested: str | None, default: str) -> tuple[str, bool]:
     return default, True
 
 
-# UI reasoning level -> Bedrock effort. Both Opus 4.8 and Sonnet 5 accept effort
-# via additional_request_fields as {"output_config": {"effort": ...}}. The UI's
-# "high" maps to "xhigh" - Anthropic recommends xhigh for agentic use cases,
-# which is what this agent does.
+# UI reasoning level -> Bedrock effort, sent via additional_request_fields as
+# {"output_config": {"effort": ...}} ONLY to catalog models with
+# supportsReasoning=true (none of the shipped AWS-sold models). The UI's "high"
+# maps to "xhigh" for agentic use.
 REASONING_TO_EFFORT = {
     "low": "low",
     "medium": "medium",
@@ -241,8 +245,8 @@ def get_agent(
     resolved_model_id, supports_reasoning = _resolve_model(model_id, config.bedrock_model_id)
     # Attach output_config.effort only when the client sent a reasoning level
     # AND the resolved model actually supports effort. Gating on the resolved
-    # model (not the request) means a fallback to a no-effort model like Sonnet
-    # 4.6 won't send an effort field that Bedrock would reject.
+    # model (not the request) means a fallback to a no-effort model won't send
+    # an effort field that Bedrock would reject.
     model_kwargs = {
         "model_id": resolved_model_id,
         "region_name": config.aws_region,

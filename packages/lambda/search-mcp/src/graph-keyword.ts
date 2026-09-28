@@ -6,7 +6,7 @@ import {
   bedrockClient,
 } from './lib/clients.js';
 
-const HAIKU_MODEL_ID = 'global.amazon.nova-2-lite-v1:0';
+const SUMMARY_MODEL_ID = 'global.amazon.nova-2-lite-v1:0';
 
 export interface GraphKeywordInput {
   project_id: string;
@@ -138,7 +138,7 @@ export async function handler(
       return true;
     });
 
-  // 5. Summarize with Haiku
+  // 5. Summarize with Amazon Nova 2 Lite
   const resultsText = contentsToUse
     .map(
       (s, i) =>
@@ -179,7 +179,7 @@ Output format:
 (Information based on original content)`;
 
   const command = new ConverseCommand({
-    modelId: HAIKU_MODEL_ID,
+    modelId: SUMMARY_MODEL_ID,
     messages: [{ role: 'user', content: [{ text: prompt }] }],
     inferenceConfig: { maxTokens: 2048 },
   });

@@ -24,7 +24,17 @@ async fn main() -> Result<(), Error> {
 
     let aws_config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
     let lambda_client = aws_sdk_lambda::Client::new(&aws_config);
-    let bedrock_client = aws_sdk_bedrockruntime::Client::new(&aws_config);
+    // Amazon embedding models are not offered in every region (e.g. ap-south-1):
+    // call Bedrock in EMBEDDING_REGION when set, else in the Lambda's own region.
+    let bedrock_client = match std::env::var("EMBEDDING_REGION") {
+        Ok(region) if !region.is_empty() => {
+            let conf = aws_sdk_bedrockruntime::config::Builder::from(&aws_config)
+                .region(aws_sdk_bedrockruntime::config::Region::new(region))
+                .build();
+            aws_sdk_bedrockruntime::Client::from_conf(conf)
+        }
+        _ => aws_sdk_bedrockruntime::Client::new(&aws_config),
+    };
 
     lambda_runtime::run(service_fn(|event: LambdaEvent<LanceDbAction>| {
         let lambda_client = &lambda_client;

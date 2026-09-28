@@ -5,9 +5,9 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '../../lib/utils';
 
-// Chat model with the metric bars shown in the preview card. Only Anthropic
-// models are offered here (the agent passes model_id straight to Bedrock and
-// the runtime IAM role gates access), so there is no provider column - reasoning
+// Chat model with the metric bars shown in the preview card. Only AWS-sold
+// models are offered here (the catalog comes from CDK-managed SSM and the agent
+// validates model_id against it), so there is no provider column - reasoning
 // is the only per-model knob.
 export type LlmModel = {
   value: string;
@@ -23,8 +23,8 @@ export type LlmModel = {
     cost: number;
   };
   // Whether the model accepts a reasoning/effort level. Models without it
-  // (e.g. Sonnet 4.6) hide the reasoning control and never send a reasoning
-  // value. Defaults to true when omitted.
+  // hide the reasoning control and never send a reasoning value. Defaults to
+  // true when omitted.
   supportsReasoning?: boolean;
 };
 
@@ -374,8 +374,8 @@ export function ModelSelectorPrompt({
     const next = { ...reasonings, [modelValue]: reasoning };
     onReasoningChange(modelValue, reasoning, next);
     // Changing a model's reasoning in its preview card also selects that model,
-    // so picking "Opus + High" applies immediately instead of only updating the
-    // reasoning of a model the user hasn't actually chosen.
+    // so picking a model with "High" applies immediately instead of only
+    // updating the reasoning of a model the user hasn't actually chosen.
     if (modelValue !== selectedModel.value) {
       const model = models.find((m) => m.value === modelValue);
       if (model) onModelChange(model);

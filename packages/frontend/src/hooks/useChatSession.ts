@@ -1200,8 +1200,8 @@ export function useChatSession({
         // with the same model.
         saveSessionModel(currentSessionId, modelId);
 
-        // Only send a reasoning level for models that support it; models like
-        // Sonnet 4.6 have no effort control, so we omit reasoning entirely.
+        // Only send a reasoning level for models that support it; models with
+        // supportsReasoning false have no effort control, so omit it entirely.
         const selectedModel = models?.find((m) => m.value === modelId);
         const reasoningToSend =
           selectedModel?.supportsReasoning === false

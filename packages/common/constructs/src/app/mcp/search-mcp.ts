@@ -1,5 +1,5 @@
 import { ArnFormat, Duration, Stack } from 'aws-cdk-lib';
-import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
+import { Effect, PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { Runtime, Architecture } from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
@@ -7,6 +7,8 @@ import { StringParameter } from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 import * as path from 'path';
 import { SSM_KEYS } from '../../constants/ssm-keys.js';
+import { BLOCKED_BEDROCK_MODEL_RESOURCES } from '../../constants/bedrock.js';
+import { getRegionConfig } from '../../core/region-config.js';
 
 export class SearchMcp extends Construct {
   public readonly function: NodejsFunction;
@@ -52,8 +54,9 @@ export class SearchMcp extends Construct {
         DOCUMENT_STORAGE_BUCKET: documentStorageBucketName,
         SUMMARIZE_MODEL_ID: 'global.amazon.nova-2-lite-v1:0',
         RERANK_MODEL_ID: 'amazon.rerank-v1:0',
-        // Amazon Rerank is not offered in us-east-1; call it in us-west-2.
-        RERANK_REGION: 'us-west-2',
+        // Amazon Rerank is not offered in every region (e.g. ap-south-1);
+        // region is config (context rerankRegion)
+        RERANK_REGION: getRegionConfig(this).rerankRegion,
       },
     });
 
@@ -70,6 +73,19 @@ export class SearchMcp extends Construct {
       new PolicyStatement({
         actions: ['bedrock:InvokeModel', 'bedrock:Rerank'],
         resources: ['*'],
+      }),
+    );
+
+    // Only AWS-sold models: explicitly deny non-AWS-sold model providers.
+    this.function.addToRolePolicy(
+      new PolicyStatement({
+        sid: 'DenyNonAwsSoldModels',
+        effect: Effect.DENY,
+        actions: [
+          'bedrock:InvokeModel',
+          'bedrock:InvokeModelWithResponseStream',
+        ],
+        resources: BLOCKED_BEDROCK_MODEL_RESOURCES,
       }),
     );
 

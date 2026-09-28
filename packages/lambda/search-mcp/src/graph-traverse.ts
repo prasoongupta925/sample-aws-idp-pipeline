@@ -5,7 +5,7 @@ import {
   bedrockClient,
 } from './lib/clients.js';
 
-const HAIKU_MODEL_ID = 'global.amazon.nova-2-lite-v1:0';
+const SUMMARY_MODEL_ID = 'global.amazon.nova-2-lite-v1:0';
 
 export interface GraphTraverseInput {
   project_id: string;
@@ -151,7 +151,7 @@ export async function handler(
 
   const prompt = buildPrompt(query, segmentContents, entityList);
   const command = new ConverseCommand({
-    modelId: HAIKU_MODEL_ID,
+    modelId: SUMMARY_MODEL_ID,
     messages: [{ role: 'user', content: [{ text: prompt }] }],
     inferenceConfig: { maxTokens: 2048 },
   });

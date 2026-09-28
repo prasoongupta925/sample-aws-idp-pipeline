@@ -3,6 +3,7 @@ import { ArnFormat, Stack } from 'aws-cdk-lib';
 import { Platform } from 'aws-cdk-lib/aws-ecr-assets';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { SSM_KEYS } from '../../constants/ssm-keys.js';
+import { BLOCKED_BEDROCK_MODEL_RESOURCES } from '../../constants/bedrock.js';
 import { IBucket } from 'aws-cdk-lib/aws-s3';
 import { ITable } from 'aws-cdk-lib/aws-dynamodb';
 import { IQueue } from 'aws-cdk-lib/aws-sqs';
@@ -28,6 +29,8 @@ export interface IdpAgentProps {
   backendUrl?: string;
   /** ARN of the chat agent runtime to invoke as a tool */
   chatAgentRuntimeArn?: string;
+  /** Extra environment variables (applied last, so they win) */
+  extraEnvironment?: Record<string, string>;
 }
 
 export class IdpAgent extends Construct {
@@ -49,6 +52,7 @@ export class IdpAgent extends Construct {
       codeInterpreterIdentifier,
       backendUrl,
       chatAgentRuntimeArn,
+      extraEnvironment,
     } = props;
 
     const dockerImage = AgentRuntimeArtifact.fromAsset(agentPath, {
@@ -80,6 +84,7 @@ export class IdpAgent extends Construct {
         ...(chatAgentRuntimeArn && {
           CHAT_AGENT_RUNTIME_ARN: chatAgentRuntimeArn,
         }),
+        ...extraEnvironment,
       },
     });
 
@@ -108,24 +113,6 @@ export class IdpAgent extends Construct {
     // Grant DynamoDB read/write access for backend table
     backendTable.grantReadWriteData(this.runtime.role);
 
-    // Add AmazonBedrockMarketplaceAccess managed policy
-    this.runtime.role.addManagedPolicy(
-      iam.ManagedPolicy.fromAwsManagedPolicyName(
-        'AmazonBedrockMarketplaceAccess',
-      ),
-    );
-
-    // Add AWS Marketplace subscription permissions (required for Marketplace models like Claude)
-    this.runtime.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: [
-          'aws-marketplace:ViewSubscriptions',
-          'aws-marketplace:Subscribe',
-        ],
-        resources: ['*'],
-      }),
-    );
-
     // Add Bedrock model invocation permissions
     this.runtime.addToRolePolicy(
       new iam.PolicyStatement({
@@ -138,8 +125,23 @@ export class IdpAgent extends Construct {
       }),
     );
 
-    // Read the operator-managed chat model catalog to validate a requested
-    // model_id against the allowlist (defense beyond the broad InvokeModel grant).
+    // Only AWS-sold models: explicitly deny non-AWS-sold model providers
+    // (no AWS Marketplace access is granted either).
+    this.runtime.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'DenyNonAwsSoldModels',
+        effect: iam.Effect.DENY,
+        actions: [
+          'bedrock:InvokeModel',
+          'bedrock:InvokeModelWithResponseStream',
+        ],
+        resources: BLOCKED_BEDROCK_MODEL_RESOURCES,
+      }),
+    );
+
+    // Read the chat model catalog (created by CDK in AgentStack) to validate a
+    // requested model_id against the allowlist (defense beyond the broad
+    // InvokeModel grant).
     this.runtime.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['ssm:GetParameter'],

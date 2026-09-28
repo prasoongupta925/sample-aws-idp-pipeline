@@ -32,8 +32,12 @@ EMBEDDING_MODEL_ID = os.environ.get(
 
 def generate_single_embedding(text: str, client=None) -> List[float]:
     if client is None:
+        # Amazon embedding models are not offered in every region (e.g.
+        # ap-south-1): EMBEDDING_REGION (CDK config) wins over the Lambda region.
         client = boto3.client(
-            'bedrock-runtime', region_name=os.environ.get('AWS_REGION', 'us-east-1')
+            'bedrock-runtime',
+            region_name=os.environ.get('EMBEDDING_REGION')
+            or os.environ.get('AWS_REGION', 'us-east-1'),
         )
 
     try:

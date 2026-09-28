@@ -1,9 +1,11 @@
 ---
 name: searching
-description: "Search for information across unstructured documents (hybrid search, knowledge graph) AND structured datasets (Text2SQL over spreadsheet tables). Use when the user asks questions, requests information lookup, needs explanations, summaries, comparisons, or exact numbers/aggregations/rankings from uploaded documents or datasets. Any user question requiring information lookup. When in doubt, use this skill."
+description: 'Search for information across unstructured documents (hybrid search, knowledge graph) AND structured datasets (Text2SQL over spreadsheet tables). Use when the user asks questions, requests information lookup, needs explanations, summaries, comparisons, or exact numbers/aggregations/rankings from uploaded documents or datasets. Any user question requiring information lookup. When in doubt, use this skill.'
 ---
 
 # Search Skill
+
+Questions about loan-file readiness, completeness, consistency or missing documents use the **file-check** skill (`filecheck___run_file_check`) instead of search.
 
 Do NOT mention internal search strategy or tool selection reasoning to the user. Just search and answer.
 
@@ -35,6 +37,7 @@ Return a dataset's reference document (columns, types, enum values, query patter
 
 **`data___run_sql`**
 Run a read-only DuckDB query.
+
 - Single dataset: pass `dataset_uri`; the table is named `data` (`FROM data`).
 - JOIN across datasets (e.g. multiple sheets, or two related tables): pass `dataset_uris` (a list) and reference each by its `table_name` from `describe_dataset`/`search_datasets` (e.g. `FROM t_aaa a JOIN t_bbb b ON a.code = b.code`). Include EVERY dataset your SQL touches in `dataset_uris`.
 

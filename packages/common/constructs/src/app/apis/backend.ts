@@ -5,6 +5,7 @@ import { RuntimeConfig } from '../../core/runtime-config.js';
 import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { StringParameter } from 'aws-cdk-lib/aws-ssm';
 import { SSM_KEYS } from '../../constants/ssm-keys.js';
+import { BLOCKED_BEDROCK_MODEL_RESOURCES } from '../../constants/bedrock.js';
 import { Bucket, IBucket } from 'aws-cdk-lib/aws-s3';
 import { Table, ITable } from 'aws-cdk-lib/aws-dynamodb';
 import { IVpc, SubnetType, Port, SecurityGroup } from 'aws-cdk-lib/aws-ec2';
@@ -24,7 +25,12 @@ import {
 } from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpAlbIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import { HttpIamAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
-import { Grant, IGrantable, PolicyStatement } from 'aws-cdk-lib/aws-iam';
+import {
+  Effect,
+  Grant,
+  IGrantable,
+  PolicyStatement,
+} from 'aws-cdk-lib/aws-iam';
 import { Distribution } from 'aws-cdk-lib/aws-cloudfront';
 import { CfnApi } from 'aws-cdk-lib/aws-apigatewayv2';
 
@@ -136,6 +142,7 @@ export class Backend extends Construct {
           streamPrefix: 'backend',
         }),
         environment: {
+          AWS_REGION: Stack.of(this).region,
           LANCEDB_LOCK_TABLE_NAME: lancedbLockTable.tableName,
           DOCUMENT_STORAGE_BUCKET_NAME: documentStorage.bucketName,
           BACKEND_TABLE_NAME: backendTable.tableName,
@@ -197,9 +204,21 @@ export class Backend extends Construct {
       }),
     );
 
-    // Grant read on the operator-managed chat model catalog parameter (GET
-    // /chat/models). The parameter is not created by CDK - operators edit it to
-    // add/remove models without a redeploy.
+    // Only AWS-sold models: explicitly deny non-AWS-sold model providers.
+    taskRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'DenyNonAwsSoldModels',
+        effect: Effect.DENY,
+        actions: [
+          'bedrock:InvokeModel',
+          'bedrock:InvokeModelWithResponseStream',
+        ],
+        resources: BLOCKED_BEDROCK_MODEL_RESOURCES,
+      }),
+    );
+
+    // Grant read on the chat model catalog parameter (GET /chat/models). The
+    // parameter is created by CDK (AgentStack) from chat-models.json.
     taskRole.addToPrincipalPolicy(
       new PolicyStatement({
         actions: ['ssm:GetParameter'],

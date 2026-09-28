@@ -55,7 +55,10 @@ class Config(BaseSettings):
         env_file=".env.local", env_file_encoding="utf-8", extra="ignore"
     )
 
-    aws_region: str = "us-east-1"
+    aws_region: str = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "ap-south-1"
+    # Region for the Nova Sonic voice model (env VOICE_MODEL_REGION). Nova Sonic is
+    # not offered in every region (e.g. ap-south-1); empty = aws_region.
+    voice_model_region: str = ""
     agent_storage_bucket_name: str = ""
     session_storage_bucket_name: str = ""
     mcp_gateway_url: str = ""
@@ -117,7 +120,7 @@ def create_bidi_model(
             provider_config={
                 "audio": {"voice": nova_voice},
             },
-            client_config={"region": config.aws_region},
+            client_config={"region": config.voice_model_region or config.aws_region},
         )
 
     # =========================================================================

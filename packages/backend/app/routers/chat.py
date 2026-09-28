@@ -15,23 +15,53 @@ from app.s3 import delete_s3_prefix, get_s3_client
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
-# SSM parameter holding the chat model catalog JSON. Operators edit this to
-# add/remove models without redeploying; the agent passes model_id straight to
-# Bedrock so no infra change is needed for a new Anthropic model.
+# SSM parameter holding the chat model catalog JSON. CDK (AgentStack) creates it
+# from packages/infra/src/chat-models.json (AWS-sold models only; the first
+# entry is the default). The agent validates model_id against the same catalog.
 MODEL_CATALOG_SSM_KEY = "/idp-v2/chat/models"
 _MODEL_CATALOG_TTL_SECONDS = 60
 
-# Built-in fallback used when the SSM parameter is absent or unreadable.
+# Built-in fallback used when the SSM parameter is absent or unreadable. Keep it
+# identical to packages/infra/src/chat-models.json (GLM-5 first = default).
 _DEFAULT_MODEL_CATALOG: list[dict] = [
+    {
+        "value": "zai.glm-5",
+        "label": "GLM-5",
+        "description": "Z.ai GLM-5, default chat model (AWS-sold, in-region)",
+        "contextWindow": "200K tokens",
+        "inputPrice": "$1.20 / 1M",
+        "outputPrice": "$3.84 / 1M",
+        "metrics": {"intelligence": 8, "speed": 6, "context": 7, "cost": 6},
+        "supportsReasoning": False,
+    },
     {
         "value": "global.amazon.nova-2-lite-v1:0",
         "label": "Nova 2 Lite",
-        "description": "Amazon first-party model (credit-eligible)",
+        "description": "Amazon first-party model (global inference)",
         "contextWindow": "1M tokens",
-        "inputPrice": "$0.30 / 1M",
-        "outputPrice": "$2.50 / 1M",
-        "metrics": {"intelligence": 6, "speed": 9, "context": 10, "cost": 10},
-        # Nova does not accept the Anthropic output_config.effort field.
+        "inputPrice": "$0.35 / 1M",
+        "outputPrice": "$2.95 / 1M",
+        "metrics": {"intelligence": 6, "speed": 9, "context": 10, "cost": 9},
+        "supportsReasoning": False,
+    },
+    {
+        "value": "deepseek.v3.2",
+        "label": "DeepSeek V3.2",
+        "description": "DeepSeek V3.2 (AWS-sold, in-region)",
+        "contextWindow": "128K tokens",
+        "inputPrice": "$0.74 / 1M",
+        "outputPrice": "$2.22 / 1M",
+        "metrics": {"intelligence": 7, "speed": 7, "context": 6, "cost": 8},
+        "supportsReasoning": False,
+    },
+    {
+        "value": "moonshotai.kimi-k2.5",
+        "label": "Kimi K2.5",
+        "description": "Moonshot AI Kimi K2.5 (AWS-sold, in-region)",
+        "contextWindow": "256K tokens",
+        "inputPrice": "$0.72 / 1M",
+        "outputPrice": "$3.60 / 1M",
+        "metrics": {"intelligence": 8, "speed": 6, "context": 8, "cost": 7},
         "supportsReasoning": False,
     },
 ]

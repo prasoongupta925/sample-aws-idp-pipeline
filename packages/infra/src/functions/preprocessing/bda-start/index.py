@@ -69,6 +69,24 @@ def get_bda_runtime_client():
     return bda_runtime_client
 
 
+def _bda_profile_id(region: str) -> str:
+    """BDA cross-region profile for the deploy region (geo prefix us./eu./apac.).
+
+    BDA_PROFILE_ID overrides the derived id.
+    """
+    override = os.environ.get('BDA_PROFILE_ID')
+    if override:
+        return override
+    region = region or ''
+    if region.startswith('us-'):
+        return 'us.data-automation-v1'
+    if region.startswith('eu-'):
+        return 'eu.data-automation-v1'
+    if region.startswith('ap-'):
+        return 'apac.data-automation-v1'
+    return 'us.data-automation-v1'
+
+
 def get_standard_output_config():
     return {
         'document': {
@@ -149,7 +167,8 @@ def handler(event, context):
     output_uri = f's3://{BDA_OUTPUT_BUCKET}/{output_prefix}'
 
     session = boto3.Session()
-    region = session.region_name or 'us-east-1'
+    region = os.environ.get('AWS_REGION') or session.region_name or 'us-east-1'
+    profile_id = _bda_profile_id(region)
     sts_client = boto3.client('sts')
     account_id = sts_client.get_caller_identity()['Account']
 
@@ -160,7 +179,7 @@ def handler(event, context):
             'dataAutomationProjectArn': project_arn,
             'stage': 'LIVE'
         },
-        dataAutomationProfileArn=f'arn:aws:bedrock:{region}:{account_id}:data-automation-profile/us.data-automation-v1'
+        dataAutomationProfileArn=f'arn:aws:bedrock:{region}:{account_id}:data-automation-profile/{profile_id}'
     )
 
     invocation_arn = response['invocationArn']

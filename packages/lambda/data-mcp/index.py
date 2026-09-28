@@ -24,7 +24,9 @@ import s3fs
 from boto3.dynamodb.conditions import Key
 
 TABLE_NAME = os.environ["BACKEND_TABLE_NAME"]
-AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
+AWS_REGION = (
+    os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "ap-south-1"
+)
 LANCEDB_FUNCTION_ARN = os.environ.get("LANCEDB_FUNCTION_ARN", "idp-v2-lance-service")
 
 # Number of datasets search_datasets returns to the LLM.
