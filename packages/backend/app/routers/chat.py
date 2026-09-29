@@ -12,6 +12,7 @@ from app.config import get_config
 from app.duckdb import Session, get_duckdb_connection
 from app.message import ContentItem, parse_content_items
 from app.s3 import delete_s3_prefix, folder_presigner, get_s3_client
+from app.safe_ids import safe_segment
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -161,6 +162,8 @@ async def get_project_sessions(
     """Get sessions for a project from S3 using DuckDB."""
     from app.cache import cached_query_sessions
 
+    safe_segment(x_user_id, "user id")
+    safe_segment(project_id, "project id")
     sessions = await cached_query_sessions(x_user_id, project_id)
 
     if after:
@@ -185,6 +188,8 @@ def get_chat_history(
     project_id: str, session_id: str, x_user_id: str = Header(alias="x-user-id")
 ) -> ChatHistoryResponse:
     """Get chat history for a session from S3 using DuckDB."""
+    for value, field in ((x_user_id, "user id"), (project_id, "project id"), (session_id, "session id")):
+        safe_segment(value, field)
     config = get_config()
     bucket_name = config.session_storage_bucket_name
 
@@ -250,6 +255,8 @@ async def update_session(
     user_id: str = Header(alias="x-user-id"),
 ) -> Session:
     """Update a session's name."""
+    for value, field in ((user_id, "user id"), (project_id, "project id"), (session_id, "session id")):
+        safe_segment(value, field)
     config = get_config()
     bucket_name = config.session_storage_bucket_name
 
@@ -291,6 +298,8 @@ async def delete_session(
     project_id: str, session_id: str, user_id: str = Header(alias="x-user-id")
 ) -> DeleteSessionResponse:
     """Delete a session from S3."""
+    for value, field in ((user_id, "user id"), (project_id, "project id"), (session_id, "session id")):
+        safe_segment(value, field)
     config = get_config()
     bucket_name = config.session_storage_bucket_name
 

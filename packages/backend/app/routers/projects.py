@@ -27,6 +27,7 @@ from app.lancedb import (
 from app.lancedb import delete_graph_keywords_by_project_id as lancedb_delete_graph_keywords
 from app.lancedb import drop_table as lancedb_drop_table
 from app.s3 import delete_s3_prefix
+from app.safe_ids import is_safe_segment
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -287,7 +288,7 @@ async def delete_project(project_id: str, user_id: str = Header(alias="x-user-id
         deleted_info.s3_objects_deleted = s3_deleted
 
     # 5. Delete session files from S3
-    if config.session_storage_bucket_name:
+    if config.session_storage_bucket_name and user_id and is_safe_segment(user_id):
         session_prefix = f"sessions/{user_id}/{project_id}/"
         with contextlib.suppress(Exception):
             session_deleted = delete_s3_prefix(config.session_storage_bucket_name, session_prefix)

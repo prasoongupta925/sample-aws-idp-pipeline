@@ -2,6 +2,7 @@ import json
 from io import BytesIO
 from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -337,3 +338,25 @@ class TestDeleteSession:
 
         assert response.status_code == 500
         assert response.json()["detail"] == "Session storage bucket not configured"
+
+
+class TestSessionPathSafety:
+    """Ids go into S3 keys and a DuckDB glob; glob syntax or separators must be rejected."""
+
+    @pytest.mark.parametrize("user_id", ["*", "user-1/../x", "a?b", "a[b]", "..", "a\\b"])
+    def test_history_rejects_unsafe_user_id(self, user_id):
+        response = client.get("/chat/projects/proj-1/sessions/session-1", headers={"x-user-id": user_id})
+        assert response.status_code == 400
+
+    @pytest.mark.parametrize("session_id", ["*", "s%3F", "s[1]", "s%2A"])
+    def test_history_rejects_unsafe_session_id(self, session_id):
+        response = client.get(f"/chat/projects/proj-1/sessions/{session_id}", headers={"x-user-id": "user-1"})
+        assert response.status_code == 400
+
+    def test_list_rejects_glob_user_id(self):
+        response = client.get("/chat/projects/proj-1/sessions", headers={"x-user-id": "*"})
+        assert response.status_code == 400
+
+    def test_delete_rejects_glob_project_id(self):
+        response = client.delete("/chat/projects/pr*/sessions/session-1", headers={"x-user-id": "user-1"})
+        assert response.status_code == 400
