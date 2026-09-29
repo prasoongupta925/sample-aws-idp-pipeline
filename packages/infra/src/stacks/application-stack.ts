@@ -8,7 +8,6 @@ import {
 import { Stack, StackProps } from 'aws-cdk-lib';
 import { PolicyStatement, Role } from 'aws-cdk-lib/aws-iam';
 import { Vpc } from 'aws-cdk-lib/aws-ec2';
-import { Bucket } from 'aws-cdk-lib/aws-s3';
 import { StringParameter } from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 import { TableV2 } from 'aws-cdk-lib/aws-dynamodb';
@@ -20,16 +19,13 @@ export class ApplicationStack extends Stack {
     const vpcId = StringParameter.valueFromLookup(this, SSM_KEYS.VPC_ID);
     const vpc = Vpc.fromLookup(this, 'Vpc', { vpcId });
 
+    // The web app only names the document bucket in the s3:// references it
+    // sends to the agent (which reads them with its own role); the browser
+    // itself has no S3 access.
     const documentStorageBucketName = StringParameter.valueForStringParameter(
       this,
       SSM_KEYS.DOCUMENT_STORAGE_BUCKET_NAME,
     );
-    const documentStorageBucket = Bucket.fromBucketName(
-      this,
-      'DocumentStorageBucket',
-      documentStorageBucketName,
-    );
-
     RuntimeConfig.ensure(this).config.documentStorageBucketName =
       documentStorageBucketName;
 
@@ -44,16 +40,6 @@ export class ApplicationStack extends Stack {
       SSM_KEYS.BIDI_AGENT_RUNTIME_ARN,
     );
     RuntimeConfig.ensure(this).config.bidiAgentRuntimeArn = bidiAgentRuntimeArn;
-
-    const agentStorageBucketName = StringParameter.valueForStringParameter(
-      this,
-      SSM_KEYS.AGENT_STORAGE_BUCKET_NAME,
-    );
-    const agentStorageBucket = Bucket.fromBucketName(
-      this,
-      'AgentStorageBucket',
-      agentStorageBucketName,
-    );
 
     const websocketCallbackUrl = StringParameter.valueForStringParameter(
       this,
@@ -98,10 +84,15 @@ export class ApplicationStack extends Stack {
     backend.grantInvokeAccess(searchMcpRole);
 
     backend.restrictCorsTo(frontend);
+
+    // Cognito authenticated role (every signed-in user). It has NO S3
+    // permissions: uploads and downloads use presigned URLs that the backend
+    // issues for one object after its checks (project prefix, caller's
+    // artifact prefix, file type and size; 5-minute expiry). What it keeps:
+    // - execute-api:Invoke on the backend API (all app data goes through it);
+    // - AgentCore InvokeAgentRuntime(+WebSocketStream) for chat and voice;
+    // - execute-api on the WebSocket API for live status updates.
     backend.grantInvokeAccess(userIdentity.identityPool.authenticatedRole);
-    documentStorageBucket.grantReadWrite(
-      userIdentity.identityPool.authenticatedRole,
-    );
 
     // Grant Bedrock Agentcore invoke permission
     userIdentity.identityPool.authenticatedRole.addToPrincipalPolicy(
@@ -115,9 +106,6 @@ export class ApplicationStack extends Stack {
         ],
       }),
     );
-
-    // Grant agent storage bucket read access for artifacts
-    agentStorageBucket.grantRead(userIdentity.identityPool.authenticatedRole);
 
     // Grant WebSocket API manage connections permission
     const websocketApiId = StringParameter.valueForStringParameter(

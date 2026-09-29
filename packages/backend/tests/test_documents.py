@@ -73,10 +73,13 @@ class TestListDocuments:
 
 
 class TestCreateDocumentUpload:
-    @patch("app.routers.documents.get_s3_client")
+    @patch("app.routers.documents.get_config")
+    @patch("app.routers.documents.presign_put")
     @patch("app.ddb.documents.get_table")
     @patch("app.ddb.projects.get_table")
-    def test_create_document_upload_success(self, mock_proj_get_table, mock_doc_get_table, mock_get_s3):
+    def test_create_document_upload_success(
+        self, mock_proj_get_table, mock_doc_get_table, mock_presign_put, mock_get_config
+    ):
         mock_table = MagicMock()
         mock_table.get_item.return_value = {
             "Item": {
@@ -97,9 +100,8 @@ class TestCreateDocumentUpload:
         mock_proj_get_table.return_value = mock_table
         mock_doc_get_table.return_value = mock_table
 
-        mock_s3 = MagicMock()
-        mock_s3.generate_presigned_url.return_value = "https://s3.amazonaws.com/presigned-url"
-        mock_get_s3.return_value = mock_s3
+        mock_presign_put.return_value = "https://s3.amazonaws.com/presigned-url"
+        mock_get_config.return_value = MagicMock(document_storage_bucket_name="doc-bucket")
 
         response = client.post(
             "/projects/proj-1/documents",
@@ -115,7 +117,15 @@ class TestCreateDocumentUpload:
         assert data["file_name"] == "test.pdf"
         assert "document_id" in data
         assert data["upload_url"] == "https://s3.amazonaws.com/presigned-url"
+        assert data["expires_in"] == 300
         mock_table.put_item.assert_called_once()
+        doc_id = data["document_id"]
+        mock_presign_put.assert_called_once_with(
+            "doc-bucket",
+            f"projects/proj-1/documents/{doc_id}/{doc_id}.pdf",
+            content_type="application/pdf",
+            content_length=1024,
+        )
 
     @patch("app.routers.documents.get_s3_client")
     @patch("app.ddb.projects.get_table")

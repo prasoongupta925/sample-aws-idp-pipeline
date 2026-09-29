@@ -6,7 +6,8 @@ import { useWebSocketMessage } from '../contexts/WebSocketContext';
 
 interface UseArtifactsOptions {
   fetchApi: <T>(url: string, init?: RequestInit) => Promise<T>;
-  getPresignedDownloadUrl: (bucket: string, key: string) => Promise<string>;
+  /** Backend-issued presigned GET for an artifact key (caller's prefix only). */
+  getArtifactDownloadUrl: (key: string) => Promise<string>;
   projectId: string;
   sidePanelCollapsed: boolean;
   setSidePanelCollapsed: (collapsed: boolean) => void;
@@ -14,7 +15,7 @@ interface UseArtifactsOptions {
 
 export function useArtifacts({
   fetchApi,
-  getPresignedDownloadUrl,
+  getArtifactDownloadUrl,
   projectId,
   sidePanelCollapsed,
   setSidePanelCollapsed,
@@ -83,10 +84,7 @@ export function useArtifacts({
   const handleArtifactDownload = useCallback(
     async (artifact: Artifact) => {
       try {
-        const presignedUrl = await getPresignedDownloadUrl(
-          artifact.s3_bucket,
-          artifact.s3_key,
-        );
+        const presignedUrl = await getArtifactDownloadUrl(artifact.s3_key);
 
         const response = await fetch(presignedUrl);
 
@@ -133,7 +131,7 @@ export function useArtifacts({
         showToast('error', t('chat.downloadFailed', 'Download failed'));
       }
     },
-    [getPresignedDownloadUrl, showToast, t],
+    [getArtifactDownloadUrl, showToast, t],
   );
 
   const handleArtifactViewerClose = useCallback(() => {

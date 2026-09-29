@@ -3,6 +3,14 @@ from functools import lru_cache
 from urllib.parse import urlparse
 
 import boto3
+from botocore.config import Config as BotoConfig
+
+from app.config import get_config
+
+# Lifetime of every presigned URL the backend hands to the browser (uploads and
+# downloads). S3 checks the expiry when a request starts, so an upload or a
+# download that started in time still completes.
+PRESIGNED_URL_EXPIRES_IN = 300
 
 
 def parse_s3_uri(uri: str) -> tuple[str, str]:
@@ -17,6 +25,43 @@ def parse_s3_uri(uri: str) -> tuple[str, str]:
 def get_s3_client():
     """Get cached S3 client singleton."""
     return boto3.client("s3")
+
+
+@lru_cache
+def get_s3_presign_client():
+    """S3 client for URLs the browser uses: SigV4 on the bucket's regional endpoint.
+
+    Without an explicit signature version botocore may presign for the legacy
+    global endpoint (bucket.s3.amazonaws.com), which answers a new bucket outside
+    us-east-1 with a 307 redirect that fails the browser's CORS preflight.
+    """
+    return boto3.client(
+        "s3",
+        region_name=get_config().aws_region,
+        config=BotoConfig(signature_version="s3v4", s3={"addressing_style": "virtual"}),
+    )
+
+
+def presign_put(bucket: str, key: str, content_type: str, content_length: int) -> str:
+    """Presigned PUT for exactly one object, content type and size.
+
+    Content-Type and Content-Length are signed headers: S3 rejects an upload
+    whose type or size differs from what the backend validated.
+    """
+    return get_s3_presign_client().generate_presigned_url(
+        "put_object",
+        Params={"Bucket": bucket, "Key": key, "ContentType": content_type, "ContentLength": content_length},
+        ExpiresIn=PRESIGNED_URL_EXPIRES_IN,
+    )
+
+
+def presign_get(bucket: str, key: str) -> str:
+    """Presigned GET for one object."""
+    return get_s3_presign_client().generate_presigned_url(
+        "get_object",
+        Params={"Bucket": bucket, "Key": key},
+        ExpiresIn=PRESIGNED_URL_EXPIRES_IN,
+    )
 
 
 def _get_content_type(key: str) -> str | None:

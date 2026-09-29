@@ -1,15 +1,23 @@
+from typing import Annotated
+
 from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel
 
+from app.config import get_config
 from app.ddb.artifacts import (
     delete_artifact_item,
     get_artifact_item,
     query_user_artifacts,
     query_user_project_artifacts,
 )
-from app.s3 import delete_s3_prefix
+from app.presigned import PresignError, check_key, user_prefix
+from app.s3 import PRESIGNED_URL_EXPIRES_IN, delete_s3_prefix, presign_get
 
 router = APIRouter(prefix="/artifacts", tags=["artifacts"])
+
+# The web app sends the Cognito username; artifacts live under {user_id}/ in the
+# agent bucket. Authentication is AWS IAM (SigV4) at API Gateway.
+UserId = Annotated[str, Header(alias="x-user-id", pattern=r"^[^\x00-\x1f\x7f]{1,256}$")]
 
 
 class ArtifactResponse(BaseModel):
@@ -27,6 +35,11 @@ class ArtifactResponse(BaseModel):
 class ListArtifactsResponse(BaseModel):
     items: list[ArtifactResponse]
     next_cursor: str | None
+
+
+class PresignedUrlResponse(BaseModel):
+    url: str
+    expires_in: int
 
 
 class DeletedArtifactInfo(BaseModel):
@@ -67,6 +80,37 @@ def list_artifacts(
     ]
 
     return ListArtifactsResponse(items=items, next_cursor=result.next_cursor)
+
+
+@router.get(
+    "/download-url",
+    responses={
+        400: {"description": "The key is not a plain S3 key (e.g. a '..' segment)"},
+        403: {"description": "The key is outside the caller's prefix"},
+    },
+)
+def get_artifact_download_url(
+    user_id: UserId,
+    key: str = Query(
+        description="S3 key in the agent bucket under {user_id}/, e.g. {user_id}/{project_id}/artifacts/..."
+    ),
+) -> PresignedUrlResponse:
+    """Presigned GET (5 minutes) for one of the caller's objects in the agent bucket.
+
+    The bucket is always the agent bucket; the key must be a plain key under the
+    caller's ``{user_id}/`` prefix, where the agents write artifacts.
+    """
+    try:
+        check_key(key, user_prefix(user_id))
+    except PresignError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail) from None
+
+    bucket = get_config().agent_storage_bucket_name
+    if not bucket:
+        raise HTTPException(status_code=503, detail="Agent storage is not configured")
+
+    print(f"presign get artifact user={user_id}")
+    return PresignedUrlResponse(url=presign_get(bucket, key), expires_in=PRESIGNED_URL_EXPIRES_IN)
 
 
 @router.delete("/{artifact_id:path}")

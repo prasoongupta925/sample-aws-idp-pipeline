@@ -377,7 +377,8 @@ sample-aws-idp-pipeline/
 | GET/POST | `/projects` | List / create projects |
 | GET/PUT/DELETE | `/projects/{id}` | Get / update / delete project |
 | GET | `/projects/{id}/workflows` | List project workflows |
-| POST | `/projects/{id}/documents` | Upload document (presigned URL) |
+| POST | `/projects/{id}/documents` | Upload document (presigned PUT: this document's key, type and size, 5 min) |
+| GET | `/projects/{id}/documents/download-url?key=` | Presigned GET (5 min) for a key under `projects/{id}/` |
 | GET/DELETE | `/projects/{id}/documents/{id}` | Get / delete document |
 | GET | `/documents/{id}/workflows/{id}` | Workflow detail with segments |
 | POST | `/documents/{id}/workflows/{id}/reanalyze` | Trigger reanalysis |
@@ -388,6 +389,7 @@ sample-aws-idp-pipeline/
 | GET/PATCH/DELETE | `/chat/.../sessions/{id}` | Get / rename / delete session |
 | GET/POST/PUT/DELETE | `/projects/{id}/agents` | Custom agent CRUD |
 | GET/DELETE | `/artifacts` | List / delete artifacts |
+| GET | `/artifacts/download-url?key=` | Presigned GET (5 min) for a key under the caller's `{user_id}/` prefix |
 | GET | `/projects/{id}/graph` | Project knowledge graph |
 | GET | `/projects/{id}/graph/documents/{id}` | Document-level graph |
 | GET/PUT | `/prompts/system` | System prompt management |
@@ -416,7 +418,7 @@ sample-aws-idp-pipeline/
 ### Frontend (TypeScript)
 - React 19 + TanStack Router
 - Tailwind CSS
-- AWS SDK (S3 upload)
+- S3 transfers via backend-issued presigned URLs (the browser has no S3 permissions)
 - Cognito OIDC authentication
 - WebSocket client
 

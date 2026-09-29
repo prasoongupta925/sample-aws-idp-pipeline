@@ -19,14 +19,15 @@ interface ArtifactViewerProps {
   artifact: Artifact;
   onClose: () => void;
   onDownload: (artifact: Artifact) => void;
-  getPresignedUrl: (bucket: string, key: string) => Promise<string>;
+  /** Backend-issued presigned GET for the artifact's key. */
+  getDownloadUrl: (key: string) => Promise<string>;
 }
 
 export default function ArtifactViewer({
   artifact,
   onClose,
   onDownload,
-  getPresignedUrl,
+  getDownloadUrl,
 }: ArtifactViewerProps) {
   const { t } = useTranslation();
   const [content, setContent] = useState<string | null>(null);
@@ -114,10 +115,7 @@ export default function ArtifactViewer({
     setError(null);
 
     try {
-      const presignedUrl = await getPresignedUrl(
-        artifact.s3_bucket,
-        artifact.s3_key,
-      );
+      const presignedUrl = await getDownloadUrl(artifact.s3_key);
 
       if (isExcel) {
         setExcelUrl(presignedUrl);
@@ -159,7 +157,7 @@ export default function ArtifactViewer({
     }
   }, [
     artifact,
-    getPresignedUrl,
+    getDownloadUrl,
     isExcel,
     isImage,
     isPdf,

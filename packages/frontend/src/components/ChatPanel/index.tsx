@@ -59,7 +59,7 @@ export default function ChatPanel({
   voiceChat,
 }: ChatPanelProps) {
   const { t } = useTranslation();
-  const { getPresignedDownloadUrl } = useAwsClient();
+  const { getArtifactDownloadUrl } = useAwsClient();
   const { showToast } = useToast();
   const chatEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -180,21 +180,13 @@ export default function ChatPanel({
     async (artifact: ChatArtifact) => {
       setDownloadingArtifact(artifact.artifact_id);
       try {
-        let bucket = artifact.s3_bucket;
-        if (!bucket && artifact.url) {
-          const urlMatch = artifact.url.match(
-            /https:\/\/([^.]+)\.s3\.[^.]+\.amazonaws\.com\//,
-          );
-          bucket = urlMatch?.[1];
-        }
-        if (!bucket || !artifact.s3_key) {
-          throw new Error('Missing bucket or s3_key for artifact');
+        // The backend picks the bucket (agent storage) and only signs keys
+        // under the caller's prefix.
+        if (!artifact.s3_key) {
+          throw new Error('Missing s3_key for artifact');
         }
 
-        const presignedUrl = await getPresignedDownloadUrl(
-          bucket,
-          artifact.s3_key,
-        );
+        const presignedUrl = await getArtifactDownloadUrl(artifact.s3_key);
         const response = await fetch(presignedUrl);
 
         if (!response.ok) {
@@ -241,7 +233,7 @@ export default function ChatPanel({
         setDownloadingArtifact(null);
       }
     },
-    [getPresignedDownloadUrl, showToast, t],
+    [getArtifactDownloadUrl, showToast, t],
   );
 
   // Toggle expand for collapsible sections

@@ -12,20 +12,7 @@ import type {
   StepStatus,
 } from '../types/project';
 import type { DocumentProcessingOptions } from '../components/DocumentUploadModal';
-
-const EXT_MIME: Record<string, string> = {
-  dxf: 'application/dxf',
-  // Structured data: browsers often leave file.type empty for these, so map by
-  // extension to the MIME types the backend uses to classify datasets.
-  csv: 'text/csv',
-  tsv: 'text/tab-separated-values',
-  xls: 'application/vnd.ms-excel',
-  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-};
-const getMimeTypeByExt = (name: string): string => {
-  const ext = name.split('.').pop()?.toLowerCase() || '';
-  return EXT_MIME[ext] || 'application/octet-stream';
-};
+import { putToPresignedUrl, uploadContentType } from '../lib/presignedUrls';
 
 interface DocumentWorkflows {
   document_id: string;
@@ -659,7 +646,7 @@ export function useDocuments({
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 file_name: file.name,
-                content_type: file.type || getMimeTypeByExt(file.name),
+                content_type: uploadContentType(file),
                 file_size: file.size,
                 use_bda: options.use_bda,
                 use_ocr: options.use_ocr,
@@ -680,7 +667,7 @@ export function useDocuments({
             {
               document_id: uploadInfo.document_id,
               name: file.name,
-              file_type: file.type || getMimeTypeByExt(file.name),
+              file_type: uploadContentType(file),
               file_size: file.size,
               status: 'uploading',
               use_bda: options.use_bda,
@@ -704,17 +691,9 @@ export function useDocuments({
             },
           }));
 
-          const uploadResponse = await fetch(uploadInfo.upload_url, {
-            method: 'PUT',
-            body: file,
-            headers: {
-              'Content-Type': file.type || getMimeTypeByExt(file.name),
-            },
-          });
-
-          if (!uploadResponse.ok) {
-            throw new Error(`Failed to upload ${file.name} to S3`);
-          }
+          // Presigned PUT from the backend: this document's key, type and
+          // size only, valid for 5 minutes.
+          await putToPresignedUrl(uploadInfo.upload_url, file);
 
           await fetchApi(
             `projects/${projectId}/documents/${uploadInfo.document_id}/status`,

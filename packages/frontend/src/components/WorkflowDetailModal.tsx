@@ -44,6 +44,7 @@ import {
   isExcelFileType,
   getFileTypeLabel,
 } from '../lib/fileTypeUtils';
+import { s3KeyFromUri } from '../lib/presignedUrls';
 
 /**
  * Fix broken markdown table rows where cell values contain newlines.
@@ -68,15 +69,6 @@ const sanitizeMarkdownTable = (text: string): string => {
     }
   }
   return result.join('\n');
-};
-
-// Parse S3 URI to bucket and key
-const parseS3Uri = (uri: string): { bucket: string; key: string } | null => {
-  if (!uri?.startsWith('s3://')) return null;
-  const parts = uri.slice(5).split('/');
-  const bucket = parts[0];
-  const key = parts.slice(1).join('/');
-  return { bucket, key };
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -221,7 +213,7 @@ export default function WorkflowDetailModal({
   onLoadSegment,
 }: WorkflowDetailModalProps) {
   const { t } = useTranslation();
-  const { getPresignedDownloadUrl, fetchApi } = useAwsClient();
+  const { getDocumentDownloadUrl, fetchApi } = useAwsClient();
   const fetchApiRef = useRef(fetchApi);
   fetchApiRef.current = fetchApi;
   const [viewMode, setViewMode] = useState<'document' | 'graph'>('document');
@@ -322,13 +314,10 @@ export default function WorkflowDetailModal({
     qaItems: [],
   });
   const handleDownloadFile = useCallback(async () => {
-    const s3Info = parseS3Uri(workflow.file_uri);
-    if (!s3Info) return;
+    const key = s3KeyFromUri(workflow.file_uri);
+    if (!key) return;
     try {
-      const presignedUrl = await getPresignedDownloadUrl(
-        s3Info.bucket,
-        s3Info.key,
-      );
+      const presignedUrl = await getDocumentDownloadUrl(projectId, key);
       const response = await fetch(presignedUrl);
       if (!response.ok) throw new Error(`Download failed: ${response.status}`);
       const blob = await response.blob();
@@ -343,7 +332,12 @@ export default function WorkflowDetailModal({
     } catch (error) {
       console.error('Failed to download file:', error);
     }
-  }, [workflow.file_uri, workflow.file_name, getPresignedDownloadUrl]);
+  }, [
+    workflow.file_uri,
+    workflow.file_name,
+    projectId,
+    getDocumentDownloadUrl,
+  ]);
 
   const [showReanalyzeModal, setShowReanalyzeModal] = useState(false);
   const [reanalyzeInstructions, setReanalyzeInstructions] = useState('');
@@ -549,8 +543,8 @@ export default function WorkflowDetailModal({
       return;
     }
 
-    const s3Info = parseS3Uri(workflow.file_uri);
-    if (!s3Info) {
+    const key = s3KeyFromUri(workflow.file_uri);
+    if (!key) {
       setExcelUrl(null);
       return;
     }
@@ -558,7 +552,7 @@ export default function WorkflowDetailModal({
     let cancelled = false;
     setExcelUrlLoading(true);
 
-    getPresignedDownloadUrl(s3Info.bucket, s3Info.key)
+    getDocumentDownloadUrl(projectId, key)
       .then((url) => {
         if (!cancelled) {
           setExcelUrl(url);
@@ -576,7 +570,7 @@ export default function WorkflowDetailModal({
     return () => {
       cancelled = true;
     };
-  }, [isExcel, workflow.file_uri, getPresignedDownloadUrl]);
+  }, [isExcel, workflow.file_uri, projectId, getDocumentDownloadUrl]);
 
   // On-demand segment loading
   const [segmentCache, setSegmentCache] = useState<Map<number, SegmentData>>(

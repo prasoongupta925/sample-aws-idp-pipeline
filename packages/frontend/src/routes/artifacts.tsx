@@ -45,7 +45,7 @@ export const Route = createFileRoute('/artifacts')({
 function ArtifactsPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { fetchApi, getPresignedDownloadUrl } = useAwsClient();
+  const { fetchApi, getArtifactDownloadUrl } = useAwsClient();
   const { showToast } = useToast();
   const [searchQuery, setSearchQuery] = useState('');
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
@@ -163,10 +163,7 @@ function ArtifactsPage() {
   const handleDownload = async (artifact: Artifact) => {
     setOpenMenuId(null);
     try {
-      const presignedUrl = await getPresignedDownloadUrl(
-        artifact.s3_bucket,
-        artifact.s3_key,
-      );
+      const presignedUrl = await getArtifactDownloadUrl(artifact.s3_key);
 
       const response = await fetch(presignedUrl);
 
@@ -284,10 +281,7 @@ function ArtifactsPage() {
         artifact.filename.toLowerCase().endsWith('.pptx');
 
       try {
-        const presignedUrl = await getPresignedDownloadUrl(
-          artifact.s3_bucket,
-          artifact.s3_key,
-        );
+        const presignedUrl = await getArtifactDownloadUrl(artifact.s3_key);
 
         if (isImage || isPdf) {
           setViewerImageUrl(presignedUrl);
@@ -329,7 +323,7 @@ function ArtifactsPage() {
         setViewerLoading(false);
       }
     },
-    [getPresignedDownloadUrl, t],
+    [getArtifactDownloadUrl, t],
   );
 
   const handleCloseViewer = useCallback(() => {

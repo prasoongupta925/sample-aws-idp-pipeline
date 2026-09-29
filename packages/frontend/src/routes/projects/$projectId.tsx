@@ -54,7 +54,7 @@ export const Route = createFileRoute('/projects/$projectId')({
 function ProjectDetailPage() {
   const { t } = useTranslation();
   const { projectId } = Route.useParams();
-  const { fetchApi, getPresignedDownloadUrl, bidiAgentRuntimeArn, userId } =
+  const { fetchApi, getArtifactDownloadUrl, bidiAgentRuntimeArn, userId } =
     useAwsClient();
   const { sendMessage, status: wsStatus } = useWebSocket();
 
@@ -107,7 +107,7 @@ function ProjectDetailPage() {
   // 5. Artifacts (needs panel layout)
   const artifactsHook = useArtifacts({
     fetchApi,
-    getPresignedDownloadUrl,
+    getArtifactDownloadUrl,
     projectId,
     sidePanelCollapsed: panelLayout.sidePanelCollapsed,
     setSidePanelCollapsed: panelLayout.setSidePanelCollapsed,
@@ -533,7 +533,7 @@ function ProjectDetailPage() {
                       artifact={artifactsHook.selectedArtifact}
                       onClose={artifactsHook.handleArtifactViewerClose}
                       onDownload={artifactsHook.handleArtifactDownload}
-                      getPresignedUrl={getPresignedDownloadUrl}
+                      getDownloadUrl={getArtifactDownloadUrl}
                     />
                   )}
                 </div>

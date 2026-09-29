@@ -1,7 +1,8 @@
 import contextlib
 import uuid
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Path, Query
 from pydantic import BaseModel
 
 from app.config import get_config
@@ -20,9 +21,19 @@ from app.ddb.facts import delete_facts_item
 from app.ddb.workflows import delete_workflow_item, get_steps_batch, query_workflows
 from app.lancedb import DeleteByWorkflowInput, LanceDbError
 from app.lancedb import delete_by_workflow as lancedb_delete_by_workflow
-from app.s3 import delete_s3_prefix, get_s3_client
+from app.presigned import PresignError, check_key, check_upload, project_prefix
+from app.s3 import PRESIGNED_URL_EXPIRES_IN, delete_s3_prefix, get_s3_client, presign_get, presign_put
 
 router = APIRouter(prefix="/projects/{project_id}/documents", tags=["documents"])
+
+# Project ids are "proj_" + a nanoid; the pattern keeps them safe in an S3 key and a log line.
+ProjectId = Annotated[str, Path(pattern=r"^[A-Za-z0-9_-]{1,128}$", description="Project id, e.g. proj_...")]
+
+# Audit label of the caller (the web app sends the Cognito username).
+# Authentication is AWS IAM (SigV4) at API Gateway, not this header.
+_USER_ID_PATTERN = r"^[^\x00-\x1f\x7f]{1,256}$"
+UserId = Annotated[str, Header(alias="x-user-id", pattern=_USER_ID_PATTERN)]
+OptionalUserId = Annotated[str | None, Header(alias="x-user-id", pattern=_USER_ID_PATTERN)]
 
 
 class DocumentUploadRequest(BaseModel):
@@ -45,6 +56,13 @@ class DocumentUploadResponse(BaseModel):
     document_id: str
     upload_url: str
     file_name: str
+    # Seconds the upload URL stays valid (the PUT must start within this time).
+    expires_in: int = PRESIGNED_URL_EXPIRES_IN
+
+
+class PresignedUrlResponse(BaseModel):
+    url: str
+    expires_in: int
 
 
 class DocumentResponse(BaseModel):
@@ -203,6 +221,40 @@ def get_documents_progress(
     return results
 
 
+@router.get(
+    "/download-url",
+    responses={
+        400: {"description": "The key is not a plain S3 key (e.g. a '..' segment)"},
+        403: {"description": "The key is outside this project"},
+        404: {"description": "Project not found"},
+    },
+)
+def get_document_download_url(
+    project_id: ProjectId,
+    user_id: UserId,
+    key: str = Query(description="S3 key in the document bucket, under projects/{project_id}/"),
+) -> PresignedUrlResponse:
+    """Presigned GET (5 minutes) for one object of this project in the document bucket.
+
+    The bucket is always the document bucket; the key must be a plain key under
+    ``projects/{project_id}/`` (a document, its segment images or analysis).
+    """
+    try:
+        check_key(key, project_prefix(project_id))
+    except PresignError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail) from None
+
+    if not get_project_item(project_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    bucket = get_config().document_storage_bucket_name
+    if not bucket:
+        raise HTTPException(status_code=503, detail="Document storage is not configured")
+
+    print(f"presign get document project={project_id} user={user_id}")
+    return PresignedUrlResponse(url=presign_get(bucket, key), expires_in=PRESIGNED_URL_EXPIRES_IN)
+
+
 @router.get("")
 def list_documents(project_id: str) -> list[DocumentResponse]:
     """List all documents for a project."""
@@ -211,24 +263,33 @@ def list_documents(project_id: str) -> list[DocumentResponse]:
 
 
 @router.post("")
-def create_document_upload(project_id: str, request: DocumentUploadRequest) -> DocumentUploadResponse:
-    """Create a document record and return a presigned URL for upload."""
-    config = get_config()
-    s3 = get_s3_client()
+def create_document_upload(
+    project_id: ProjectId, request: DocumentUploadRequest, user_id: OptionalUserId = None
+) -> DocumentUploadResponse:
+    """Create a document record and return a presigned PUT URL for its upload.
 
-    # Validate file size (500MB max)
-    max_size = 500 * 1024 * 1024  # 500MB
-    if request.file_size > max_size:
-        raise HTTPException(status_code=400, detail="File size exceeds 500MB limit")
+    The URL is valid for 5 minutes and only for this document's key, the
+    declared content type and the declared size (both are signed headers).
+    The upload's S3 ObjectCreated event starts the pipeline as before.
+    """
+    config = get_config()
+
+    # File name, type (the pipeline's supported extensions) and size (1 byte to 500MB)
+    try:
+        ext = check_upload(request.file_name, request.content_type, request.file_size)
+    except PresignError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail) from None
 
     # Check project exists
     if not get_project_item(project_id):
         raise HTTPException(status_code=404, detail="Project not found")
 
+    if not config.document_storage_bucket_name:
+        raise HTTPException(status_code=503, detail="Document storage is not configured")
+
     # Generate document ID and S3 key
     document_id = str(uuid.uuid4())
     # Use document_id as filename for S3 (original name stored in DynamoDB)
-    ext = request.file_name.rsplit(".", 1)[-1] if "." in request.file_name else ""
     s3_key = f"projects/{project_id}/documents/{document_id}/{document_id}.{ext}"
 
     # Create document record in DynamoDB
@@ -253,21 +314,20 @@ def create_document_upload(project_id: str, request: DocumentUploadRequest) -> D
     )
     put_document_item(project_id, document_id, data)
 
-    # Generate presigned URL for upload (valid for 1 hour)
-    upload_url = s3.generate_presigned_url(
-        "put_object",
-        Params={
-            "Bucket": config.document_storage_bucket_name,
-            "Key": s3_key,
-            "ContentType": request.content_type,
-        },
-        ExpiresIn=3600,
+    # Presigned PUT for exactly this key, content type and size (5 minutes)
+    upload_url = presign_put(
+        config.document_storage_bucket_name,
+        s3_key,
+        content_type=request.content_type,
+        content_length=request.file_size,
     )
+    print(f"presign put document project={project_id} document={document_id} user={user_id or '-'}")
 
     return DocumentUploadResponse(
         document_id=document_id,
         upload_url=upload_url,
         file_name=request.file_name,
+        expires_in=PRESIGNED_URL_EXPIRES_IN,
     )
 
 

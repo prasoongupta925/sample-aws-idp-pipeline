@@ -445,6 +445,10 @@ export default function ExcelViewer({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // The file of the current url, downloaded once. The url is a presigned URL
+  // valid for 5 minutes, so switching sheets later re-renders from this copy
+  // instead of downloading again with an expired URL.
+  const fileRef = useRef<{ url: string; data: ArrayBuffer } | null>(null);
 
   useEffect(() => {
     if (!url) return;
@@ -457,15 +461,24 @@ export default function ExcelViewer({
     setError(null);
     setWarnings([]);
 
-    fetch(url, { signal: controller.signal })
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.arrayBuffer();
-      })
+    const cached = fileRef.current?.url === url ? fileRef.current.data : null;
+    const download = cached
+      ? Promise.resolve(cached)
+      : fetch(url, { signal: controller.signal })
+          .then((res) => {
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            return res.arrayBuffer();
+          })
+          .then((data) => {
+            fileRef.current = { url, data };
+            return data;
+          });
+
+    download
       .then(async (buf) => {
         if (controller.signal.aborted) return;
         const { sheets: converted, warnings: w } =
-          await convertWorkbookToSheets(buf);
+          await convertWorkbookToSheets(buf.slice(0));
         // Set the active sheet based on sheetIndex
         const clampedIdx = Math.min(sheetIndex, converted.length - 1);
         for (let i = 0; i < converted.length; i++) {

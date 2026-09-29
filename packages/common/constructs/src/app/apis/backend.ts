@@ -191,6 +191,11 @@ export class Backend extends Construct {
     });
 
     const taskRole = this.service.taskDefinition.taskRole;
+    // The web app's S3 transfers are presigned with this role (5 minutes, one
+    // object): upload = s3:PutObject on the document bucket, downloads =
+    // s3:GetObject on the document and agent buckets. The read/write grants
+    // below (needed anyway for listing, reading and deleting documents,
+    // sessions, agents and artifacts) cover them; nothing extra is granted.
     documentStorage.bucket.grantReadWrite(taskRole);
     sessionStorage.bucket.grantReadWrite(taskRole);
     agentStorage.bucket.grantReadWrite(taskRole);

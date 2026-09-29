@@ -1,53 +1,14 @@
 import { useCallback, useRef } from 'react';
 import { useAuth } from 'react-oidc-context';
 import { fromCognitoIdentityPool } from '@aws-sdk/credential-provider-cognito-identity';
-import {
-  S3Client,
-  PutObjectCommand,
-  GetObjectCommand,
-} from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { AwsClient } from 'aws4fetch';
 import { useRuntimeConfig } from './useRuntimeConfig';
+import {
+  requestArtifactDownloadUrl,
+  requestDocumentDownloadUrl,
+} from '../lib/presignedUrls';
 
 const CREDENTIAL_REFRESH_BUFFER_MS = 5 * 60 * 1000;
-
-const MIME_TYPES: Record<string, string> = {
-  // Video
-  mp4: 'video/mp4',
-  webm: 'video/webm',
-  mov: 'video/quicktime',
-  avi: 'video/x-msvideo',
-  mkv: 'video/x-matroska',
-  // Audio
-  mp3: 'audio/mpeg',
-  wav: 'audio/wav',
-  flac: 'audio/flac',
-  ogg: 'audio/ogg',
-  // Image
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  gif: 'image/gif',
-  tiff: 'image/tiff',
-  tif: 'image/tiff',
-  webp: 'image/webp',
-  // Document
-  pdf: 'application/pdf',
-  doc: 'application/msword',
-  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  ppt: 'application/vnd.ms-powerpoint',
-  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  txt: 'text/plain',
-  // CAD
-  dxf: 'application/dxf',
-};
-
-const getMimeType = (file: File): string => {
-  if (file.type) return file.type;
-  const ext = file.name.split('.').pop()?.toLowerCase();
-  return (ext && MIME_TYPES[ext]) || 'application/octet-stream';
-};
 
 interface Credentials {
   accessKeyId: string;
@@ -197,13 +158,8 @@ function extractRegionFromArn(arn: string): string {
 }
 
 export function useAwsClient() {
-  const {
-    apis,
-    cognitoProps,
-    documentStorageBucketName,
-    agentRuntimeArn,
-    bidiAgentRuntimeArn,
-  } = useRuntimeConfig();
+  const { apis, cognitoProps, agentRuntimeArn, bidiAgentRuntimeArn } =
+    useRuntimeConfig();
   const { user } = useAuth();
   const credentialsRef = useRef<Credentials | null>(null);
   const pendingRef = useRef<Promise<Credentials> | null>(null);
@@ -310,37 +266,6 @@ export function useAwsClient() {
     [apis, createAwsClient, user],
   );
 
-  /** S3 파일 업로드 */
-  const uploadToS3 = useCallback(
-    async (file: File, key: string): Promise<void> => {
-      if (!cognitoProps) throw new Error('Cognito props not available');
-      if (!documentStorageBucketName) {
-        throw new Error('Document storage bucket name not available');
-      }
-
-      const credentials = await getCredentials();
-
-      const s3Client = new S3Client({
-        region: cognitoProps.region,
-        credentials: {
-          accessKeyId: credentials.accessKeyId,
-          secretAccessKey: credentials.secretAccessKey,
-          sessionToken: credentials.sessionToken,
-        },
-      });
-
-      await s3Client.send(
-        new PutObjectCommand({
-          Bucket: documentStorageBucketName,
-          Key: key,
-          Body: new Uint8Array(await file.arrayBuffer()),
-          ContentType: getMimeType(file),
-        }),
-      );
-    },
-    [cognitoProps, documentStorageBucketName, getCredentials],
-  );
-
   /** Bedrock Agent 호출 (스트리밍 지원) */
   const invokeAgent = useCallback(
     async (
@@ -402,39 +327,29 @@ export function useAwsClient() {
     [agentRuntimeArn, createAwsClient, user],
   );
 
-  /** S3 presigned download URL 생성 */
-  const getPresignedDownloadUrl = useCallback(
-    async (bucket: string, key: string, expiresIn = 3600): Promise<string> => {
-      if (!cognitoProps) throw new Error('Cognito props not available');
+  // S3 access: the Cognito identity has no S3 permissions. The backend checks
+  // each request and issues a presigned URL valid for 5 minutes (uploads get
+  // theirs from POST projects/{id}/documents, see useDocuments).
 
-      const credentials = await getCredentials();
+  /** Presigned GET for an object of the project in the document bucket. */
+  const getDocumentDownloadUrl = useCallback(
+    (projectId: string, key: string): Promise<string> =>
+      requestDocumentDownloadUrl(fetchApi, projectId, key),
+    [fetchApi],
+  );
 
-      const s3Client = new S3Client({
-        region: cognitoProps.region,
-        credentials: {
-          accessKeyId: credentials.accessKeyId,
-          secretAccessKey: credentials.secretAccessKey,
-          sessionToken: credentials.sessionToken,
-        },
-      });
-
-      const command = new GetObjectCommand({
-        Bucket: bucket,
-        Key: key,
-      });
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return getSignedUrl(s3Client as any, command, { expiresIn });
-    },
-    [cognitoProps, getCredentials],
+  /** Presigned GET for one of the caller's artifacts in the agent bucket. */
+  const getArtifactDownloadUrl = useCallback(
+    (key: string): Promise<string> => requestArtifactDownloadUrl(fetchApi, key),
+    [fetchApi],
   );
 
   return {
     fetchApi,
     fetchApiBlob,
-    uploadToS3,
     invokeAgent,
-    getPresignedDownloadUrl,
+    getDocumentDownloadUrl,
+    getArtifactDownloadUrl,
     bidiAgentRuntimeArn,
     getCredentials,
     userId: user?.profile?.['cognito:username'] as string | undefined,

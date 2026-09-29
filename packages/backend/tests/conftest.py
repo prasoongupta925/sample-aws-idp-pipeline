@@ -4,9 +4,9 @@ Every test runs isolated from AWS and from the other tests:
 - fake credentials and region, no instance metadata lookups and no shared
   config/credentials files, so a client a test forgets to stub can never reach
   a real account (this machine has real credentials in ~/.aws);
-- the module-level AWS clients the app caches (S3, DynamoDB, the Lambda and
-  Bedrock clients) are reset before and after each test, so a client created
-  or stubbed in one test never leaks into the next.
+- the module-level AWS clients the app caches (S3 and its presign client,
+  DynamoDB, the Lambda and Bedrock clients) are reset before and after each
+  test, so a client created or stubbed in one test never leaks into the next.
 """
 
 import os
@@ -18,7 +18,7 @@ import app.file_check as file_check
 import app.file_check_ask as file_check_ask
 import app.lancedb as lancedb
 import app.routers.graph as graph_router
-from app.s3 import get_s3_client
+from app.s3 import get_s3_client, get_s3_presign_client
 
 _FAKE_AWS_ENV = {
     "AWS_ACCESS_KEY_ID": "testing",
@@ -33,6 +33,7 @@ _FAKE_AWS_ENV = {
 
 def _reset_cached_clients() -> None:
     get_s3_client.cache_clear()
+    get_s3_presign_client.cache_clear()
     ddb_client._ddb_resource = None
     file_check._lambda_client = None
     file_check_ask._bedrock_client = None
