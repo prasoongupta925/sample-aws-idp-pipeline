@@ -45,6 +45,13 @@ export class NeptuneStack extends Stack {
       dbSubnetGroupName: subnetGroup.dbSubnetGroupName,
       vpcSecurityGroupIds: [neptuneSg.securityGroupId],
       iamAuthEnabled: true,
+      // Encryption at rest (cluster storage, automated backups and snapshots)
+      // with the AWS managed key aws/rds. Chosen at creation only: on an
+      // existing cluster this change needs a replacement, which CloudFormation
+      // cannot do in place for the fixed dbClusterIdentifier, so delete and
+      // redeploy this stack (the new graph is empty until documents are
+      // analysed again).
+      storageEncrypted: true,
       deletionProtection: false,
       // Automated backups hold graph data derived from documents: keep the
       // minimum (1 day).
