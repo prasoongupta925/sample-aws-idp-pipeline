@@ -8,7 +8,11 @@ URL that the backend signs after these checks:
 - uploads: a supported file type, a well-formed content type allowed for that
   type, a size of 1 byte to 500 MB, and one exact key per document;
 - document downloads: a plain key under ``projects/{project_id}/``;
-- artifact downloads: a plain key under the caller's ``{user_id}/`` prefix.
+- artifact downloads: a plain key under the caller's ``{user_id}/`` prefix;
+- URLs embedded in responses (segment images and video, images in analysis
+  markdown, chat attachments; 1 hour): a plain key in the document's own
+  ``projects/{project_id}/documents/{document_id}/`` folder, or in the chat
+  session's own folder (s3.presign_get_within).
 
 A "plain" key has no empty, ``.`` or ``..`` segment (also percent-encoded), no
 backslash and no control character, so it cannot step out of its prefix.
@@ -101,8 +105,11 @@ def check_upload(file_name: str, content_type: str, file_size: int) -> str:
     if allowed is None:
         raise PresignError(400, f"Unsupported file type: .{ext}" if ext else "File name has no extension")
 
-    match = _CONTENT_TYPE.match(content_type or "")
-    if not match:
+    # fullmatch, not match + "$" (which also accepts a trailing newline), and no
+    # control characters anywhere (a quoted parameter could carry CR/LF): the
+    # value is signed as the Content-Type header and stored with the document.
+    match = _CONTENT_TYPE.fullmatch(content_type or "")
+    if not match or _CONTROL_CHARS.search(content_type):
         raise PresignError(400, "Content type is not a valid MIME type")
     base = match.group("base").lower()
     if base != _OCTET_STREAM and base not in allowed:

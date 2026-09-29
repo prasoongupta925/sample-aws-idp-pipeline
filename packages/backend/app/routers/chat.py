@@ -11,7 +11,7 @@ from app.cache import CacheKey, invalidate
 from app.config import get_config
 from app.duckdb import Session, get_duckdb_connection
 from app.message import ContentItem, parse_content_items
-from app.s3 import delete_s3_prefix, get_s3_client
+from app.s3 import delete_s3_prefix, folder_presigner, get_s3_client
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -191,9 +191,11 @@ def get_chat_history(
     if not bucket_name:
         raise HTTPException(status_code=500, detail="Session storage bucket not configured")
 
-    s3_path = (
-        f"s3://{bucket_name}/sessions/{x_user_id}/{project_id}/session_{session_id}/agents/*/messages/message_*.json"
-    )
+    session_prefix = f"sessions/{x_user_id}/{project_id}/session_{session_id}/"
+    s3_path = f"s3://{bucket_name}/{session_prefix}agents/*/messages/message_*.json"
+    # Attachments are stored under the session's own folder (session_workers
+    # attachment-upload); a reference to anything else is not signed.
+    presign = folder_presigner(bucket_name, session_prefix)
 
     conn = get_duckdb_connection()
     try:
@@ -217,7 +219,7 @@ def get_chat_history(
     messages = []
     for row in result:
         role, content_items, created_at, updated_at = row[1], row[2], row[3], row[4]
-        parsed_content = parse_content_items(content_items)
+        parsed_content = parse_content_items(content_items, presign)
 
         if parsed_content:
             messages.append(

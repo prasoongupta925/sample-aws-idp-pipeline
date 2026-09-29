@@ -10,7 +10,7 @@ from app.ddb import get_document_item
 from app.ddb.documents import update_document_status
 from app.ddb.workflows import get_workflow_item, query_workflows, update_workflow_status
 from app.markdown import transform_markdown_images
-from app.s3 import generate_presigned_url, get_s3_client, get_segment_key_by_index, list_segment_keys, parse_s3_uri
+from app.s3 import document_presigner, get_s3_client, get_segment_key_by_index, list_segment_keys, parse_s3_uri
 
 
 def _get_display_file_name(project_id: str, document_id: str, fallback_name: str) -> str:
@@ -179,16 +179,21 @@ def _build_segment_data(file_uri: str, s3_key: str) -> SegmentData | None:
     if not s3_data:
         return None
 
+    # Every S3 reference in the segment (page image, video chapter, images in
+    # the markdown, which comes from the document and from model output) is
+    # signed only inside this document's own folder of the document bucket.
+    presign = document_presigner(file_uri)
+
     image_uri = s3_data.get("image_uri", "")
-    bda_indexer = transform_markdown_images(s3_data.get("bda_indexer", ""), image_uri)
+    bda_indexer = transform_markdown_images(s3_data.get("bda_indexer", ""), image_uri, presign=presign)
     paddleocr_blocks = s3_data.get("paddleocr_blocks")
-    format_parser = transform_markdown_images(s3_data.get("format_parser", ""), image_uri)
+    format_parser = transform_markdown_images(s3_data.get("format_parser", ""), image_uri, presign=presign)
 
     raw_ai_analysis = s3_data.get("ai_analysis", [])
     ai_analysis = [
         {
             "analysis_query": ia.get("analysis_query", ""),
-            "content": transform_markdown_images(ia.get("content", ""), image_uri),
+            "content": transform_markdown_images(ia.get("content", ""), image_uri, presign=presign),
         }
         for ia in raw_ai_analysis
     ]
@@ -198,7 +203,7 @@ def _build_segment_data(file_uri: str, s3_key: str) -> SegmentData | None:
 
     video_url = None
     if segment_type in ("VIDEO", "CHAPTER") and segment_file_uri:
-        video_url = generate_presigned_url(segment_file_uri)
+        video_url = presign(segment_file_uri)
 
     raw_transcribe = s3_data.get("transcribe_segments", [])
     transcribe_segments = (
@@ -223,7 +228,7 @@ def _build_segment_data(file_uri: str, s3_key: str) -> SegmentData | None:
         segment_index=s3_data.get("segment_index", 0),
         segment_type=segment_type,
         image_uri=image_uri,
-        image_url=generate_presigned_url(image_uri),
+        image_url=presign(image_uri),
         file_uri=segment_file_uri,
         video_url=video_url,
         start_timecode_smpte=s3_data.get("start_timecode_smpte"),

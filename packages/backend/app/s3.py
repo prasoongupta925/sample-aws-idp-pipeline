@@ -1,4 +1,5 @@
 import json
+from collections.abc import Callable
 from functools import lru_cache
 from urllib.parse import urlparse
 
@@ -6,11 +7,22 @@ import boto3
 from botocore.config import Config as BotoConfig
 
 from app.config import get_config
+from app.presigned import PresignError, check_key
 
 # Lifetime of every presigned URL the backend hands to the browser (uploads and
 # downloads). S3 checks the expiry when a request starts, so an upload or a
 # download that started in time still completes.
 PRESIGNED_URL_EXPIRES_IN = 300
+
+# Lifetime of the URLs embedded in API responses (segment page images, images
+# in analysis markdown, video chapters, chat attachments). The viewer renders
+# them as <img>/<video> sources and requests them again when it re-renders, so
+# they last longer; each one is limited to its document's or session's folder
+# (see presign_get_within).
+EMBEDDED_URL_EXPIRES_IN = 3600
+
+# Turns an s3:// reference into a URL, or None to leave the reference as is.
+Presigner = Callable[[str], str | None]
 
 
 def parse_s3_uri(uri: str) -> tuple[str, str]:
@@ -84,26 +96,77 @@ def _get_content_type(key: str) -> str | None:
     return content_types.get(ext)
 
 
-def generate_presigned_url(s3_uri: str, expires_in: int = 3600) -> str | None:
-    """Generate a presigned URL for an S3 URI."""
-    if not s3_uri or not s3_uri.startswith("s3://"):
+def split_s3_uri(uri: str) -> tuple[str, str] | None:
+    """Bucket and key of ``s3://bucket/key`` taken literally; None for anything else.
+
+    Unlike parse_s3_uri (urlparse), '?' and '#' stay part of the key, so a
+    reference cannot hide a query or fragment that changes the key being signed.
+    """
+    if not isinstance(uri, str) or not uri.startswith("s3://"):
+        return None
+    bucket, slash, key = uri[len("s3://") :].partition("/")
+    if not bucket or not slash or not key:
+        return None
+    return bucket, key
+
+
+def presign_get_within(uri: str, bucket: str, prefix: str, expires_in: int = EMBEDDED_URL_EXPIRES_IN) -> str | None:
+    """Presigned GET for an ``s3://`` reference found in stored data, inside one folder only.
+
+    References in segment analyses (markdown images, page images, video
+    chapters) and in chat messages come from documents and model output, which
+    a user can shape (a .md upload, a Q&A instruction). They are signed only
+    when they name ``bucket`` and a plain key under ``prefix`` (the document's
+    or the session's own folder); anything else gets None. Without this check
+    a reference to another bucket or user's key would be signed with the
+    backend's role.
+    """
+    parts = split_s3_uri(uri)
+    if parts is None or parts[0] != bucket:
+        return None
+    key = parts[1]
+    try:
+        check_key(key, prefix)
+    except PresignError:
         return None
 
-    bucket, key = parse_s3_uri(s3_uri)
-
-    s3 = get_s3_client()
     params = {"Bucket": bucket, "Key": key}
-
     # Add ResponseContentType for images to fix ORB blocking
     content_type = _get_content_type(key)
     if content_type:
         params["ResponseContentType"] = content_type
 
-    return s3.generate_presigned_url(
-        "get_object",
-        Params=params,
-        ExpiresIn=expires_in,
-    )
+    return get_s3_presign_client().generate_presigned_url("get_object", Params=params, ExpiresIn=expires_in)
+
+
+def _refuse(_uri: str) -> None:
+    return None
+
+
+def folder_presigner(bucket: str, prefix: str) -> Presigner:
+    """Presigner for references under ``prefix`` (ends with '/') in ``bucket``."""
+    if not bucket or not prefix.endswith("/"):
+        return _refuse
+    return lambda uri: presign_get_within(uri, bucket, prefix)
+
+
+def document_presigner(file_uri: str) -> Presigner:
+    """Presigner for one document's folder, from its file URI.
+
+    ``s3://{bucket}/projects/{project_id}/documents/{document_id}/{file}``:
+    everything the pipeline writes for a document (page images, BDA output
+    and its assets, format-parser slides, transcripts, analysis) lives under
+    ``projects/{project_id}/documents/{document_id}/``. Any other layout
+    signs nothing.
+    """
+    parts = split_s3_uri(file_uri)
+    if parts is None:
+        return _refuse
+    bucket, key = parts
+    segments = key.split("/")
+    if len(segments) < 5 or segments[0] != "projects" or segments[2] != "documents":
+        return _refuse
+    return folder_presigner(bucket, f"projects/{segments[1]}/documents/{segments[3]}/")
 
 
 def delete_s3_prefix(bucket: str, prefix: str) -> int:

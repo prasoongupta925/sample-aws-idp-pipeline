@@ -1,15 +1,20 @@
 import re
 
-from app.s3 import generate_presigned_url
+from app.s3 import Presigner
 
 
-def transform_markdown_images(markdown: str, image_uri: str = "") -> str:
+def transform_markdown_images(markdown: str, image_uri: str = "", *, presign: Presigner) -> str:
     """Transform markdown images to presigned URLs.
 
     Handles both:
     1. Relative paths like ./uuid.png (using image_uri to derive base path)
     2. Full S3 URIs like s3://bucket/key
     3. Plain filenames like uuid.png
+
+    The markdown comes from documents and model output, so any S3 reference in
+    it is untrusted: ``presign`` decides which ones are signed (callers pass
+    one limited to the document's own folder, see s3.document_presigner) and
+    returns None for the rest, which are left unchanged.
     """
     if not markdown:
         return markdown
@@ -49,7 +54,7 @@ def transform_markdown_images(markdown: str, image_uri: str = "") -> str:
         if img_url.startswith("./") and assets_base:
             filename = img_url[2:]  # Remove "./"
             s3_uri = f"{assets_base}{filename}"
-            presigned_url = generate_presigned_url(s3_uri)
+            presigned_url = presign(s3_uri)
             if presigned_url:
                 img_url = presigned_url
         # Handle full S3 URIs
@@ -58,7 +63,7 @@ def transform_markdown_images(markdown: str, image_uri: str = "") -> str:
         # Handle plain filenames (no ./ prefix, not s3://, not http)
         elif assets_base and not img_url.startswith(("http://", "https://")):
             s3_uri = f"{assets_base}{img_url}"
-            presigned_url = generate_presigned_url(s3_uri)
+            presigned_url = presign(s3_uri)
             if presigned_url:
                 img_url = presigned_url
 
@@ -69,16 +74,16 @@ def transform_markdown_images(markdown: str, image_uri: str = "") -> str:
                 parts = img_url.rsplit("/", 1)
                 if len(parts) == 2:
                     img_url_with_assets = f"{parts[0]}/assets/{parts[1]}"
-                    presigned_url = generate_presigned_url(img_url_with_assets)
+                    presigned_url = presign(img_url_with_assets)
                     if presigned_url:
                         img_url = presigned_url
                     else:
                         # Fallback to original URL if assets path doesn't work
-                        presigned_url = generate_presigned_url(img_url)
+                        presigned_url = presign(img_url)
                         if presigned_url:
                             img_url = presigned_url
             else:
-                presigned_url = generate_presigned_url(img_url)
+                presigned_url = presign(img_url)
                 if presigned_url:
                     img_url = presigned_url
 
