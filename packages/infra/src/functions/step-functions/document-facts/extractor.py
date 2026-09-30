@@ -26,6 +26,13 @@ MIN_MACHINE_CHARS = 50
 # small; FACTS_MAX_OUTPUT_TOKENS overrides it without a code change.
 DEFAULT_MAX_OUTPUT_TOKENS = 8000
 
+# USD per million tokens of Amazon Nova 2 Lite: the price list of the Ask
+# feature (packages/backend/app/file_check_ask.py), so a document's facts
+# extraction and an Ask call are costed alike. test_facts_extractor.py checks
+# that the two price lists stay equal.
+INPUT_PRICE_PER_MILLION_USD = 0.35
+OUTPUT_PRICE_PER_MILLION_USD = 2.95
+
 _PROMPTS = None
 _bedrock_client = None
 
@@ -123,6 +130,36 @@ def max_output_tokens() -> int:
     return value if value > 0 else DEFAULT_MAX_OUTPUT_TOKENS
 
 
+def cost_usd(input_tokens: int, output_tokens: int) -> float:
+    """USD cost of one model call from its token usage (the Ask feature's formula and rounding)."""
+    cost = input_tokens * INPUT_PRICE_PER_MILLION_USD / 1e6 + output_tokens * OUTPUT_PRICE_PER_MILLION_USD / 1e6
+    return round(cost, 8)
+
+
+def usage_record(model_id=None, input_tokens: int = 0, output_tokens: int = 0) -> dict:
+    """The facts record's `usage`: {model_id, input_tokens, output_tokens, cost_usd}.
+
+    No arguments: no model call was made (model_id None, zero tokens, zero cost).
+    """
+    return {
+        'model_id': model_id,
+        'input_tokens': input_tokens,
+        'output_tokens': output_tokens,
+        'cost_usd': cost_usd(input_tokens, output_tokens),
+    }
+
+
+class NoStructuredOutputError(ValueError):
+    """The model answered without the tool call or a JSON object.
+
+    The call was still billed: `usage` is its usage record.
+    """
+
+    def __init__(self, usage: dict):
+        super().__init__('model returned no structured output')
+        self.usage = usage
+
+
 def get_bedrock_client():
     global _bedrock_client
     if _bedrock_client is None:
@@ -154,9 +191,12 @@ def _tool_input(block: dict):
 
 
 def call_nova(model_text: str, model_id: str, client=None) -> tuple:
-    """Forced-tool Converse call. Returns (raw fields dict, {input_tokens, output_tokens}).
+    """Forced-tool Converse call.
 
-    The usage dict also carries output_truncated=True when the model stopped at maxTokens.
+    Returns (raw fields dict, usage record {model_id, input_tokens, output_tokens,
+    cost_usd}); the usage dict also carries output_truncated=True when the model
+    stopped at maxTokens. Raises NoStructuredOutputError (with the usage) when
+    the answer holds no fields.
     """
     client = client or get_bedrock_client()
     resp = client.converse(
@@ -174,6 +214,11 @@ def call_nova(model_text: str, model_id: str, client=None) -> tuple:
         inferenceConfig={'maxTokens': max_output_tokens(), 'temperature': 0},
     )
     usage = resp.get('usage') or {}
+    out = usage_record(
+        model_id,
+        int(usage.get('inputTokens', 0) or 0),
+        int(usage.get('outputTokens', 0) or 0),
+    )
     content = ((resp.get('output') or {}).get('message') or {}).get('content') or []
 
     fields = None
@@ -190,11 +235,7 @@ def call_nova(model_text: str, model_id: str, client=None) -> tuple:
                     fields = parsed
                     break
     if not isinstance(fields, dict):
-        raise ValueError('model returned no structured output')
-    out = {
-        'input_tokens': int(usage.get('inputTokens', 0) or 0),
-        'output_tokens': int(usage.get('outputTokens', 0) or 0),
-    }
+        raise NoStructuredOutputError(out)
     if resp.get('stopReason') == 'max_tokens':
         # the tool input parsed but the model stopped at maxTokens: its lists
         # (debits, credits) may be cut short; the handler records it in grounding

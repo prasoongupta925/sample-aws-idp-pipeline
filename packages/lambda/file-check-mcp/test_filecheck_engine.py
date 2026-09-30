@@ -1306,3 +1306,193 @@ def test_hard_limit_that_cannot_be_computed_is_not_ready(pl):
     assert a['verdict'] == 'NOT READY'
     # the indicative (default) FOIR never blocks
     assert _applicant(_strip_obligation_keys(rahul()), pl)['verdict'] == 'READY'
+
+
+# ------------------------------------------------------------------ cost per document (usage)
+MODEL = 'global.amazon.nova-2-lite-v1:0'
+
+
+def _usage(tokens_in, tokens_out, cost, model_id=MODEL):
+    """A facts record's usage as the document-facts step writes it."""
+    return {'model_id': model_id, 'input_tokens': tokens_in, 'output_tokens': tokens_out, 'cost_usd': cost}
+
+
+def _with_usage(facts):
+    """Rahul's 7 documents: 5 with usage, 1 old-shape usage (no cost), 1 without usage."""
+    out = copy.deepcopy(facts)
+    costs = [(900, 120, 0.000669), (1200, 150, 0.0008625), (2000, 400, 0.00188),
+             (1000, 100, 0.00064), (3000, 600, 0.00282)]
+    by_name = sorted(out, key=lambda f: f['document_name'])
+    for f, (tin, tout, cost) in zip(by_name, costs):
+        f['usage'] = _usage(tin, tout, cost)
+    by_name[5]['usage'] = {'input_tokens': 500, 'output_tokens': 50}  # recorded before costs were
+    by_name[6].pop('usage', None)  # recorded before usage was
+    return out
+
+
+def test_every_document_carries_usage_and_the_applicant_its_total(pl):
+    a = _applicant(_with_usage(rahul()), pl)
+    usage = {d['document_name']: d['usage'] for d in a['documents']}
+    assert all('usage' in d for d in a['documents'])
+    assert usage['01_loan_application_form.pdf'] == _usage(900, 120, 0.000669)
+    assert usage['05_salary_slip_2026-08_aug.pdf'] == _usage(3000, 600, 0.00282)
+    # old records stay valid: no usage, or usage without a cost -> null
+    assert usage['06_bank_statement_2026-03_to_2026-08.pdf'] is None
+    assert usage['07_form16_itr_summary_FY2025-26.pdf'] is None
+    assert a['usage_total'] == {
+        'input_tokens': 900 + 1200 + 2000 + 1000 + 3000,
+        'output_tokens': 120 + 150 + 400 + 100 + 600,
+        'cost_usd': 0.0068715,
+        'documents_with_usage': 5,
+        'documents_total': 7,
+    }
+    assert a['verdict'] == 'READY'  # usage never changes the verdict
+
+
+def test_usage_total_sums_the_recorded_costs_exactly(pl):
+    facts = _with_usage(rahul())
+    for f in facts:
+        f['usage'] = _usage(1, 1, 0.1)
+    total = _applicant(facts, pl)['usage_total']
+    assert total['cost_usd'] == 0.7  # not 0.7000000000000001
+    assert (total['documents_with_usage'], total['documents_total']) == (7, 7)
+
+
+def test_documents_without_any_usage_give_a_zero_total(pl):
+    a = _applicant(rahul(), pl)  # the golden fixtures predate usage
+    assert [d['usage'] for d in a['documents']] == [None] * 7
+    assert a['usage_total'] == {'input_tokens': 0, 'output_tokens': 0, 'cost_usd': 0.0,
+                                'documents_with_usage': 0, 'documents_total': 7}
+
+
+def test_usage_totals_are_per_applicant(pl):
+    facts = _with_usage(rahul()) + sneha()
+    for f in facts:
+        if f['document_id'].startswith('s-'):
+            f['usage'] = _usage(100, 10, 0.0000645)
+    by = {a['applicant']: a for a in engine.run_file_check(facts, pl)['applicants']}
+    assert by['Sneha Anil Kulkarni']['usage_total'] == {
+        'input_tokens': 500, 'output_tokens': 50, 'cost_usd': 0.0003225,
+        'documents_with_usage': 5, 'documents_total': 5}
+    assert by['Rahul Vijay Deshmukh']['usage_total']['documents_with_usage'] == 5
+
+
+@pytest.mark.parametrize('usage', [
+    None, 'x', [], {},
+    {'input_tokens': 5, 'output_tokens': 5},  # old shape: no cost
+    {'input_tokens': True, 'output_tokens': 5, 'cost_usd': 0.1},
+    {'input_tokens': -1, 'output_tokens': 5, 'cost_usd': 0.1},
+    {'input_tokens': '5', 'output_tokens': 5, 'cost_usd': 0.1},
+    {'input_tokens': 5, 'output_tokens': 5, 'cost_usd': float('nan')},
+    {'input_tokens': float('inf'), 'output_tokens': 5, 'cost_usd': 0.1},
+])
+def test_malformed_usage_is_null(usage):
+    assert engine._usage_view({'usage': usage}) is None
+
+
+def test_usage_view_normalises_and_is_idempotent():
+    rec = {'model_id': MODEL, 'usage': {'input_tokens': 900.0, 'output_tokens': 120, 'cost_usd': 0}}
+    view = engine._usage_view(rec)
+    assert view == {'model_id': MODEL, 'input_tokens': 900, 'output_tokens': 120, 'cost_usd': 0.0}
+    assert type(view['input_tokens']) is int and type(view['cost_usd']) is float
+    assert engine._usage_view({'usage': view}) == view
+    # the record's model_id stands in when usage has none
+    assert engine._usage_view({'usage': {**view, 'model_id': None}})['model_id'] is None
+    assert engine._usage_view({'model_id': MODEL, 'usage': {**view, 'model_id': None}})['model_id'] == MODEL
+
+
+# ------------------------------------------------------------------ applicant_documents (erase)
+def _ids(result):
+    return [d['document_id'] for d in result['documents']]
+
+
+def test_applicant_documents_by_pan():
+    res = engine.applicant_documents(rahul() + sneha(), 'ckrpk 7314m')
+    assert res['matches'] == 1
+    assert res['applicant_name'] == 'Sneha Anil Kulkarni'
+    assert res['pan_masked'] == 'XXXXXX314M'
+    assert res['documents'] == [
+        {'document_id': f['document_id'], 'name': f['document_name']}
+        for f in sorted(sneha(), key=lambda f: f['document_name'])
+    ]
+    assert set(res) == {'applicant_name', 'pan_masked', 'documents', 'matches'}
+
+
+def test_applicant_documents_by_name_includes_documents_joined_by_name():
+    res = engine.applicant_documents(rahul() + sneha(), 'Rahul V. Deshmukh')
+    assert res['matches'] == 1 and res['applicant_name'] == 'Rahul Vijay Deshmukh'
+    names = [d['name'] for d in res['documents']]
+    assert len(names) == 7 and names == sorted(names)
+    # the bank statement carries no PAN: it joined the group by name, as in the verdict
+    assert '06_bank_statement_2026-03_to_2026-08.pdf' in names
+    assert not set(_ids(res)) & {f['document_id'] for f in sneha()}
+
+
+@pytest.mark.parametrize('query', ['Priya Sharma', 'ZZZZZ9999Z', '', '   ', None])
+def test_unknown_applicant_has_no_documents(query):
+    res = engine.applicant_documents(rahul() + sneha(), query)
+    assert res == {'applicant_name': None, 'pan_masked': None, 'documents': [], 'matches': 0}
+
+
+def _namesakes(pid='p1'):
+    """Two people with compatible names and unrelated PANs, a PAN on every document."""
+    docs = []
+    for prefix, name, pan in (('o', 'Rahul Deshmukh', 'AAAPZ1111Q'), ('t', 'Rahul S. Deshmukh', 'CCCPD2222R')):
+        docs += [_doc(pid, prefix, f'{prefix}1_identity_details.pdf', 'identity_details',
+                      applicant_name=name, pan=pan),
+                 _doc(pid, prefix, f'{prefix}2_salary_slip_2026-08.pdf', 'salary_slip',
+                      applicant_name=name, pan=pan, month='2026-08')]
+    return docs
+
+
+def test_a_name_that_matches_two_applicants_lists_nothing_but_the_pan_resolves(pl):
+    facts = _namesakes()
+    verdict = engine.run_file_check(facts, pl, applicant='Rahul Deshmukh')
+    assert len(verdict['applicants']) == 2  # the verdict shows both
+    ambiguous = engine.applicant_documents(facts, 'Rahul Deshmukh')
+    assert ambiguous == {'applicant_name': None, 'pan_masked': None, 'documents': [], 'matches': 2}
+    # PAN first: the PAN picks one of them
+    res = engine.applicant_documents(facts, 'aaapz1111q')
+    assert res['matches'] == 1 and _ids(res) == ['o-o1', 'o-o2']
+    assert res['applicant_name'] == 'Rahul Deshmukh' and res['pan_masked'] == 'XXXXXX111Q'
+    res = engine.applicant_documents(facts, 'CCCPD2222R')
+    assert res['matches'] == 1 and _ids(res) == ['t-t1', 't-t2']
+    assert res['applicant_name'] == 'Rahul S. Deshmukh'
+    # a missing middle name is compatible, so no name picks just one of them
+    assert engine.applicant_documents(facts, 'Rahul Sunil Deshmukh')['matches'] == 2
+
+
+def test_applicant_documents_are_exactly_the_verdict_documents(pl):
+    facts = rahul() + sneha() + amit()
+    docs = doc_items(facts)
+    verdict = engine.run_file_check(facts, pl, documents=docs)
+    assert len(verdict['applicants']) == 3
+    for a in verdict['applicants']:
+        for query in (a['pan'], a['applicant']):
+            res = engine.applicant_documents(facts, query, documents=docs)
+            assert res['matches'] == 1 and res['applicant_name'] == a['applicant']
+            assert res['documents'] == [
+                {'document_id': d['document_id'], 'name': d['document_name']} for d in a['documents']]
+
+
+def test_applicant_documents_skip_documents_outside_the_verdict():
+    facts = rahul()
+    docs = doc_items(facts)
+    docs[0]['name'] = 'Application (scan).pdf'  # the DOC# name wins, as in the verdict
+    docs.append({'document_id': 'r-new', 'project_id': 'p1', 'name': '08_extra_slip.pdf',
+                 'file_type': 'application/pdf', 'status': 'processing'})
+    docs.append({'document_id': 'r-csv', 'project_id': 'p1', 'name': 'statement.csv',
+                 'file_type': 'text/csv', 'status': 'completed'})
+    form16 = facts.pop()  # completed, but no FACTS# item
+    res = engine.applicant_documents(facts, 'BQXPD4821K', documents=docs)
+    assert res['matches'] == 1
+    assert 'Application (scan).pdf' in [d['name'] for d in res['documents']]
+    assert not {'r-new', 'r-csv', form16['document_id']} & set(_ids(res))
+    assert len(res['documents']) == 6
+
+
+def test_mask_pan():
+    assert engine.mask_pan('BQXPD4821K') == 'XXXXXX821K'
+    assert engine.mask_pan(' bqxpd 4821k ') == 'XXXXXX821K'
+    assert engine.mask_pan('AB12') == 'XXXX'
+    assert engine.mask_pan(None) is None and engine.mask_pan('') is None

@@ -7,6 +7,11 @@ Exposes two deterministic tools (no LLM):
     findings that cite document names.
   - list_checklists(): the checklists run_file_check can apply.
 
+and, for the backend only (not in schema.json, so the chat never sees it):
+  - applicant_documents(project_id, applicant): the documents of one
+    applicant, grouped exactly as run_file_check groups them (read-only). The
+    backend's erase-applicant API deletes these documents.
+
 Only engine.py decides the verdict; the chat model reports it. Facts contents
 (names, PAN, amounts) are never logged.
 """
@@ -100,11 +105,17 @@ def _optional_str(event: dict, key: str):
     return value.strip() or None, None
 
 
-def run_file_check(event: dict) -> dict:
+def _project_id(event: dict):
     project_id = event.get('project_id')
     if not isinstance(project_id, str) or not project_id.strip():
-        return {'error': 'project_id is required'}
-    project_id = project_id.strip()
+        return None, 'project_id is required'
+    return project_id.strip(), None
+
+
+def run_file_check(event: dict) -> dict:
+    project_id, err = _project_id(event)
+    if err:
+        return {'error': err}
 
     checklist_id, err = _optional_str(event, 'checklist_id')
     if err:
@@ -152,9 +163,31 @@ def list_checklists(event: dict) -> dict:
     return engine.list_checklists(_get_catalog())
 
 
+def applicant_documents(event: dict) -> dict:
+    """Read-only: {applicant_name, pan_masked, documents: [{document_id, name}], matches}."""
+    project_id, err = _project_id(event)
+    if err:
+        return {'error': err}
+    applicant, err = _optional_str(event, 'applicant')
+    if err:
+        return {'error': err}
+    if applicant is None:
+        return {'error': 'applicant is required'}
+
+    documents, facts = load_project_items(_get_table(), project_id)
+    result = engine.applicant_documents(facts, applicant, documents=documents)
+    print(
+        f'applicant_documents project={project_id} docs={len(documents)} '
+        f'facts={len(facts)} matches={result["matches"]} '
+        f'documents={len(result["documents"])}'
+    )
+    return {'project_id': project_id, **result}
+
+
 _TOOLS = {
     'run_file_check': run_file_check,
     'list_checklists': list_checklists,
+    'applicant_documents': applicant_documents,
 }
 
 

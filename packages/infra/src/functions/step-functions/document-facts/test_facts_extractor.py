@@ -18,7 +18,8 @@ sys.path.insert(0, HERE)
 import pytest  # noqa: E402
 
 import extractor  # noqa: E402
-from extractor import build_texts, build_user_prompt, call_nova, load_prompts  # noqa: E402
+from extractor import (  # noqa: E402
+    NoStructuredOutputError, build_texts, build_user_prompt, call_nova, cost_usd, load_prompts, usage_record)
 from tool_schema import (  # noqa: E402
     DEBIT_CATEGORIES, DEBIT_CHANNELS, DOC_TYPES, FIELD_NAMES, LIST_FIELDS, NUMERIC_FIELDS, TOOL_NAME, TOOL_SCHEMA)
 
@@ -233,7 +234,9 @@ def test_call_nova_request_and_tool_use_response():
     fake = FakeBedrock([{'text': 'thinking...'}, {'toolUse': {'toolUseId': 't1', 'name': TOOL_NAME, 'input': RAW}}])
     fields, usage = call_nova('--- Page 1 ---\nhello', 'global.amazon.nova-2-lite-v1:0', client=fake)
     assert fields == RAW
-    assert usage == {'input_tokens': 1200, 'output_tokens': 150}
+    # 1,200 x $0.35/M + 150 x $2.95/M = $0.00042 + $0.0004425
+    assert usage == {'model_id': 'global.amazon.nova-2-lite-v1:0', 'input_tokens': 1200,
+                     'output_tokens': 150, 'cost_usd': 0.0008625}
 
     (req,) = fake.calls
     assert req['modelId'] == 'global.amazon.nova-2-lite-v1:0'
@@ -259,7 +262,7 @@ def test_call_nova_falls_back_to_json_in_text():
                        usage={})
     fields, usage = call_nova('text', 'm', client=fake)
     assert fields == {'doc_type': 'bank_statement', 'applicant_name': 'X'}
-    assert usage == {'input_tokens': 0, 'output_tokens': 0}
+    assert usage == {'model_id': 'm', 'input_tokens': 0, 'output_tokens': 0, 'cost_usd': 0.0}
 
 
 def test_call_nova_tool_use_wins_over_earlier_text_json():
@@ -273,6 +276,14 @@ def test_call_nova_raises_without_structured_output():
         call_nova('text', 'm', client=FakeBedrock([{'text': 'I cannot help with that.'}]))
     with pytest.raises(ValueError, match='model returned no structured output'):
         call_nova('text', 'm', client=FakeBedrock([]))
+
+
+def test_answer_without_fields_carries_the_billed_usage():
+    fake = FakeBedrock([{'text': 'I cannot help with that.'}], usage={'inputTokens': 800, 'outputTokens': 12})
+    with pytest.raises(NoStructuredOutputError) as err:
+        call_nova('text', 'global.amazon.nova-2-lite-v1:0', client=fake)
+    assert err.value.usage == usage_record('global.amazon.nova-2-lite-v1:0', 800, 12)
+    assert err.value.usage['cost_usd'] == 0.0003154  # 800 x 0.35/M + 12 x 2.95/M
 
 
 def test_default_client_is_lazy_and_uses_region_and_retries(monkeypatch):
@@ -317,4 +328,49 @@ def test_call_nova_flags_output_cut_at_max_tokens():
     fake = TruncatingBedrock([{'toolUse': {'toolUseId': 't1', 'name': TOOL_NAME, 'input': RAW}}])
     fields, usage = call_nova('text', 'm', client=fake)
     assert fields == RAW
-    assert usage == {'input_tokens': 1200, 'output_tokens': 150, 'output_truncated': True}
+    assert usage == {**usage_record('m', 1200, 150), 'output_truncated': True}
+
+
+# --------------------------------------------------------------------------- #
+# cost per document: the Ask feature's Nova 2 Lite price list
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize('tokens_in, tokens_out, expected', [
+    (0, 0, 0.0),
+    (1_000_000, 0, 0.35),
+    (0, 1_000_000, 2.95),
+    (10_000, 500, 0.004975),  # the Ask API contract's worked example
+    (1, 1, 0.0000033),  # rounded to 8 decimals like the Ask feature
+    (12345, 678, 0.00632085),
+])
+def test_cost_usd(tokens_in, tokens_out, expected):
+    assert cost_usd(tokens_in, tokens_out) == expected
+
+
+def test_usage_record_shape():
+    assert usage_record() == {'model_id': None, 'input_tokens': 0, 'output_tokens': 0, 'cost_usd': 0.0}
+    assert usage_record('global.amazon.nova-2-lite-v1:0', 2000, 400) == {
+        'model_id': 'global.amazon.nova-2-lite-v1:0', 'input_tokens': 2000, 'output_tokens': 400,
+        'cost_usd': 0.00188}
+
+
+BACKEND_ASK = os.path.abspath(os.path.join(HERE, '..', '..', '..', '..', '..', 'backend', 'app', 'file_check_ask.py'))
+
+
+@pytest.mark.skipif(not os.path.exists(BACKEND_ASK), reason='backend source not in this checkout')
+def test_prices_equal_the_ask_feature():
+    """The facts step reuses the Ask feature's prices (packages/backend/app/file_check_ask.py)."""
+    import ast
+
+    with open(BACKEND_ASK, encoding='utf-8') as fh:
+        tree = ast.parse(fh.read())
+    prices = {
+        node.targets[0].id: ast.literal_eval(node.value)
+        for node in tree.body
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id.endswith('_PRICE_PER_MILLION_USD')
+    }
+    assert prices == {
+        'INPUT_PRICE_PER_MILLION_USD': extractor.INPUT_PRICE_PER_MILLION_USD,
+        'OUTPUT_PRICE_PER_MILLION_USD': extractor.OUTPUT_PRICE_PER_MILLION_USD,
+    }
+    assert (extractor.INPUT_PRICE_PER_MILLION_USD, extractor.OUTPUT_PRICE_PER_MILLION_USD) == (0.35, 2.95)

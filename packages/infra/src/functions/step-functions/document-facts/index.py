@@ -8,6 +8,10 @@ amounts against the document's own machine text, and store the record in S3
 (analysis/facts.json, with model_fields for audit) and DynamoDB
 (PROJ#{pid} / FACTS#{did}, without document text or model_fields).
 
+The record's `usage` is the cost of that one model call: {model_id,
+input_tokens, output_tokens, cost_usd} at the Ask feature's Nova 2 Lite prices
+(extractor.cost_usd); zero tokens and model_id None when no call was made.
+
 Non-fatal: the handler never raises. It returns ONLY {workflow_id, status}
 because Step Functions keeps execution history for 90 days, so the output must
 carry no names, PAN or amounts. Logs carry only ids, doc_type, counts and
@@ -27,7 +31,7 @@ from shared.ddb_client import (
 )
 from shared.s3_analysis import get_all_segment_analyses, save_facts
 
-from extractor import MACHINE_TEXT_FIELDS, build_texts, call_nova
+from extractor import MACHINE_TEXT_FIELDS, build_texts, call_nova, usage_record
 from grounding import MIN_TEXT_CHARS, ground_fields, unverified_numbers
 from normalize import normalise_fields
 
@@ -93,7 +97,7 @@ def _base_record(ctx: dict, status: str) -> dict:
         'status': status,
         'reason': None,
         'error': None,
-        'usage': {'input_tokens': 0, 'output_tokens': 0},
+        'usage': usage_record(),
         'extracted_at': _now(),
     }
 
@@ -126,6 +130,7 @@ def handler(event, context):
     except Exception:
         traceback.print_exc()
 
+    usage = None  # set once the model call has been billed
     try:
         ctx['document_name'] = (get_document(project_id, document_id) or {}).get('name') or ctx['document_name']
 
@@ -195,7 +200,8 @@ def handler(event, context):
               f'grounded={grounded} notes={len(notes)} '
               f'unverified={len(record["grounding"]["unverified_fields"])} '
               f'debits={len(fields["recurring_debits"])} declared_emis={len(fields["declared_existing_emis"])} '
-              f'input_tokens={usage.get("input_tokens", 0)} output_tokens={usage.get("output_tokens", 0)}')
+              f'input_tokens={usage.get("input_tokens", 0)} output_tokens={usage.get("output_tokens", 0)} '
+              f'cost_usd={usage.get("cost_usd", 0)}')
         return {'workflow_id': workflow_id, 'status': 'completed'}
 
     except Exception as e:
@@ -208,6 +214,10 @@ def handler(event, context):
         try:
             record = _base_record(ctx, 'failed')
             record['error'] = error[:500]
+            # A call that answered without fields (or failed later) was still billed.
+            spent = usage or getattr(e, 'usage', None)
+            if isinstance(spent, dict):
+                record['usage'] = spent
             save_document_facts(project_id, document_id, record)
         except Exception:
             traceback.print_exc()

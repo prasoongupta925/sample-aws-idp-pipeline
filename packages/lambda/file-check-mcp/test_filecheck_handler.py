@@ -197,3 +197,69 @@ def test_default_checklist_env_override(monkeypatch, tmp_path, table):
     assert listed['default_checklist'] == 'pl_two_slips'
     res = index.handler({'project_id': 'p1', 'applicant': 'CKRPK7314M'}, RUN)
     assert res['checklist']['id'] == 'pl_two_slips'
+
+
+# ------------------------------------------------------------------ usage and applicant_documents
+DOCS = _ctx('filecheck___applicant_documents')
+
+
+def test_usage_from_dynamodb_decimals(monkeypatch):
+    facts = rahul() + sneha()
+    for f in facts:
+        f['usage'] = {'model_id': 'global.amazon.nova-2-lite-v1:0', 'input_tokens': 900,
+                      'output_tokens': 120, 'cost_usd': 0.000669}
+    monkeypatch.setattr(index, '_table', FakeTable(_items(facts)))
+    res = index.handler({'project_id': 'p1', 'applicant': 'CKRPK7314M'}, RUN)
+    (a,) = res['applicants']
+    usage = a['documents'][0]['usage']
+    assert usage == {'model_id': 'global.amazon.nova-2-lite-v1:0', 'input_tokens': 900,
+                     'output_tokens': 120, 'cost_usd': 0.000669}
+    assert type(usage['input_tokens']) is int and type(usage['cost_usd']) is float
+    assert a['usage_total'] == {'input_tokens': 4500, 'output_tokens': 600, 'cost_usd': 0.003345,
+                                'documents_with_usage': 5, 'documents_total': 5}
+    json.dumps(res)
+
+
+def test_applicant_documents_tool(table):
+    res = index.handler({'project_id': ' p1 ', 'applicant': 'ckrpk7314m'}, DOCS)
+    assert res['project_id'] == 'p1'
+    assert res['matches'] == 1
+    assert res['applicant_name'] == 'Sneha Anil Kulkarni'
+    assert res['pan_masked'] == 'XXXXXX314M'
+    assert [d['name'] for d in res['documents']] == sorted(f['document_name'] for f in sneha())
+    assert {d['document_id'] for d in res['documents']} == {f['document_id'] for f in sneha()}
+    assert len(table.calls) == 2  # read-only: the same paginated base-table query
+    json.dumps(res)
+
+
+def test_applicant_documents_unknown_applicant(table):
+    res = index.handler({'project_id': 'p1', 'applicant': 'Priya Sharma'}, DOCS)
+    assert res == {'project_id': 'p1', 'applicant_name': None, 'pan_masked': None,
+                   'documents': [], 'matches': 0}
+
+
+@pytest.mark.parametrize('event, error', [
+    ({'applicant': 'Rahul'}, 'project_id is required'),
+    ({'project_id': 'p1'}, 'applicant is required'),
+    ({'project_id': 'p1', 'applicant': '   '}, 'applicant is required'),
+    ({'project_id': 'p1', 'applicant': 42}, 'applicant must be a string'),
+])
+def test_applicant_documents_bad_input(table, event, error):
+    assert index.handler(event, DOCS) == {'error': error}
+    assert table.calls == []
+
+
+def test_applicant_documents_logs_counts_only(table, capsys):
+    index.handler({'project_id': 'p1', 'applicant': 'Rahul Vijay Deshmukh'}, DOCS)
+    out = capsys.readouterr().out
+    assert 'applicant_documents project=p1 docs=12 facts=12 matches=1 documents=7' in out
+    for secret in ('BQXPD4821K', 'Rahul', 'Deshmukh', '821K', 'salary_slip'):
+        assert secret not in out
+
+
+def test_applicant_documents_is_not_offered_to_the_chat():
+    """Backend-only tool: the Gateway exposes only the tools in schema.json."""
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schema.json')) as fh:
+        tools = [t['name'] for t in json.load(fh)]
+    assert tools == ['run_file_check', 'list_checklists']
+    assert 'applicant_documents' in index._TOOLS

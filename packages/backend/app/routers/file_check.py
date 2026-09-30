@@ -157,6 +157,24 @@ class ChecklistRef(BaseModel):
     name: str | None = None
 
 
+class DocumentUsage(BaseModel):
+    model_id: str | None = Field(default=None, description="Model of the facts extraction call")
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float = Field(
+        description="USD cost of the call from its tokens, at the Ask feature's prices "
+        "(Amazon Nova 2 Lite: $0.35 / $2.95 per million input / output tokens)"
+    )
+
+
+class ApplicantUsageTotal(BaseModel):
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float
+    documents_with_usage: int = Field(description="Documents whose usage was recorded (sums cover only these)")
+    documents_total: int = Field(description="Documents of this applicant")
+
+
 class ApplicantDocument(BaseModel):
     document_id: str | None = None
     document_name: str
@@ -168,6 +186,11 @@ class ApplicantDocument(BaseModel):
     )
     grounding_notes: list[str] = []
     unverified_fields: list[str] = Field(default=[], description="Numeric fields not found in the document text")
+    usage: DocumentUsage | None = Field(
+        default=None,
+        description="Tokens and cost of this document's facts extraction (one model call); "
+        "null when not recorded (analysed before cost recording)",
+    )
 
 
 class ChecklistItemResult(BaseModel):
@@ -218,6 +241,9 @@ class ApplicantResult(BaseModel):
     reference_month: str | None = Field(default=None, description="YYYY-MM the monthly rules ended at")
     reference_month_label: str | None = None
     documents: list[ApplicantDocument]
+    usage_total: ApplicantUsageTotal | None = Field(
+        default=None, description="Sum of the documents' usage (null from file-check engines without usage)"
+    )
     checklist: list[ChecklistItemResult]
     consistency: list[ConsistencyResult]
     income: IncomeSummary

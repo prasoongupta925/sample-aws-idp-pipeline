@@ -4,7 +4,9 @@ The Lambda is the AgentCore Gateway target behind the chat's run_file_check and
 list_checklists tools. The backend invokes it the way the Gateway does: the tool
 arguments are the event and the tool name travels in ClientContext.custom. The
 chat and the integration API therefore get their verdict from the same engine;
-the rules are never duplicated here.
+the rules are never duplicated here. The erase-applicant API resolves an
+applicant's documents with the Lambda's read-only applicant_documents tool (not
+offered to the chat), so it uses the verdict's own grouping.
 """
 
 import base64
@@ -21,6 +23,8 @@ from app.config import get_config
 GATEWAY_TARGET_NAME = "filecheck"
 TOOL_RUN_FILE_CHECK = "run_file_check"
 TOOL_LIST_CHECKLISTS = "list_checklists"
+# Backend-only: not in the Gateway tool schema (packages/lambda/file-check-mcp/schema.json).
+TOOL_APPLICANT_DOCUMENTS = "applicant_documents"
 
 _lambda_client = None
 
@@ -107,3 +111,14 @@ def invoke_file_check_tool(tool: str, arguments: dict[str, Any]) -> dict[str, An
             raise UnknownChecklistError(str(error), [str(a) for a in payload["available"]])
         raise FileCheckServiceError(str(error))
     return payload
+
+
+def get_applicant_documents(project_id: str, applicant: str) -> dict[str, Any]:
+    """One applicant's documents, grouped exactly as the verdict groups them (read-only).
+
+    Returns {project_id, applicant_name, pan_masked, documents: [{document_id,
+    name}], matches}; `matches` counts the applicants that matched (PAN first,
+    else a compatible name) and only a single match lists documents. Raises
+    like invoke_file_check_tool.
+    """
+    return invoke_file_check_tool(TOOL_APPLICANT_DOCUMENTS, {"project_id": project_id, "applicant": applicant})

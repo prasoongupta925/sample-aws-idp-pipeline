@@ -22,6 +22,7 @@ sys.path.insert(0, HERE)
 import pytest  # noqa: E402
 
 import index  # noqa: E402
+from extractor import NoStructuredOutputError, usage_record  # noqa: E402
 from tool_schema import FIELD_NAMES, LIST_FIELDS  # noqa: E402
 
 MODEL_ID = 'global.amazon.nova-2-lite-v1:0'
@@ -83,7 +84,7 @@ def env(monkeypatch):
             'paddleocr': '',
             'ai_analysis': [{'analysis_query': 'Page 1 Analysis', 'content': 'A salary slip.'}],
         }]),
-        'call_nova': Recorder((RAW_FIELDS, {'input_tokens': 900, 'output_tokens': 120})),
+        'call_nova': Recorder((RAW_FIELDS, usage_record(MODEL_ID, 900, 120))),
         'save_facts': Recorder('projects/p1/documents/d1/analysis/facts.json'),
         'save_document_facts': Recorder({}),
         'record_step_start': Recorder({}),
@@ -130,7 +131,9 @@ def test_completed_path(env, capsys):
     assert record['model_id'] == MODEL_ID
     assert record['doc_type'] == 'salary_slip'
     assert record['reason'] is None and record['error'] is None
-    assert record['usage'] == {'input_tokens': 900, 'output_tokens': 120}
+    # 900 x $0.35/M + 120 x $2.95/M = $0.000315 + $0.000354
+    assert record['usage'] == {'model_id': MODEL_ID, 'input_tokens': 900, 'output_tokens': 120,
+                               'cost_usd': 0.000669}
     assert record['extracted_at'].endswith('+00:00')
     fields = record['fields']
     assert list(fields) == FIELD_NAMES
@@ -183,7 +186,7 @@ def test_truncation_and_ungrounded_notes(env, monkeypatch):
         'segment_index': 0, 'segment_type': 'PAGE', 'format_parser': 'tiny',
         'ai_analysis': [{'analysis_query': 'Page 1 Analysis', 'content': 'Vision transcription ' * 10}],
     }]
-    env['call_nova'].result = ({'doc_type': 'identity_details', 'pan': 'bqxpd 4821k'}, {'input_tokens': 5, 'output_tokens': 5})
+    env['call_nova'].result = ({'doc_type': 'identity_details', 'pan': 'bqxpd 4821k'}, usage_record(MODEL_ID, 5, 5))
     assert index.handler(dict(EVENT), None)['status'] == 'completed'
     (model_text, _), _ = _only_call(env['call_nova'])
     assert len(model_text) <= 30
@@ -313,7 +316,7 @@ def test_bank_statement_obligations_are_stored_without_leaking_to_logs(env, caps
              'channel': 'ACH', 'category': 'loan_emi'},
             {'date': '06-Mar-2026', 'amount': 4321, 'narration': 'NACH DR/UNKNOWN', 'category': 'loan_emi'},
         ],
-    }, {'input_tokens': 2000, 'output_tokens': 400})
+    }, usage_record(MODEL_ID, 2000, 400))
     assert index.handler(dict(EVENT), None)['status'] == 'completed'
     (_, _, record), _ = _only_call(env['save_document_facts'])
     debits = record['fields']['recurring_debits']
@@ -340,15 +343,69 @@ def test_output_cut_at_max_tokens_is_recorded_in_grounding(env):
         'doc_type': 'bank_statement',
         'recurring_debits': [{'date': '03-Mar-2026', 'amount': 18000, 'category': 'rent',
                               'narration': 'NEFT DR/RENT MAR26/VASANT JOSHI'}],
-    }, {'input_tokens': 2000, 'output_tokens': 8000, 'output_truncated': True})
+    }, {**usage_record(MODEL_ID, 2000, 8000), 'output_truncated': True})
     assert index.handler(dict(EVENT), None)['status'] == 'completed'
     (_, _, record), _ = _only_call(env['save_document_facts'])
     assert record['grounding']['output_truncated'] is True
     assert 'model output hit the token limit; lists may be incomplete' in record['grounding']['notes']
-    assert record['usage'] == {'input_tokens': 2000, 'output_tokens': 8000}  # flag not in usage
+    assert record['usage'] == usage_record(MODEL_ID, 2000, 8000)  # flag not in usage
 
 
 def test_output_not_truncated_by_default(env):
     assert index.handler(dict(EVENT), None)['status'] == 'completed'
     (_, _, record), _ = _only_call(env['save_document_facts'])
     assert record['grounding']['output_truncated'] is False
+
+
+# --------------------------------------------------------------------------- #
+# usage: tokens and cost of the one model call (cost per document)
+# --------------------------------------------------------------------------- #
+NO_CALL_USAGE = {'model_id': None, 'input_tokens': 0, 'output_tokens': 0, 'cost_usd': 0.0}
+
+
+def test_skipped_document_records_zero_usage(env):
+    env['get_all_segment_analyses'].result = [
+        {'segment_index': 0, 'segment_type': 'PAGE', 'format_parser': '', 'ai_analysis': []}]
+    assert index.handler(dict(EVENT), None)['status'] == 'skipped'
+    assert env['call_nova'].calls == []
+    (_, _, record), _ = _only_call(env['save_document_facts'])
+    assert record['usage'] == NO_CALL_USAGE
+    (_, s3_record), _ = _only_call(env['save_facts'])
+    assert s3_record['usage'] == NO_CALL_USAGE
+
+
+def test_failure_before_the_model_call_records_zero_usage(env):
+    env['call_nova'].exc = RuntimeError('ThrottlingException: slow down')
+    assert index.handler(dict(EVENT), None)['status'] == 'failed'
+    (_, _, record), _ = _only_call(env['save_document_facts'])
+    assert record['usage'] == NO_CALL_USAGE
+
+
+def test_answer_without_fields_is_failed_but_its_usage_is_recorded(env):
+    # The model answered (and was billed) but gave no structured output.
+    env['call_nova'].exc = NoStructuredOutputError(usage_record(MODEL_ID, 700, 40))
+    assert index.handler(dict(EVENT), None) == {'workflow_id': 'wf_1', 'status': 'failed'}
+    (_, _, record), _ = _only_call(env['save_document_facts'])
+    assert record['status'] == 'failed'
+    assert record['error'] == 'model returned no structured output'
+    assert record['usage'] == {'model_id': MODEL_ID, 'input_tokens': 700, 'output_tokens': 40,
+                               'cost_usd': 0.000363}
+
+
+def test_failure_after_the_model_call_keeps_its_usage(env, monkeypatch):
+    def boom(*args, **kwargs):
+        raise RuntimeError('grounding bug')
+
+    monkeypatch.setattr(index, 'ground_fields', boom)
+    assert index.handler(dict(EVENT), None)['status'] == 'failed'
+    (_, _, record), _ = _only_call(env['save_document_facts'])
+    assert record['status'] == 'failed'
+    assert record['usage'] == usage_record(MODEL_ID, 900, 120)
+
+
+def test_usage_is_logged_as_counts_only(env, capsys):
+    index.handler(dict(EVENT), None)
+    out = capsys.readouterr().out
+    assert 'input_tokens=900 output_tokens=120 cost_usd=0.000669' in out
+    for secret in ('Rahul', 'BQXPD4821K', '82500', DOC_NAME):
+        assert secret not in out

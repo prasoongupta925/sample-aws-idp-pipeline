@@ -480,6 +480,41 @@ def _doc_type(doc) -> str:
     return t if t in DOC_TYPES else 'other'
 
 
+def _usage_view(rec):
+    """Tokens and cost of a document's facts extraction, or None when unknown.
+
+    The facts step records usage = {model_id, input_tokens, output_tokens,
+    cost_usd}. Records written before it recorded the cost (usage without
+    cost_usd, or no usage at all) and malformed values give None. Idempotent:
+    a view passed back in comes out unchanged.
+    """
+    u = rec.get('usage')
+    if not isinstance(u, dict):
+        return None
+    tin, tout, cost = u.get('input_tokens'), u.get('output_tokens'), u.get('cost_usd')
+    if not all(_is_number(v) and 0 <= v < float('inf') for v in (tin, tout, cost)):
+        return None
+    model_id = u.get('model_id') or rec.get('model_id')
+    return {
+        'model_id': model_id if isinstance(model_id, str) else None,
+        'input_tokens': int(tin),
+        'output_tokens': int(tout),
+        'cost_usd': float(cost),
+    }
+
+
+def _usage_total(documents) -> dict:
+    """Sum of the documents' usage; documents without usage count only in documents_total."""
+    known = [d['usage'] for d in documents if d.get('usage')]
+    return {
+        'input_tokens': sum(u['input_tokens'] for u in known),
+        'output_tokens': sum(u['output_tokens'] for u in known),
+        'cost_usd': round(sum(u['cost_usd'] for u in known), 8),
+        'documents_with_usage': len(known),
+        'documents_total': len(documents),
+    }
+
+
 def _to_engine_doc(rec) -> dict:
     """FACTS# data (or any doc-like dict) -> engine doc."""
     return {
@@ -488,6 +523,7 @@ def _to_engine_doc(rec) -> dict:
         'doc_type': _doc_type(rec),
         'fields': dict(rec.get('fields') or {}),
         'grounding': rec.get('grounding'),
+        'usage': _usage_view(rec),
     }
 
 
@@ -1939,6 +1975,8 @@ def evaluate_applicant(docs, checklist, reference_month=None) -> dict:
                 'grounded': grounded,
                 'grounding_notes': notes,
                 'unverified_fields': unverified,
+                # tokens and cost of this document's facts extraction (None: not recorded)
+                'usage': d['usage'],
             }
         )
 
@@ -1949,6 +1987,7 @@ def evaluate_applicant(docs, checklist, reference_month=None) -> dict:
         'reference_month': ym_str(ref) if ref else None,
         'reference_month_label': ym_label(ref) if ref else None,
         'documents': documents,
+        'usage_total': _usage_total(documents),
         'checklist': rows,
         'consistency': consistency,
         'income': income,
@@ -1963,17 +2002,69 @@ def evaluate_applicant(docs, checklist, reference_month=None) -> dict:
 
 
 # ------------------------------------------------------------------ file check
-def _applicant_matches(group, applicant) -> bool:
+def _pan_matches(group, applicant) -> bool:
+    """`applicant` is a PAN carried by a document of the group."""
     want_pan = _norm_pan(applicant)
     pans = {_norm_pan(d['fields'].get('pan')) for d in group if d['fields'].get('pan')}
-    if want_pan and want_pan in pans:
-        return True
+    return bool(want_pan and want_pan in pans)
+
+
+def _name_matches(group, applicant) -> bool:
+    """`applicant` is a name compatible with the group's display name."""
     display = _display_name(group)
     return bool(
         name_tokens(applicant)
         and display != 'Unknown'
         and names_compatible(applicant, display)
     )
+
+
+def _applicant_matches(group, applicant) -> bool:
+    return _pan_matches(group, applicant) or _name_matches(group, applicant)
+
+
+def mask_pan(pan):
+    """'BQXPD4821K' -> 'XXXXXX821K': only the last 4 characters (like the masked Aadhaar)."""
+    p = _norm_pan(pan)
+    if not p:
+        return None
+    if len(p) <= 4:
+        return 'X' * len(p)
+    return 'X' * (len(p) - 4) + p[-4:]
+
+
+def applicant_documents(facts, applicant, documents=None) -> dict:
+    """The documents of ONE applicant, grouped exactly as run_file_check groups them.
+
+    For the erase-applicant flow (DPDP right to erasure): it must remove the
+    documents the verdict shows under that applicant, no more, no fewer.
+    `applicant` is a PAN or a name as the verdict shows it. PAN first: a group
+    carrying that PAN is the match; else every group whose display name is
+    compatible with the name (names_compatible). Only the analysed documents of
+    the group are listed (pending, failed, no-facts, unsupported and
+    unassigned documents belong to no applicant, as in the verdict).
+
+    Returns {applicant_name, pan_masked, documents: [{document_id, name}],
+    matches}. `matches` is the number of groups that matched; unless it is 1,
+    applicant_name and pan_masked are None and documents is empty.
+    """
+    engine_docs = _classify(facts, documents)[0]
+    groups, _ = group_applicants(engine_docs)
+    query = str(applicant or '').strip()
+    matched = [g for g in groups if _pan_matches(g, query)] if query else []
+    if query and not matched:
+        matched = [g for g in groups if _name_matches(g, query)]
+    result = {'applicant_name': None, 'pan_masked': None, 'documents': [], 'matches': len(matched)}
+    if len(matched) == 1:
+        group = matched[0]
+        result.update(
+            applicant_name=_display_name(group),
+            pan_masked=mask_pan(_group_pan(group)),
+            documents=[
+                {'document_id': d['document_id'], 'name': d['document_name']} for d in group
+            ],
+        )
+    return result
 
 
 def _classify(facts, documents):

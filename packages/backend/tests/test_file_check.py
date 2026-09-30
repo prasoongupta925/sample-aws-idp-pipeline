@@ -664,3 +664,86 @@ def test_openapi_documents_the_contract():
     assert set(schemas["FileCheckRequest"]["properties"]) == {"checklist_id", "applicant", "reference_month"}
     get = spec["paths"]["/projects/{project_id}/checklists"]["get"]
     assert get["responses"]["200"]["content"]["application/json"]["schema"]["$ref"].endswith("/ChecklistCatalog")
+
+
+# ------------------------------------------------------------------ cost per document (usage)
+FACTS_MODEL = "global.amazon.nova-2-lite-v1:0"
+
+
+def rahul_with_usage():
+    """Rahul's documents as the facts step now records them, one analysed before usage."""
+    docs = rahul()
+    for i, d in enumerate(docs):
+        if d["doc_type"] == "form16_itr":
+            continue  # an old record: no usage
+        d["usage"] = {"model_id": FACTS_MODEL, "input_tokens": 1000 * (i + 1), "output_tokens": 100, "cost_usd": 0.0}
+        d["usage"]["cost_usd"] = round(d["usage"]["input_tokens"] * 0.35e-6 + 100 * 2.95e-6, 8)
+    return docs
+
+
+class TestUsage:
+    def test_documents_carry_usage_and_applicants_their_total(self, monkeypatch, configured, project):
+        monkeypatch.setattr(fc_index, "_table", FakeTable(project_items(rahul_with_usage() + sneha())))
+        with use_lambda(HandlerLambda()):
+            response = client.post(f"/projects/{PROJECT_ID}/file-check", headers=HEADERS, json={})
+
+        assert response.status_code == 200
+        by_name = {a["applicant"]: a for a in response.json()["applicants"]}
+        rahul_result = by_name["Rahul Vijay Deshmukh"]
+        usage = {d["document_name"]: d["usage"] for d in rahul_result["documents"]}
+        assert usage["01_loan_application_form.pdf"] == {
+            "model_id": FACTS_MODEL,
+            "input_tokens": 1000,
+            "output_tokens": 100,
+            "cost_usd": 0.000645,  # 1,000 x $0.35/M + 100 x $2.95/M
+        }
+        assert usage["07_form16_itr_summary_FY2025-26.pdf"] is None  # old record: null, still valid
+        assert rahul_result["usage_total"] == {
+            "input_tokens": 1000 + 2000 + 3000 + 4000 + 5000 + 6000,
+            "output_tokens": 600,
+            "cost_usd": 0.009120,  # 21,000 x 0.35/M + 600 x 2.95/M
+            "documents_with_usage": 6,
+            "documents_total": 7,
+        }
+        # every document entry has the key (object or null), not only those with usage
+        sneha_result = by_name["Sneha Anil Kulkarni"]
+        assert all("usage" in d and d["usage"] is None for d in sneha_result["documents"])
+        assert sneha_result["usage_total"] == {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cost_usd": 0.0,
+            "documents_with_usage": 0,
+            "documents_total": 5,
+        }
+
+    def test_engine_without_usage_still_validates(self, monkeypatch, configured, project):
+        """A file-check Lambda deployed before usage answers without the fields: null, not a 502."""
+        monkeypatch.setattr(fc_index, "_table", FakeTable(project_items(sneha())))
+        context = SimpleNamespace(
+            client_context=SimpleNamespace(custom={"bedrockAgentCoreToolName": "x___run_file_check"})
+        )
+        payload = fc_index.handler({"project_id": PROJECT_ID}, context)
+        for applicant in payload["applicants"]:
+            applicant.pop("usage_total")
+            for doc in applicant["documents"]:
+                doc.pop("usage")
+        with use_lambda(canned_lambda(payload)):
+            response = client.post(f"/projects/{PROJECT_ID}/file-check", headers=HEADERS, json={})
+
+        assert response.status_code == 200
+        (result,) = response.json()["applicants"]
+        assert result["usage_total"] is None
+        assert all(d["usage"] is None for d in result["documents"])
+
+    def test_openapi_documents_the_usage_fields(self):
+        schemas = app.openapi()["components"]["schemas"]
+        assert "usage" in schemas["ApplicantDocument"]["properties"]
+        assert "usage_total" in schemas["ApplicantResult"]["properties"]
+        assert set(schemas["DocumentUsage"]["properties"]) == {"model_id", "input_tokens", "output_tokens", "cost_usd"}
+        assert set(schemas["ApplicantUsageTotal"]["properties"]) == {
+            "input_tokens",
+            "output_tokens",
+            "cost_usd",
+            "documents_with_usage",
+            "documents_total",
+        }
