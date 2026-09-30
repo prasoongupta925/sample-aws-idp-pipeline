@@ -43,8 +43,9 @@ done
 wait
 
 wave IDP-V2-Retention IDP-V2-Application IDP-V2-Workflow IDP-V2-Webcrawler IDP-V2-Webhook IDP-V2-Worker \
-     IDP-V2-LanceService IDP-V2-Ocr IDP-V2-Bda IDP-V2-Transcribe IDP-V2-Agent IDP-V2-Websocket IDP-V2-Event \
-     IDPV2ApplicationFrontendwaf5A2F87E0
+     IDP-V2-LanceService IDP-V2-Ocr IDP-V2-Bda IDP-V2-Transcribe IDP-V2-Agent IDP-V2-Websocket IDP-V2-Event
+# The optional CloudFront WAF lives in us-east-1; it can go once IDP-V2-Application (its importer) is gone.
+AWS_REGION=us-east-1 AWS_DEFAULT_REGION=us-east-1 wave IDPV2ApplicationFrontendwaf5A2F87E0
 wave IDP-V2-Mcp
 wave IDP-V2-Storage
 # Leftovers of the old full edition, if any (VPC/NAT and Neptune stacks).
@@ -79,6 +80,17 @@ for lg in $(aws logs describe-log-groups --query 'logGroups[].logGroupName' --ou
   case "$lg" in *idp-v2*|*IDP-V2*|*IDPV2*|/aws/bedrock-agentcore/*|/aws/codebuild/sample-aws-idp*|/aws/vendedlogs/states/idp*)
     aws logs delete-log-group --log-group-name "$lg" 2>/dev/null ;; esac
 done
+
+# The us-east-1 bootstrap only served the WAF stack: remove it when nothing else there uses it.
+if [ -z "$(aws cloudformation list-stacks --region us-east-1 --query "StackSummaries[?StackStatus!='DELETE_COMPLETE' && StackName!='CDKToolkit'].StackName" --output text)" ] \
+   && aws cloudformation describe-stacks --region us-east-1 --stack-name CDKToolkit >/dev/null 2>&1; then
+  b="cdk-hnb659fds-assets-${ACCT}-us-east-1"
+  AWS_REGION=us-east-1 empty_bucket "$b"
+  aws ecr delete-repository --region us-east-1 --repository-name "cdk-hnb659fds-container-assets-${ACCT}-us-east-1" --force >/dev/null 2>&1
+  AWS_REGION=us-east-1 AWS_DEFAULT_REGION=us-east-1 wave CDKToolkit
+  aws s3 rb "s3://$b" --force --region us-east-1 >/dev/null 2>&1 && say "deleted the us-east-1 bootstrap bucket"
+  aws ssm delete-parameter --region us-east-1 --name /cdk-bootstrap/hnb659fds/version >/dev/null 2>&1
+fi
 
 if $ALL; then
   wave sample-aws-idp-pipeline-codebuild sample-aws-idp-pipeline-destroy-codebuild
