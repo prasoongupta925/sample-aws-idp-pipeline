@@ -3,7 +3,6 @@ import { WebSocketApi, WebSocketStage } from 'aws-cdk-lib/aws-apigatewayv2';
 import { WebSocketIamAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
 import { WebSocketLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import { Table } from 'aws-cdk-lib/aws-dynamodb';
-import { Vpc } from 'aws-cdk-lib/aws-ec2';
 import { StringParameter } from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 import {
@@ -20,14 +19,6 @@ export class WebsocketStack extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
     super(scope, id, props);
 
-    const vpcId = StringParameter.valueFromLookup(this, SSM_KEYS.VPC_ID);
-    const vpc = Vpc.fromLookup(this, 'Vpc', { vpcId });
-
-    const elasticacheEndpoint = StringParameter.valueForStringParameter(
-      this,
-      SSM_KEYS.ELASTICACHE_ENDPOINT,
-    );
-
     const backendTableName = StringParameter.valueForStringParameter(
       this,
       SSM_KEYS.BACKEND_TABLE_NAME,
@@ -43,10 +34,19 @@ export class WebsocketStack extends Stack {
       tableStreamArn: backendTableStreamArn,
     });
 
+    // WebSocket connection state (StorageStack); no VPC needed
+    const connectionsTable = Table.fromTableName(
+      this,
+      'ConnectionsTable',
+      StringParameter.valueForStringParameter(
+        this,
+        SSM_KEYS.WS_CONNECTIONS_TABLE_NAME,
+      ),
+    );
+
     const functions = new WebsocketFunctions(this, 'WebsocketFunctions', {
-      vpc,
-      elasticacheEndpoint,
       backendTableName,
+      connectionsTable,
     });
 
     const iamAuthorizer = new WebSocketIamAuthorizer();
@@ -101,8 +101,7 @@ export class WebsocketStack extends Stack {
     // WorkflowStream - DynamoDB Stream handler for workflow status changes
     this.workflowStream = new WorkflowStream(this, 'WorkflowStream', {
       backendTable,
-      vpc,
-      elasticacheEndpoint,
+      connectionsTable,
       websocketCallbackUrl: this.stage.callbackUrl,
       websocketApiId: this.api.apiId,
     });

@@ -1,5 +1,4 @@
 import { Duration } from 'aws-cdk-lib';
-import { IVpc } from 'aws-cdk-lib/aws-ec2';
 import { Runtime, Architecture } from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { S3EventSourceV2 } from 'aws-cdk-lib/aws-lambda-event-sources';
@@ -12,7 +11,6 @@ import * as path from 'path';
 export interface ArtifactProcessProps {
   bucket: IBucket;
   table: ITable;
-  vpc: IVpc;
   websocketMessageQueue: IQueue;
 }
 
@@ -31,7 +29,6 @@ export class ArtifactProcess extends Construct {
       runtime: Runtime.NODEJS_22_X,
       architecture: Architecture.ARM_64,
       timeout: Duration.seconds(30),
-      vpc: props.vpc,
       environment: {
         BACKEND_TABLE_NAME: props.table.tableName,
         WEBSOCKET_MESSAGE_QUEUE_URL: props.websocketMessageQueue.queueUrl,

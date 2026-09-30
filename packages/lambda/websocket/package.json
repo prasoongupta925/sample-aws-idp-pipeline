@@ -13,9 +13,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@aws-sdk/client-dynamodb": "^3.1015.0",
-    "@aws-sdk/lib-dynamodb": "^3.1015.0",
-    "iovalkey": "^0.3.3"
+    "@aws-sdk/client-dynamodb": "^3.1015.0"
   },
   "devDependencies": {
     "@types/aws-lambda": "^8.10.145",

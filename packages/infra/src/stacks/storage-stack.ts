@@ -1,8 +1,7 @@
-import { Duration, Stack, StackProps } from 'aws-cdk-lib';
+import { Duration, RemovalPolicy, Stack, StackProps } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import { StringParameter } from 'aws-cdk-lib/aws-ssm';
 import {
-  ElastiCache,
   getRegionConfig,
   getRetentionDays,
   S3Bucket,
@@ -16,7 +15,6 @@ import {
   TableV2,
 } from 'aws-cdk-lib/aws-dynamodb';
 import { HttpMethods } from 'aws-cdk-lib/aws-s3';
-import { Vpc } from 'aws-cdk-lib/aws-ec2';
 import { Queue } from 'aws-cdk-lib/aws-sqs';
 
 export class StorageStack extends Stack {
@@ -27,9 +25,6 @@ export class StorageStack extends Stack {
     // most retentionDays (CDK context, default 7).
     const retentionDays = getRetentionDays(this);
     const regionConfig = getRegionConfig(this);
-
-    const vpcId = StringParameter.valueFromLookup(this, SSM_KEYS.VPC_ID);
-    const vpc = Vpc.fromLookup(this, 'Vpc', { vpcId });
 
     // LanceDB Lock Table
     const lancedbLockTable = new TableV2(this, 'LancedbLockTable', {
@@ -183,14 +178,24 @@ export class StorageStack extends Stack {
       stringValue: regionConfig.lancedbExpressAzId,
     });
 
-    // ElastiCache Serverless (Redis)
-    const elasticache = new ElastiCache(this, 'ElastiCache', {
-      vpc,
+    // WebSocket connection state (replaces ElastiCache Serverless / Valkey):
+    // which user each connection belongs to and which projects it follows.
+    // On demand, so nothing to pay while idle, and no VPC for its Lambdas.
+    // Every item carries expires_at = now + 24 h (TTL); API Gateway closes a
+    // connection after 2 h, so only leftovers of a lost $disconnect expire.
+    // Layout: packages/lambda/websocket/src/keys.ts.
+    const wsConnectionsTable = new TableV2(this, 'WsConnectionsTable', {
+      tableName: 'idp-v2-ws-connections',
+      partitionKey: { name: 'pk', type: AttributeType.STRING },
+      sortKey: { name: 'sk', type: AttributeType.STRING },
+      billing: Billing.onDemand(),
+      timeToLiveAttribute: 'expires_at',
+      removalPolicy: RemovalPolicy.DESTROY,
     });
 
-    new StringParameter(this, 'ElastiCacheEndpointParam', {
-      parameterName: SSM_KEYS.ELASTICACHE_ENDPOINT,
-      stringValue: elasticache.cache.serverlessCacheEndpointAddress,
+    new StringParameter(this, 'WsConnectionsTableNameParam', {
+      parameterName: SSM_KEYS.WS_CONNECTIONS_TABLE_NAME,
+      stringValue: wsConnectionsTable.tableName,
     });
 
     // WebSocket Message Queue (SQS allows at most 14 days)

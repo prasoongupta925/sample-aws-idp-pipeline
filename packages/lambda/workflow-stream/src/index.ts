@@ -1,5 +1,5 @@
 import type { DynamoDBStreamHandler, DynamoDBRecord } from 'aws-lambda';
-import { getConnectionIdsByProject } from './valkey.js';
+import { getConnectionIdsByProject } from './store.js';
 import {
   sendToConnection,
   WorkflowMessage,
@@ -186,7 +186,7 @@ async function processWorkflowRecord(record: DynamoDBRecord): Promise<void> {
 
   await Promise.all(
     connectionIds.map((connectionId) =>
-      sendToConnection(connectionId, messageStr, newInfo.projectId),
+      sendToConnection(connectionId, messageStr),
     ),
   );
 }
@@ -265,7 +265,7 @@ async function processStepRecord(record: DynamoDBRecord): Promise<void> {
 
     await Promise.all(
       connectionIds.map((connectionId) =>
-        sendToConnection(connectionId, messageStr, newInfo.projectId),
+        sendToConnection(connectionId, messageStr),
       ),
     );
   }
@@ -291,7 +291,7 @@ async function processStepRecord(record: DynamoDBRecord): Promise<void> {
 
     await Promise.all(
       connectionIds.map((connectionId) =>
-        sendToConnection(connectionId, messageStr, newInfo.projectId),
+        sendToConnection(connectionId, messageStr),
       ),
     );
   }
@@ -333,7 +333,7 @@ async function processDocumentDeletion(record: DynamoDBRecord): Promise<void> {
 
   await Promise.all(
     connectionIds.map((connectionId) =>
-      sendToConnection(connectionId, messageStr, projectId),
+      sendToConnection(connectionId, messageStr),
     ),
   );
 }

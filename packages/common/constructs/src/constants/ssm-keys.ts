@@ -30,6 +30,9 @@ export const SSM_KEYS = {
   WEBSOCKET_API_ID: '/idp-v2/websocket/api-id',
   WEBSOCKET_CALLBACK_URL: '/idp-v2/websocket/callback-url',
   WEBSOCKET_CONNECT_ROLE_ARN: '/idp-v2/websocket/connect-role-arn',
+  // WebSocket connection state table (StorageStack); read and written by the
+  // websocket, websocket-broker and workflow-stream Lambdas
+  WS_CONNECTIONS_TABLE_NAME: '/idp-v2/websocket/connections-table-name',
   // Preprocessing queues
   PREPROCESS_WORKFLOW_QUEUE_URL: '/idp-v2/preprocess/workflow/queue-url',
   QA_REGENERATOR_FUNCTION_ARN: '/idp-v2/qa-regenerator/function-arn',

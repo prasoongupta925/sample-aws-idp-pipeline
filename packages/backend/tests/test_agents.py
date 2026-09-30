@@ -109,27 +109,6 @@ class FakeS3:
         return [key for call, _, key in self.calls if call == kind]
 
 
-class FakeCache:
-    """Async stand-in for the Glide cluster client used by app.cache."""
-
-    def __init__(self):
-        self.store = {}
-        self.ttl = {}
-
-    async def get(self, key):
-        return self.store.get(key)
-
-    async def set(self, key, value):
-        self.store[key] = value
-
-    async def expire(self, key, seconds):
-        self.ttl[key] = seconds
-
-    async def delete(self, keys):
-        for key in keys:
-            self.store.pop(key, None)
-
-
 def custom_agent(agent_id, name, created_at="2026-09-29T10:00:00+00:00"):
     return AgentListItem(agent_id=agent_id, name=name, created_at=created_at)
 
@@ -294,21 +273,16 @@ class TestListAgents:
 
         assert [item["agent_id"] for item in response.json()] == ["builtin-call-qa-reviewer", "builtin-file-checker"]
 
-    def test_builtins_are_cached_once_for_every_user_and_failures_are_not(self, config):
-        cache = FakeCache()
+    def test_builtins_are_read_on_every_request_so_a_failure_only_hits_that_one(self, config):
+        # app.cache no longer caches (no Valkey): each request lists the bucket.
         fake = FakeS3(BUILTINS)
 
-        async def cache_client():
-            return cache
-
         with (
-            patch("app.cache._get_cache_client", new=cache_client),
             patch("app.cache.cached_query_agents", new=AsyncMock(return_value=[])),
             use_s3(fake),
         ):
             fake.list_error = ClientError({"Error": {"Code": "SlowDown", "Message": "slow"}}, "ListObjectsV2")
             assert client.get("/projects/proj-1/agents", headers=USER).json() == []
-            assert "builtin_agents" not in cache.store  # a failure is not cached
 
             fake.list_error = None
             first = client.get("/projects/proj-1/agents", headers=USER).json()
@@ -316,10 +290,9 @@ class TestListAgents:
             second = client.get("/projects/proj-2/agents", headers={"x-user-id": "user-2"}).json()
 
         assert [item["agent_id"] for item in first] == ["builtin-call-qa-reviewer", "builtin-file-checker"]
+        assert first[0]["builtin"] is True
         assert second == first
-        assert len(fake.keys_called("list")) == listed  # the second user was served from the cache
-        assert cache.ttl["builtin_agents"] == 3600
-        assert json.loads(cache.store["builtin_agents"])[0]["builtin"] is True
+        assert len(fake.keys_called("list")) == listed + 1  # read again, not served from a cache
 
     @pytest.mark.parametrize(
         ("url", "user"),

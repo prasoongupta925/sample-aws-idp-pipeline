@@ -552,12 +552,6 @@ importers:
       '@aws-sdk/client-dynamodb':
         specifier: ^3.1015.0
         version: 3.1015.0
-      '@aws-sdk/lib-dynamodb':
-        specifier: ^3.1015.0
-        version: 3.1015.0(@aws-sdk/client-dynamodb@3.1015.0)
-      iovalkey:
-        specifier: ^0.3.3
-        version: 0.3.3
     devDependencies:
       '@types/aws-lambda':
         specifier: ^8.10.145
@@ -577,9 +571,9 @@ importers:
       '@aws-sdk/client-apigatewaymanagementapi':
         specifier: ^3.1015.0
         version: 3.1015.0
-      iovalkey:
-        specifier: ^0.3.3
-        version: 0.3.3
+      '@aws-sdk/client-dynamodb':
+        specifier: ^3.1015.0
+        version: 3.1015.0
     devDependencies:
       '@types/aws-lambda':
         specifier: ^8.10.145
@@ -590,6 +584,9 @@ importers:
       typescript:
         specifier: ~5.9.3
         version: 5.9.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.9(@types/node@22.19.1)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(jsdom@29.1.1)(vite@7.3.6(@types/node@22.19.1)(jiti@2.7.0)(lightningcss@1.30.2)(terser@5.48.0)(tsx@4.20.6)(yaml@2.9.0))
 
   packages/lambda/workflow-stream:
     dependencies:
@@ -602,9 +599,6 @@ importers:
       '@aws-sdk/lib-dynamodb':
         specifier: ^3.1015.0
         version: 3.1015.0(@aws-sdk/client-dynamodb@3.1015.0)
-      iovalkey:
-        specifier: ^0.3.3
-        version: 0.3.3
     devDependencies:
       '@types/aws-lambda':
         specifier: ^8.10.145

@@ -1,6 +1,5 @@
 import type { APIGatewayProxyHandler } from 'aws-lambda';
-import { KEYS } from './keys.js';
-import { valkey } from './valkey.js';
+import { subscribe, unsubscribe } from './store.js';
 
 interface SubscribeMessage {
   action: 'subscribe' | 'unsubscribe';
@@ -21,15 +20,13 @@ export const defaultHandler: APIGatewayProxyHandler = async (event) => {
     const message = JSON.parse(body) as SubscribeMessage;
 
     if (message.action === 'subscribe' && message.projectId) {
-      await valkey.sadd(KEYS.project(message.projectId), connectionId);
-      await valkey.sadd(KEYS.connProjects(connectionId), message.projectId);
+      await subscribe(connectionId, message.projectId);
       console.log('Subscribed to project', {
         connectionId,
         projectId: message.projectId,
       });
     } else if (message.action === 'unsubscribe' && message.projectId) {
-      await valkey.srem(KEYS.project(message.projectId), connectionId);
-      await valkey.srem(KEYS.connProjects(connectionId), message.projectId);
+      await unsubscribe(connectionId, message.projectId);
       console.log('Unsubscribed from project', {
         connectionId,
         projectId: message.projectId,

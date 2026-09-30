@@ -1,6 +1,6 @@
 declare namespace NodeJS {
   interface ProcessEnv {
-    ELASTICACHE_ENDPOINT: string;
+    WS_CONNECTIONS_TABLE_NAME: string;
     WEBSOCKET_CALLBACK_URL: string;
   }
 }

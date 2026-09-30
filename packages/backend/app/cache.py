@@ -1,12 +1,16 @@
+"""List caching for the routers, now switched off.
+
+The Valkey (ElastiCache Serverless) cache is gone. The backend runs on Lambda
+with many containers, where an in-process cache would serve stale lists from
+one container after another one changed them, and the DynamoDB/DuckDB reads
+behind these lists are fast enough. The API is kept so the routers need no
+change: every cached_* call reads through and invalidate() does nothing.
+"""
+
 import inspect
-import json
 from collections.abc import Callable, Coroutine
-from typing import Any, TypeVar, cast, get_type_hints
+from typing import Any, TypeVar, cast
 
-from glide import GlideClusterClient, GlideClusterClientConfiguration, NodeAddress
-from pydantic import TypeAdapter
-
-from app.config import get_config
 from app.ddb.projects import query_projects
 from app.duckdb import query_agents, query_sessions
 
@@ -25,52 +29,20 @@ class CacheKey:
         return f"agent_list:{user_id}:{project_id}"
 
 
-_cache_client: GlideClusterClient | None = None
-
-
-async def _get_cache_client() -> GlideClusterClient | None:
-    global _cache_client
-    if _cache_client is None:
-        config = get_config()
-        if not config.elasticache_endpoint:
-            return None
-        client_config = GlideClusterClientConfiguration(
-            [NodeAddress(host=config.elasticache_endpoint, port=6379)],
-            use_tls=True,
-        )
-        _cache_client = await GlideClusterClient.create(client_config)
-    return _cache_client
-
-
 def _cached(
     key_fn: Callable[..., str], expire: int
 ) -> Callable[[Callable[..., Coroutine[Any, Any, T]]], Callable[..., Coroutine[Any, Any, T]]]:
-    def wrapper(fn: Callable[..., Coroutine[Any, Any, T]]) -> Callable[..., Coroutine[Any, Any, T]]:
-        return_type = get_type_hints(fn).get("return")
-        type_adapter = TypeAdapter(return_type) if return_type else None
+    """Wrap fn (sync or async) as a coroutine function that always calls it.
 
-        async def _call_fn(*args: Any, **kwargs: Any) -> T:
+    key_fn and expire are accepted for the existing call sites and ignored:
+    nothing is cached, so every call is a miss.
+    """
+
+    def wrapper(fn: Callable[..., Coroutine[Any, Any, T]]) -> Callable[..., Coroutine[Any, Any, T]]:
+        async def inner(*args: Any, **kwargs: Any) -> T:
             if inspect.iscoroutinefunction(fn):
                 return await fn(*args, **kwargs)
             return cast(T, fn(*args, **kwargs))
-
-        async def inner(*args: Any, **kwargs: Any) -> T:
-            client = await _get_cache_client()
-            if client is None:
-                return await _call_fn(*args, **kwargs)
-
-            key = key_fn(*args, **kwargs)
-            cached_value = await client.get(key)
-            if cached_value is not None:
-                if type_adapter:
-                    return type_adapter.validate_json(cached_value)
-                return json.loads(cached_value)
-
-            result = await _call_fn(*args, **kwargs)
-            serialized = type_adapter.dump_json(result) if type_adapter else json.dumps(result).encode()
-            await client.set(key, serialized.decode())
-            await client.expire(key, expire)
-            return result
 
         return inner
 
@@ -78,10 +50,7 @@ def _cached(
 
 
 async def invalidate(key: str) -> None:
-    client = await _get_cache_client()
-    if client is None:
-        return
-    await client.delete([key])
+    """Nothing is cached, so there is nothing to drop."""
 
 
 cached_query_projects = _cached(lambda: CacheKey.QUERY_PROJECTS, expire=3600)(query_projects)

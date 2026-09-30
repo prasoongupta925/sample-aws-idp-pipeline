@@ -1,6 +1,5 @@
 import { Duration, Stack } from 'aws-cdk-lib';
 import { ITable } from 'aws-cdk-lib/aws-dynamodb';
-import { IVpc } from 'aws-cdk-lib/aws-ec2';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import {
   Runtime,
@@ -16,8 +15,8 @@ import * as path from 'path';
 
 export interface WorkflowStreamProps {
   backendTable: ITable;
-  vpc: IVpc;
-  elasticacheEndpoint: string;
+  /** WebSocket connection state (StorageStack, idp-v2-ws-connections) */
+  connectionsTable: ITable;
   websocketCallbackUrl: string;
   websocketApiId: string;
 }
@@ -30,8 +29,7 @@ export class WorkflowStream extends Construct {
 
     const {
       backendTable,
-      vpc,
-      elasticacheEndpoint,
+      connectionsTable,
       websocketCallbackUrl,
       websocketApiId,
     } = props;
@@ -46,19 +44,17 @@ export class WorkflowStream extends Construct {
       runtime: Runtime.NODEJS_22_X,
       architecture: Architecture.ARM_64,
       timeout: Duration.seconds(30),
-      vpc,
       environment: {
         BACKEND_TABLE_NAME: backendTable.tableName,
-        ELASTICACHE_ENDPOINT: elasticacheEndpoint,
+        WS_CONNECTIONS_TABLE_NAME: connectionsTable.tableName,
         WEBSOCKET_CALLBACK_URL: websocketCallbackUrl,
-      },
-      bundling: {
-        nodeModules: ['iovalkey'],
       },
     });
 
     // Grant permissions
     backendTable.grantReadData(this.function);
+    // Query project subscribers, delete connections API Gateway reports gone
+    connectionsTable.grantReadWriteData(this.function);
     this.function.addToRolePolicy(
       new PolicyStatement({
         actions: ['execute-api:ManageConnections'],

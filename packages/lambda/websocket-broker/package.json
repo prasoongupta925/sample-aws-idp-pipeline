@@ -7,19 +7,20 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "vitest run"
   },
   "keywords": [],
   "author": "",
   "license": "MIT",
   "dependencies": {
     "@aws-sdk/client-apigatewaymanagementapi": "^3.1015.0",
-    "iovalkey": "^0.3.3"
+    "@aws-sdk/client-dynamodb": "^3.1015.0"
   },
   "devDependencies": {
     "@types/aws-lambda": "^8.10.145",
     "@types/node": "^22.19.1",
-    "typescript": "~5.9.3"
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.9"
   },
   "packageManager": "pnpm@10.12.4"
 }

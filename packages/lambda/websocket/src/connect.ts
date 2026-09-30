@@ -1,36 +1,20 @@
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, GetCommand } from '@aws-sdk/lib-dynamodb';
+import { GetItemCommand } from '@aws-sdk/client-dynamodb';
 import type { APIGatewayProxyHandler } from 'aws-lambda';
-import { KEYS } from './keys.js';
-import { valkey } from './valkey.js';
+import { addConnection, ddb } from './store.js';
 
-const ddbClient = DynamoDBDocumentClient.from(new DynamoDBClient({}));
-
+// One GetItem on the backend table. The old Valkey copy of this mapping is
+// gone: a DynamoDB cache in front of a DynamoDB read only adds requests.
 async function getUsernameFromSub(
   userSub: string,
 ): Promise<string | undefined> {
-  // 캐시에서 먼저 조회
-  const cached = await valkey.get(KEYS.userSub(userSub));
-  if (cached) {
-    return cached;
-  }
-
-  // 캐시에 없으면 DynamoDB에서 조회
-  const { Item } = await ddbClient.send(
-    new GetCommand({
+  const { Item } = await ddb.send(
+    new GetItemCommand({
       TableName: process.env.BACKEND_TABLE_NAME,
-      Key: { PK: `USERSUB#${userSub}`, SK: 'META' },
+      Key: { PK: { S: `USERSUB#${userSub}` }, SK: { S: 'META' } },
     }),
   );
 
-  const username = Item?.data?.username as string | undefined;
-
-  // 캐시에 저장
-  if (username) {
-    await valkey.set(KEYS.userSub(userSub), username);
-  }
-
-  return username;
+  return Item?.data?.M?.username?.S;
 }
 
 export const connectHandler: APIGatewayProxyHandler = async (event) => {
@@ -42,8 +26,7 @@ export const connectHandler: APIGatewayProxyHandler = async (event) => {
     const username = await getUsernameFromSub(userSub);
 
     if (username) {
-      await valkey.set(KEYS.conn(connectionId), `${userSub}:${username}`);
-      await valkey.sadd(KEYS.username(username), connectionId);
+      await addConnection(connectionId, userSub, username);
     }
   }
 

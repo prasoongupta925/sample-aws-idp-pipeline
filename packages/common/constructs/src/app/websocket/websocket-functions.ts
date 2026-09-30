@@ -1,15 +1,14 @@
 import { Duration } from 'aws-cdk-lib';
-import { Table } from 'aws-cdk-lib/aws-dynamodb';
-import { IVpc } from 'aws-cdk-lib/aws-ec2';
+import { ITable, Table } from 'aws-cdk-lib/aws-dynamodb';
 import { Runtime, Architecture } from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { Construct } from 'constructs';
 import * as path from 'path';
 
 export interface WebsocketFunctionsProps {
-  vpc: IVpc;
-  elasticacheEndpoint: string;
   backendTableName: string;
+  /** WebSocket connection state (StorageStack, idp-v2-ws-connections) */
+  connectionsTable: ITable;
 }
 
 export class WebsocketFunctions extends Construct {
@@ -20,7 +19,7 @@ export class WebsocketFunctions extends Construct {
   constructor(scope: Construct, id: string, props: WebsocketFunctionsProps) {
     super(scope, id);
 
-    const { vpc, elasticacheEndpoint, backendTableName } = props;
+    const { backendTableName, connectionsTable } = props;
 
     const backendTable = Table.fromTableName(
       this,
@@ -37,17 +36,14 @@ export class WebsocketFunctions extends Construct {
       runtime: Runtime.NODEJS_22_X,
       architecture: Architecture.ARM_64,
       timeout: Duration.seconds(2),
-      vpc,
       environment: {
-        ELASTICACHE_ENDPOINT: elasticacheEndpoint,
+        WS_CONNECTIONS_TABLE_NAME: connectionsTable.tableName,
         BACKEND_TABLE_NAME: backendTableName,
-      },
-      bundling: {
-        nodeModules: ['iovalkey'],
       },
     });
 
     backendTable.grantReadData(this.connectFunction);
+    connectionsTable.grantWriteData(this.connectFunction);
 
     this.defaultFunction = new NodejsFunction(this, 'DefaultFunction', {
       entry: path.resolve(
@@ -58,14 +54,12 @@ export class WebsocketFunctions extends Construct {
       runtime: Runtime.NODEJS_22_X,
       architecture: Architecture.ARM_64,
       timeout: Duration.seconds(2),
-      vpc,
       environment: {
-        ELASTICACHE_ENDPOINT: elasticacheEndpoint,
-      },
-      bundling: {
-        nodeModules: ['iovalkey'],
+        WS_CONNECTIONS_TABLE_NAME: connectionsTable.tableName,
       },
     });
+
+    connectionsTable.grantWriteData(this.defaultFunction);
 
     this.disconnectFunction = new NodejsFunction(this, 'DisconnectFunction', {
       entry: path.resolve(
@@ -76,13 +70,11 @@ export class WebsocketFunctions extends Construct {
       runtime: Runtime.NODEJS_22_X,
       architecture: Architecture.ARM_64,
       timeout: Duration.seconds(10),
-      vpc,
       environment: {
-        ELASTICACHE_ENDPOINT: elasticacheEndpoint,
-      },
-      bundling: {
-        nodeModules: ['iovalkey'],
+        WS_CONNECTIONS_TABLE_NAME: connectionsTable.tableName,
       },
     });
+
+    connectionsTable.grantReadWriteData(this.disconnectFunction);
   }
 }

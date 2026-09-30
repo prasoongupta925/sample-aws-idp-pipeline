@@ -1,5 +1,4 @@
 import { Duration, Stack } from 'aws-cdk-lib';
-import { IVpc } from 'aws-cdk-lib/aws-ec2';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { Runtime, Architecture } from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
@@ -11,7 +10,6 @@ import * as path from 'path';
 
 export interface MessageProcessProps {
   bucket: IBucket;
-  vpc: IVpc;
   websocketMessageQueue: IQueue;
 }
 
@@ -30,7 +28,6 @@ export class MessageProcess extends Construct {
       runtime: Runtime.NODEJS_22_X,
       architecture: Architecture.ARM_64,
       timeout: Duration.seconds(30),
-      vpc: props.vpc,
       environment: {
         WEBSOCKET_MESSAGE_QUEUE_URL: props.websocketMessageQueue.queueUrl,
       },

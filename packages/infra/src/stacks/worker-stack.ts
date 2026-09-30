@@ -1,5 +1,4 @@
 import { Stack, StackProps } from 'aws-cdk-lib';
-import { Vpc } from 'aws-cdk-lib/aws-ec2';
 import { Table } from 'aws-cdk-lib/aws-dynamodb';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
 import { Queue } from 'aws-cdk-lib/aws-sqs';
@@ -16,9 +15,6 @@ export class WorkerStack extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
     super(scope, id, props);
 
-    const vpcId = StringParameter.valueFromLookup(this, SSM_KEYS.VPC_ID);
-    const vpc = Vpc.fromLookup(this, 'Vpc', { vpcId });
-
     const sessionStorageBucketName = StringParameter.valueForStringParameter(
       this,
       SSM_KEYS.SESSION_STORAGE_BUCKET_NAME,
@@ -30,9 +26,14 @@ export class WorkerStack extends Stack {
       sessionStorageBucketName,
     );
 
-    const elasticacheEndpoint = StringParameter.valueForStringParameter(
+    // WebSocket connection state (StorageStack); no VPC needed
+    const connectionsTable = Table.fromTableName(
       this,
-      SSM_KEYS.ELASTICACHE_ENDPOINT,
+      'ConnectionsTable',
+      StringParameter.valueForStringParameter(
+        this,
+        SSM_KEYS.WS_CONNECTIONS_TABLE_NAME,
+      ),
     );
 
     const websocketCallbackUrl = StringParameter.valueForStringParameter(
@@ -58,13 +59,11 @@ export class WorkerStack extends Stack {
 
     new MessageProcess(this, 'MessageProcess', {
       bucket: sessionStorageBucket,
-      vpc,
       websocketMessageQueue,
     });
 
     new WebsocketBroker(this, 'WebsocketBroker', {
-      vpc,
-      elasticacheEndpoint,
+      connectionsTable,
       websocketCallbackUrl,
       websocketApiId,
       websocketMessageQueue,
@@ -96,7 +95,6 @@ export class WorkerStack extends Stack {
     new ArtifactProcess(this, 'ArtifactProcess', {
       bucket: agentStorageBucket,
       table: backendTable,
-      vpc,
       websocketMessageQueue,
     });
   }

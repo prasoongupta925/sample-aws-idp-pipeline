@@ -1,5 +1,5 @@
 import { Duration, Stack } from 'aws-cdk-lib';
-import { IVpc } from 'aws-cdk-lib/aws-ec2';
+import { ITable } from 'aws-cdk-lib/aws-dynamodb';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { Runtime, Architecture } from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
@@ -9,8 +9,8 @@ import { Construct } from 'constructs';
 import * as path from 'path';
 
 export interface WebsocketBrokerProps {
-  vpc: IVpc;
-  elasticacheEndpoint: string;
+  /** WebSocket connection state (StorageStack, idp-v2-ws-connections) */
+  connectionsTable: ITable;
   websocketCallbackUrl: string;
   websocketApiId: string;
   websocketMessageQueue: IQueue;
@@ -31,15 +31,14 @@ export class WebsocketBroker extends Construct {
       runtime: Runtime.NODEJS_22_X,
       architecture: Architecture.ARM_64,
       timeout: Duration.seconds(30),
-      vpc: props.vpc,
       environment: {
-        ELASTICACHE_ENDPOINT: props.elasticacheEndpoint,
+        WS_CONNECTIONS_TABLE_NAME: props.connectionsTable.tableName,
         WEBSOCKET_CALLBACK_URL: props.websocketCallbackUrl,
       },
-      bundling: {
-        nodeModules: ['iovalkey'],
-      },
     });
+
+    // Query/Scan the connections, delete the ones API Gateway reports gone
+    props.connectionsTable.grantReadWriteData(this.function);
 
     const stack = Stack.of(this);
     this.function.addToRolePolicy(

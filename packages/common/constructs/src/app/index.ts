@@ -6,6 +6,5 @@ export * from './websocket/index.js';
 export * from './workers/index.js';
 export * from './s3-bucket.js';
 export * from './s3-directory-bucket.js';
-export * from './elasticache.js';
 export * from './workflow-stream.js';
 export * from './retention-config.js';

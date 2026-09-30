@@ -36,47 +36,29 @@
 
 ---
 
-# Valkey Keys
+# Connection store (DynamoDB)
 
-## 키 구조
+One on-demand table (`idp-v2-ws-connections`, name in `WS_CONNECTIONS_TABLE_NAME`,
+SSM `/idp-v2/websocket/connections-table-name`). Every item gets
+`expires_at` = now + 24 h (table TTL), so entries of a lost `$disconnect`
+delete themselves. Layout in `src/keys.ts`:
 
-| Key | Type | Description |
-|-----|------|-------------|
-| `ws:conn:{connectionId}` | String | connectionId → `{userSub}:{username}` 매핑 |
-| `ws:username:{username}` | Set | username → connectionId(s) 매핑 |
+| pk | sk | Attributes | Meaning |
+|----|----|------------|---------|
+| `CONN#{connectionId}` | `META` | `userSub`, `username` | connection → user |
+| `CONN#{connectionId}` | `PROJ#{projectId}` | | projects the connection follows |
+| `PROJ#{projectId}` | `CONN#{connectionId}` | | connections following a project |
+| `USER#{username}` | `CONN#{connectionId}` | | connections of a user |
 
-## 사용 방법
-
-### Connect (저장)
-
-```typescript
-await valkey.set(KEYS.conn(connectionId), `${userSub}:${username}`);
-await valkey.sadd(KEYS.username(username), connectionId);
-```
-
-### 조회
+## Usage (`src/store.ts`)
 
 ```typescript
-// username으로 모든 connectionId 가져오기
-const connectionIds = await valkey.smembers(KEYS.username(username));
-
-// connectionId로 userSub, username 가져오기
-const value = await valkey.get(KEYS.conn(connectionId));
-const [userSub, username] = value?.split(':') ?? [];
-
-// 모든 connectionId 가져오기
-const keys = await valkey.scanAll({ match: 'ws:conn:*' });
-const connectionIds = keys.map(k => k.replace('ws:conn:', ''));
+await addConnection(connectionId, userSub, username); // $connect
+await subscribe(connectionId, projectId);             // {"action":"subscribe"}
+await unsubscribe(connectionId, projectId);           // {"action":"unsubscribe"}
+await removeConnection(connectionId);                 // $disconnect: all of the above
 ```
 
-### Disconnect (삭제)
-
-```typescript
-const value = await valkey.get(KEYS.conn(connectionId));
-await valkey.del(KEYS.conn(connectionId));
-
-if (value) {
-  const [, username] = value.split(':');
-  await valkey.srem(KEYS.username(username), connectionId);
-}
-```
+Readers: `websocket-broker` queries `USER#{username}` (or scans the `META`
+items to reach every connection); `workflow-stream` queries `PROJ#{projectId}`.
+Both call `removeConnection` when API Gateway answers `GoneException`.

@@ -12,7 +12,6 @@ class Config(BaseSettings):
     backend_table_name: str = ""
     session_storage_bucket_name: str = ""
     agent_storage_bucket_name: str = ""
-    elasticache_endpoint: str = ""
     step_function_arn: str = ""
     qa_regenerator_function_arn: str = ""
     lancedb_function_name: str = "idp-v2-lancedb-service"
