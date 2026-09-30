@@ -1,0 +1,66 @@
+version: 0.2
+# Lean deploy: serverless-only stacks (no VPC/NAT, Neptune, ElastiCache, ALB/Fargate, WAF).
+# Env: REPO_URL, VERSION (branch/tag/sha), AWS_ACCOUNT_ID, AWS_DEFAULT_REGION, ADMIN_USER_EMAIL,
+#      DEPLOY_STACKS (optional, space separated), CDK_CONTEXT_ARGS (optional '-c k=v ...'),
+#      HOTSWAP ("true" = code-only update through --hotswap-fallback, much faster).
+phases:
+  install:
+    runtime-versions:
+      nodejs: 22
+      python: 3.13
+    commands:
+      - npm install -g pnpm@10 aws-cdk@2 --no-fund --no-audit --loglevel=error
+      - pip install --quiet uv
+  pre_build:
+    commands:
+      - git clone --depth 1 --branch "$VERSION" "$REPO_URL" /tmp/project || (git clone "$REPO_URL" /tmp/project && git -C /tmp/project checkout "$VERSION")
+      - cd /tmp/project
+      - find /tmp/project -name ".python-version" -exec sh -c 'echo "3.13" > "$1"' _ {} \;
+      - pnpm install --frozen-lockfile --prefer-offline --reporter=append-only | tail -3
+  build:
+    commands:
+      - cd /tmp/project
+      - START=$(date +%s)
+      - pnpm nx run-many -t compile,bundle -p @idp-v2/infra @idp-v2/frontend --parallel=6
+      - echo "build took $(( $(date +%s) - START ))s"
+      - |
+        STATUS=$(aws cloudformation describe-stacks --stack-name CDKToolkit --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo NOT_FOUND)
+        if [ "$STATUS" = "NOT_FOUND" ] || [ "$STATUS" = "ROLLBACK_COMPLETE" ]; then
+          aws cloudformation delete-stack --stack-name CDKToolkit 2>/dev/null || true
+          aws cloudformation wait stack-delete-complete --stack-name CDKToolkit 2>/dev/null || true
+          npx cdk bootstrap aws://$AWS_ACCOUNT_ID/$AWS_DEFAULT_REGION --require-approval never
+        fi
+      - |
+        # The optional CloudFront WAF (-c enableWaf=true) lives in us-east-1 and needs a bootstrap there.
+        case "$CDK_CONTEXT_ARGS" in *enableWaf=true*)
+          S=$(aws cloudformation describe-stacks --region us-east-1 --stack-name CDKToolkit --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo NOT_FOUND)
+          [ "$S" = "NOT_FOUND" ] && npx cdk bootstrap aws://$AWS_ACCOUNT_ID/us-east-1 --require-approval never ;;
+        esac
+      - cd /tmp/project/packages/infra && npx cdk context --clear 2>/dev/null || true
+      - |
+        cd /tmp/project/packages/infra
+        FLAGS="--require-approval=never --concurrency=12 --progress=events"
+        [ "$HOTSWAP" = "true" ] && FLAGS="$FLAGS --hotswap-fallback"
+        START=$(date +%s)
+        npx cdk deploy ${DEPLOY_STACKS:---all} $FLAGS $CDK_CONTEXT_ARGS
+        echo "cdk deploy took $(( $(date +%s) - START ))s"
+  post_build:
+    commands:
+      - |
+        POOL=$(aws cloudformation describe-stacks --stack-name IDP-V2-Application \
+          --query 'Stacks[0].Outputs[?contains(OutputKey,`UserPoolId`)].OutputValue' --output text 2>/dev/null)
+        if [ -n "$POOL" ] && [ "$POOL" != "None" ] && [ -n "$ADMIN_USER_EMAIL" ]; then
+          ADMIN=$(echo "$ADMIN_USER_EMAIL" | cut -d'@' -f1)
+          if ! aws cognito-idp admin-get-user --user-pool-id "$POOL" --username "$ADMIN" >/dev/null 2>&1; then
+            # No fixed password: Cognito generates a temporary one and emails it to ADMIN_USER_EMAIL.
+            aws cognito-idp admin-create-user --user-pool-id "$POOL" --username "$ADMIN" \
+              --user-attributes Name=email,Value="$ADMIN_USER_EMAIL" Name=email_verified,Value=true \
+              Name=given_name,Value=Admin Name=family_name,Value=User --desired-delivery-mediums EMAIL >/dev/null
+            echo "Admin user $ADMIN created; temporary password emailed to $ADMIN_USER_EMAIL"
+          fi
+        fi
+      - |
+        URL=$(aws cloudformation describe-stacks --stack-name IDP-V2-Application \
+          --query 'Stacks[0].Outputs[?contains(OutputKey,`DistributionDomainName`)].OutputValue' --output text 2>/dev/null)
+        [ -n "$URL" ] && [ "$URL" != "None" ] && echo "FRONTEND_URL=https://$URL"
+      - echo "Deployment finished at $(date)"
