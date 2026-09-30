@@ -11,7 +11,9 @@ applicant_documents tool, which groups documents like the verdict (PAN first,
 else a compatible name), so the erase removes what the verdict shows under
 that applicant, no more and no fewer. Documents that belong to no applicant in
 the verdict (still being analysed, failed, without facts, spreadsheets,
-unassigned) are not touched.
+unassigned) are not touched. The applicant's saved eligibility inputs (the
+CIBIL page: PAN, mobile, DOB, addresses, income, loans; ELIG# items saved
+under the PAN or the name) are deleted too.
 
 The caller must repeat the applicant's name, as the verdict shows it, in
 `confirm`, and list the documents it confirmed in `document_ids`: the grouping
@@ -47,6 +49,7 @@ from app.file_check import (
     get_applicant_documents,
 )
 from app.routers.documents import delete_document
+from app.routers.eligibility import erase_applicant_eligibility
 from app.routers.file_check import ErrorResponse, ProjectId, UserId
 from app.safe_ids import is_safe_segment
 
@@ -121,6 +124,13 @@ class EraseResponse(BaseModel):
             "Webhook delivery log entries the applicant's name was removed from; null when that failed "
             "(the entries then expire after the retention period, see not_erased)"
         )
+    )
+    eligibility_inputs_deleted: int | None = Field(
+        default=None,
+        description=(
+            "Saved eligibility inputs (CIBIL page) of the applicant deleted; null when that failed "
+            "(they then expire after the retention period, see not_erased)"
+        ),
     )
     not_erased: list[str] = Field(
         description="What this erase does not delete (data outside the documents); handle it separately"
@@ -244,20 +254,41 @@ def _redact_delivery_log(project_id: str, name: str) -> int | None:
         return None
 
 
-def _not_erased(delivery_log_redacted: int | None) -> list[str]:
+def _erase_eligibility(project_id: str, *identifiers: str) -> int | None:
+    """Delete the applicant's saved eligibility inputs (by PAN or name); how many, None on failure."""
+    try:
+        return erase_applicant_eligibility(project_id, identifiers)
+    except (ClientError, BotoCoreError) as e:
+        print(f"applicant erase: eligibility inputs not deleted project={project_id} ({type(e).__name__})")
+        return None
+
+
+def _not_erased(delivery_log_redacted: int | None, eligibility_deleted: int | None = 0) -> list[str]:
     days = get_config().retention_days
     items = [
         "Chat conversations and artifacts that mention the applicant: delete them in the chat and artifact "
         f"lists, or the retention sweep deletes them after {days} days",
-        "Verdicts the CRM webhook already delivered: erase them in the CRM",
+        "Verdicts and login requests the CRM webhook already delivered: erase them in the CRM",
     ]
     if delivery_log_redacted is None:
         items.append(f"The applicant's name in the webhook delivery log: it expires after {days} days")
+    if eligibility_deleted is None:
+        items.append(
+            "The applicant's saved eligibility inputs (CIBIL page): they are deleted automatically "
+            f"{days} days after they were first saved"
+        )
     return items
 
 
 def _write_audit(
-    project_id: str, erased_at: dt.datetime, *, matched: int, deleted: int, failed: int, redacted: int
+    project_id: str,
+    erased_at: dt.datetime,
+    *,
+    matched: int,
+    deleted: int,
+    failed: int,
+    redacted: int,
+    eligibility_deleted: int = 0,
 ) -> None:
     """One ERASE# item with counts only; DynamoDB TTL deletes it after the retention period."""
     item = {
@@ -267,6 +298,7 @@ def _write_audit(
         "documents_deleted": deleted,
         "documents_failed": failed,
         "delivery_log_redacted": redacted,
+        "eligibility_inputs_deleted": eligibility_deleted,
         TTL_ATTRIBUTE: int(erased_at.timestamp()) + get_config().retention_days * 86400,
     }
     try:
@@ -328,6 +360,8 @@ def erase_applicant(project_id: ProjectId, user_id: UserId, request: EraseReques
             deleted.append(doc)
 
     redacted = _redact_delivery_log(project_id, found.applicant_name)
+    # Saved under the identifier the page used (the PAN when known, else the name).
+    eligibility_deleted = _erase_eligibility(project_id, request.applicant, found.applicant_name)
     erased_at = dt.datetime.now(dt.UTC)
     _write_audit(
         project_id,
@@ -336,17 +370,20 @@ def erase_applicant(project_id: ProjectId, user_id: UserId, request: EraseReques
         deleted=len(deleted),
         failed=len(failed),
         redacted=redacted or 0,
+        eligibility_deleted=eligibility_deleted or 0,
     )
     # Counts only: never the applicant's name or PAN.
     print(
         f"applicant erase user={user_id} project={project_id} documents={len(found.documents)} "
-        f"deleted={len(deleted)} failed={len(failed)} delivery_log_redacted={redacted}"
+        f"deleted={len(deleted)} failed={len(failed)} delivery_log_redacted={redacted} "
+        f"eligibility_inputs_deleted={eligibility_deleted}"
     )
     return EraseResponse(
         applicant=found.applicant_name,
         documents_deleted=deleted,
         failed=failed,
         delivery_log_redacted=redacted,
-        not_erased=_not_erased(redacted),
+        eligibility_inputs_deleted=eligibility_deleted,
+        not_erased=_not_erased(redacted, eligibility_deleted),
         erased_at=erased_at,
     )

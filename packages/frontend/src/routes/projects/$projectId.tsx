@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from '@tanstack/react-router';
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { nanoid } from 'nanoid';
 import { useAwsClient } from '../../hooks/useAwsClient';
@@ -24,6 +24,8 @@ import ArtifactViewer from '../../components/ArtifactViewer';
 import FileCheckPanel, {
   type FileCheckFocus,
 } from '../../components/FileCheckPanel';
+import EligibilityPanel from '../../components/EligibilityPanel';
+import type { FileCheckApplicant } from '../../types/fileCheck';
 import DsaPainPointsPanel from '../../components/DsaPainPointsPanel';
 import type { PainPointId, PainPointTarget } from '../../data/dsaPainPoints';
 import SystemPromptModal from '../../components/SystemPromptModal';
@@ -46,6 +48,8 @@ import { useArtifacts } from '../../hooks/useArtifacts';
 import { useDocuments } from '../../hooks/useDocuments';
 import { useFileCheck } from '../../hooks/useFileCheck';
 import { useFileCheckAsk } from '../../hooks/useFileCheckAsk';
+import { useEligibility } from '../../hooks/useEligibility';
+import { eligibilityApplicant } from '../../lib/eligibility';
 
 export const Route = createFileRoute('/projects/$projectId')({
   component: ProjectDetailPage,
@@ -122,11 +126,32 @@ function ProjectDetailPage() {
 
   // 7. File check (deterministic checklist verdict from the backend)
   const { loadDocuments, loadWorkflows } = documentsHook;
-  // An erased applicant's documents are gone: reload the documents list.
-  const handleApplicantErased = useCallback(() => {
-    loadDocuments();
-    loadWorkflows();
-  }, [loadDocuments, loadWorkflows]);
+  // Eligibility & lenders (deterministic per-lender eligibility), per applicant.
+  const eligibility = useEligibility({ fetchApi, projectId });
+  const [eligibilityTarget, setEligibilityTarget] = useState<{
+    id: string;
+    name: string;
+    pan: string | null;
+  } | null>(null);
+  // Applicant name -> the id their eligibility draft is kept under (PAN or name).
+  const eligibilityIds = useRef(new Map<string, string>());
+  const { forget: forgetEligibility } = eligibility;
+  // An erased applicant's documents are gone: reload the documents list, and
+  // drop the applicant's eligibility draft in this tab (every draft when the
+  // erase may have run in part without an answer).
+  const handleApplicantErased = useCallback(
+    (response: { applicant: string } | null) => {
+      loadDocuments();
+      loadWorkflows();
+      setEligibilityTarget(null);
+      forgetEligibility(
+        response
+          ? [response.applicant, eligibilityIds.current.get(response.applicant)]
+          : undefined,
+      );
+    },
+    [loadDocuments, loadWorkflows, forgetEligibility],
+  );
   const fileCheck = useFileCheck({
     fetchApi,
     projectId,
@@ -144,12 +169,26 @@ function ProjectDetailPage() {
   );
   const openFileCheck = useCallback(() => {
     setShowPainPoints(false);
+    setEligibilityTarget(null);
     setFileCheckFocus(null);
     setShowFileCheck(true);
   }, []);
   const closeFileCheck = useCallback(() => setShowFileCheck(false), []);
+  // Eligibility & lenders replaces the File Check panel; Back returns to it.
+  const openEligibility = useCallback((applicant: FileCheckApplicant) => {
+    const target = eligibilityApplicant(applicant);
+    eligibilityIds.current.set(target.name, target.id);
+    setEligibilityTarget(target);
+    setShowFileCheck(false);
+  }, []);
+  const backToFileCheck = useCallback(() => {
+    setEligibilityTarget(null);
+    setShowFileCheck(true);
+  }, []);
+  const closeEligibility = useCallback(() => setEligibilityTarget(null), []);
   const openPainPoints = useCallback((id?: PainPointId) => {
     setShowFileCheck(false);
+    setEligibilityTarget(null);
     setPainPointFocus(id ?? null);
     setShowPainPoints(true);
   }, []);
@@ -160,6 +199,7 @@ function ProjectDetailPage() {
   const closePainPoints = useCallback(() => setShowPainPoints(false), []);
   const showMeInFileCheck = useCallback((target: PainPointTarget) => {
     setShowPainPoints(false);
+    setEligibilityTarget(null);
     setFileCheckFocus((prev) => ({ target, key: (prev?.key ?? 0) + 1 }));
     setShowFileCheck(true);
   }, []);
@@ -186,6 +226,8 @@ function ProjectDetailPage() {
     artifactsHook.setSelectedArtifact(null);
     setShowFileCheck(false);
     setFileCheckFocus(null);
+    setEligibilityTarget(null);
+    eligibilityIds.current.clear();
     setShowPainPoints(false);
     setPainPointFocus(null);
     voiceChatManager.setVoiceChatMode(false);
@@ -527,6 +569,18 @@ function ProjectDetailPage() {
                       onClose={closeFileCheck}
                       focus={fileCheckFocus}
                       onPainPoint={openPainPoints}
+                      onOpenEligibility={openEligibility}
+                    />
+                  )}
+                  {/* Eligibility & lenders - same overlay, opened from an applicant of the verdict */}
+                  {eligibilityTarget && !artifactsHook.selectedArtifact && (
+                    <EligibilityPanel
+                      state={eligibility}
+                      applicant={eligibilityTarget.id}
+                      name={eligibilityTarget.name}
+                      pan={eligibilityTarget.pan}
+                      onBack={backToFileCheck}
+                      onClose={closeEligibility}
                     />
                   )}
                   {/* Why DSAs need this - same overlay; "Show me" opens File Check */}

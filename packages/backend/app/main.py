@@ -8,6 +8,7 @@ from app.routers import (
     chat,
     datasets,
     documents,
+    eligibility,
     file_check,
     graph,
     health,
@@ -35,6 +36,10 @@ app = FastAPI(
             "name": "file-check",
             "description": "Deterministic loan-file check (READY / NOT READY) for external systems such as a CRM",
         },
+        {
+            "name": "eligibility",
+            "description": "Per-lender loan eligibility (CIBIL page): fixed formulas, SAMPLE policies, indicative",
+        },
     ]
 )
 
@@ -52,6 +57,7 @@ app.include_router(artifacts.router)
 app.include_router(chat.router)
 app.include_router(datasets.router)
 app.include_router(documents.router)
+app.include_router(eligibility.router)
 app.include_router(file_check.router)
 app.include_router(graph.router)
 app.include_router(health.router)

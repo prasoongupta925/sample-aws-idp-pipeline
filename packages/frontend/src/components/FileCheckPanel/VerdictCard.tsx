@@ -4,6 +4,7 @@ import type { TFunction } from 'i18next';
 import {
   Check,
   Info,
+  Landmark,
   MessageCircle,
   Minus,
   Trash2,
@@ -372,6 +373,8 @@ interface ApplicantSectionProps {
   pendingDocuments?: PendingDocument[];
   /** Opens the erase confirmation; the trigger gets focus back on cancel. */
   onErase?: (applicant: FileCheckApplicant, trigger: HTMLElement) => void;
+  /** Opens Eligibility & lenders for the applicant. */
+  onOpenEligibility?: (applicant: FileCheckApplicant) => void;
 }
 
 function ApplicantSection({
@@ -381,6 +384,7 @@ function ApplicantSection({
   asOf,
   pendingDocuments,
   onErase,
+  onOpenEligibility,
 }: ApplicantSectionProps) {
   const { t } = useTranslation();
   const reminderId = useId();
@@ -428,21 +432,35 @@ function ApplicantSection({
         </span>
       </header>
 
-      {tone === 'notReady' && (
+      {(tone === 'notReady' || onOpenEligibility) && (
         <div className="flex flex-wrap items-center gap-1.5">
-          <button
-            ref={reminderButtonRef}
-            type="button"
-            onClick={() =>
-              reminderOpen ? closeReminder() : setReminderOpen(true)
-            }
-            aria-expanded={reminderOpen}
-            aria-controls={reminderOpen ? reminderId : undefined}
-            className={`${ACTION_BUTTON_CLASS} border-emerald-200 bg-emerald-50/70 text-emerald-800 hover:bg-emerald-100 focus-visible:ring-emerald-500 dark:border-emerald-800/50 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/40`}
-          >
-            <MessageCircle className="h-3 w-3" aria-hidden="true" />
-            {t('fileCheck.reminder.open')}
-          </button>
+          {onOpenEligibility && (
+            <button
+              type="button"
+              onClick={() => onOpenEligibility(applicant)}
+              title={t('eligibility.openHint')}
+              className={`${ACTION_BUTTON_CLASS} border-indigo-200 bg-indigo-50/70 text-indigo-800 hover:bg-indigo-100 focus-visible:ring-indigo-500 dark:border-indigo-800/50 dark:bg-indigo-900/20 dark:text-indigo-300 dark:hover:bg-indigo-900/40`}
+              data-testid="open-eligibility"
+            >
+              <Landmark className="h-3 w-3" aria-hidden="true" />
+              {t('eligibility.open')}
+            </button>
+          )}
+          {tone === 'notReady' && (
+            <button
+              ref={reminderButtonRef}
+              type="button"
+              onClick={() =>
+                reminderOpen ? closeReminder() : setReminderOpen(true)
+              }
+              aria-expanded={reminderOpen}
+              aria-controls={reminderOpen ? reminderId : undefined}
+              className={`${ACTION_BUTTON_CLASS} border-emerald-200 bg-emerald-50/70 text-emerald-800 hover:bg-emerald-100 focus-visible:ring-emerald-500 dark:border-emerald-800/50 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/40`}
+            >
+              <MessageCircle className="h-3 w-3" aria-hidden="true" />
+              {t('fileCheck.reminder.open')}
+            </button>
+          )}
         </div>
       )}
       {tone === 'notReady' && reminderOpen && (
@@ -643,6 +661,8 @@ interface VerdictCardProps {
     applicant: FileCheckApplicant,
     trigger: HTMLElement,
   ) => void;
+  /** Shows "Eligibility & lenders" per applicant. */
+  onOpenEligibility?: (applicant: FileCheckApplicant) => void;
 }
 
 export default function VerdictCard({
@@ -651,6 +671,7 @@ export default function VerdictCard({
   onPainPoint,
   product,
   onEraseApplicant,
+  onOpenEligibility,
 }: VerdictCardProps) {
   const { t } = useTranslation();
   const applicants = result.applicants ?? [];
@@ -744,6 +765,7 @@ export default function VerdictCard({
             asOf={result.as_of}
             pendingDocuments={result.pending_documents ?? []}
             onErase={onEraseApplicant}
+            onOpenEligibility={onOpenEligibility}
           />
         ))}
 

@@ -66,6 +66,8 @@ interface FileCheckPanelProps {
   focus?: FileCheckFocus | null;
   /** Opens the "Why DSAs need this" card a finding's tag points to. */
   onPainPoint?: (id: PainPointId) => void;
+  /** Opens Eligibility & lenders for an applicant of the verdict. */
+  onOpenEligibility?: (applicant: FileCheckApplicant) => void;
 }
 
 /** Overlays the right-hand side panel, like the artifact viewer. */
@@ -75,6 +77,7 @@ export default function FileCheckPanel({
   onClose,
   focus,
   onPainPoint,
+  onOpenEligibility,
 }: FileCheckPanelProps) {
   const { t } = useTranslation();
   const checklistFieldId = useId();
@@ -458,6 +461,7 @@ export default function FileCheckPanel({
               onPainPoint={onPainPoint}
               product={resultProduct}
               onEraseApplicant={openErase}
+              onOpenEligibility={onOpenEligibility}
             />
           </div>
         ) : running ? (

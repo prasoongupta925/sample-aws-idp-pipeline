@@ -72,7 +72,7 @@ class ErrorResponse(BaseModel):
 class WebhookDelivery(BaseModel):
     delivery_id: str
     at: str = Field(description="ISO 8601 UTC time the delivery was made")
-    event: str = Field(description="file_check.completed or test")
+    event: str = Field(description="file_check.completed, file_login.requested or test")
     applicant: str | None = Field(
         default=None, description="Applicant(s) reported, comma-separated; null for test and project-level deliveries"
     )
