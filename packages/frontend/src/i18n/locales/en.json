@@ -519,7 +519,12 @@
     "startNewChat": "Start New Chat",
     "deleteAgent": "Delete Agent",
     "deleteConfirmMessage": "Are you sure you want to delete \"{{name}}\"? This action cannot be undone.",
-    "notFound": "Agent \"{{name}}\" not found. Using default agent."
+    "notFound": "Agent \"{{name}}\" not found. Using default agent.",
+    "builtin": "Built-in",
+    "builtinDescription": "Ready-made agent that ships with the platform",
+    "builtinReadOnly": "Built-in agents can't be edited or deleted",
+    "editNamed": "Edit {{name}}",
+    "deleteNamed": "Delete {{name}}"
   },
   "artifacts": {
     "heroTag": "AI Generated Artifacts",
@@ -580,7 +585,8 @@
   "projectSettings": {
     "basicSettings": "Basic Settings",
     "ocrSettings": "OCR Settings",
-    "analysisInstructions": "Analysis Instructions"
+    "analysisInstructions": "Analysis Instructions",
+    "integrations": "Integrations"
   },
   "settings": {
     "heroTitle": "Preferences & Info",
@@ -836,6 +842,83 @@
         "retention": "Nothing is kept longer than {{days}} days",
         "synthetic": "Synthetic data only."
       }
+    },
+    "reminder": {
+      "open": "Draft reminder",
+      "close": "Close reminder",
+      "title": "Reminder for {{name}}",
+      "language": "Language",
+      "channel": "Channel",
+      "whatsapp": "WhatsApp",
+      "sms": "SMS",
+      "message": "Message",
+      "templates": {
+        "T1": "Document request",
+        "T2": "Reminder",
+        "T3": "Final reminder",
+        "T5": "Mismatch – ask to call",
+        "T6": "One more document"
+      },
+      "templateHints": {
+        "T1": "First request after a call, with the upload link.",
+        "T2": "Day-2 reminder while documents are still pending.",
+        "T3": "Day-5 final reminder with a new 7-day link; after it a telecaller takes over.",
+        "T5": "Names the document type of a mismatch, never its value, and asks the customer to call.",
+        "T6": "Only one month-based document is left."
+      },
+      "textLabel": "Message (read-only)",
+      "countWhatsapp": "{{count}} characters · WhatsApp body limit {{limit}}",
+      "countWhatsapp_one": "{{count}} character · WhatsApp body limit {{limit}}",
+      "characters": "{{count}} characters",
+      "characters_one": "{{count}} character",
+      "segments": "{{count}} SMS segments",
+      "segments_one": "{{count}} SMS segment",
+      "encodingGsm": "GSM-7: {{single}} characters per SMS, {{part}} per segment when split",
+      "encodingUnicode": "Unicode: {{single}} characters per SMS, {{part}} per segment when split",
+      "copyManual": "Copying is blocked here: the text is selected, press Ctrl+C.",
+      "placeholders": "Fill in before sending: {{names}}. The count includes them.",
+      "draftNote": "Draft templates filled from the verdict (no AI), not yet approved by Meta or registered on DLT. Only the first name and document names go in – never PAN, Aadhaar, account numbers or amounts. Have the Hindi and Marathi reviewed by a native speaker.",
+      "nothingToRequest": "Nothing to ask the applicant for: no required document is missing and no document mismatch was found. The verdict is NOT READY for the reasons listed below."
+    },
+    "erase": {
+      "action": "Erase applicant data",
+      "title": "Erase {{name}}'s data?",
+      "pan": "PAN {{pan}}",
+      "body": "This permanently deletes every document of this applicant in this project and the data derived from them: the stored files, extracted facts and page text, search-index entries, knowledge-graph data and analysis records.",
+      "cannotUndo": "This cannot be undone.",
+      "scope": "Documents still being analysed, failed, or not matched to an applicant are not touched. Use this for an applicant's erasure request.",
+      "typeLabel": "To confirm, type the applicant's name:",
+      "exactHint": "Type the name exactly as shown, including capital letters.",
+      "mismatchHint": "The name does not match yet.",
+      "confirm": "Erase permanently",
+      "erasing": "Erasing…",
+      "errors": {
+        "mismatch": "The name typed does not match the applicant's name (HTTP 400).",
+        "notFound": "No such applicant in this project – it may have been erased already (HTTP 404).",
+        "ambiguous": "More than one applicant has this name (HTTP 409).",
+        "notConfigured": "The file-check service is not configured (HTTP 503).",
+        "failed": "The erase failed (HTTP {{status}}). Try again in a moment."
+      },
+      "result": {
+        "title": "{{name}}'s data was erased",
+        "deleted": "{{count}} documents deleted",
+        "deleted_one": "{{count}} document deleted",
+        "failed": "{{count}} documents could not be fully deleted:",
+        "failed_one": "{{count}} document could not be fully deleted:",
+        "failedHint": "Delete them from the documents list, or run the check and erase again.",
+        "rerun": "The verdict was cleared because it showed erased data. Run the check again to see the file now.",
+        "dismiss": "Dismiss"
+      }
+    },
+    "usage": {
+      "perDocument": "{{input}} in / {{output}} out tokens · {{cost}}",
+      "notRecorded": "usage not recorded",
+      "model": "Model: {{model}}",
+      "total": "Reading this file cost {{cost}} for {{count}} documents ({{input}} in / {{output}} out tokens).",
+      "total_one": "Reading this file cost {{cost}} for {{count}} document ({{input}} in / {{output}} out tokens).",
+      "partial": "Usage was not recorded for {{count}} more documents.",
+      "partial_one": "Usage was not recorded for {{count}} more document.",
+      "none": "Reading cost was not recorded for these documents (analysed before costs were recorded)."
     }
   },
   "painPoints": {
@@ -855,5 +938,72 @@
     },
     "tagTitle": "Why DSAs need this: {{title}}",
     "footer": "Not legal advice and not a compliance claim. Demo data is synthetic."
+  },
+  "integrations": {
+    "webhook": {
+      "title": "Smart Dial / CRM webhook",
+      "intro": "While on, every document that finishes analysis sends its applicant's file-check verdict to your CRM as a signed HTTPS POST (event file_check.completed).",
+      "loading": "Loading the webhook settings…",
+      "url": "Endpoint URL",
+      "urlHint": "HTTPS only, a public host, no user:password@. Leave empty to remove the webhook.",
+      "urlNotHttps": "The URL must start with https:// – the server refuses it otherwise.",
+      "enabled": "Send deliveries",
+      "enabledHint": "Off: nothing is sent. On needs a URL and a signing secret.",
+      "needsSecret": "Generate a signing secret below before turning deliveries on.",
+      "save": "Save webhook",
+      "unsaved": "Unsaved changes",
+      "saved": "Saved at {{time}}",
+      "secret": {
+        "title": "Signing secret",
+        "set": "Set",
+        "notSet": "Not set",
+        "generate": "Generate secret",
+        "regenerate": "Generate new secret",
+        "hint": "Smart Dial uses the secret to check that a delivery came from here. It is shown only once, when generated.",
+        "replaceTitle": "Replace the signing secret",
+        "confirmReplace": "Replace the current secret? Deliveries are signed with the new one right away, so Smart Dial rejects them until you update the secret there too.",
+        "replace": "Replace secret",
+        "once": "Copy this secret now and store it in Smart Dial. It cannot be shown again.",
+        "copyManual": "Copying is blocked here: the secret is selected, press Ctrl+C.",
+        "done": "I have stored it"
+      },
+      "test": {
+        "send": "Send test event",
+        "sending": "Sending…",
+        "hint": "Sends a signed event \"test\" with no applicant data (also while deliveries are off).",
+        "needsSetup": "Save a URL and generate a secret to send a test event.",
+        "delivered": "Test event delivered (HTTP {{status}})",
+        "deliveredNoStatus": "Test event delivered",
+        "failed": "Test event failed",
+        "failedStatus": "Test event failed (HTTP {{status}})",
+        "deliveryId": "Delivery {{id}}"
+      },
+      "deliveries": {
+        "title": "Recent deliveries",
+        "refresh": "Refresh deliveries",
+        "empty": "No deliveries yet.",
+        "at": "Time",
+        "event": "Event",
+        "applicant": "Applicant",
+        "result": "Result",
+        "delivered": "Delivered",
+        "failed": "Failed",
+        "retention": "The last 20 deliveries of the past 7 days; older ones are deleted."
+      },
+      "verify": {
+        "title": "How Smart Dial verifies it",
+        "intro": "Each delivery is an HTTPS POST with a JSON body and these headers:",
+        "steps": "Smart Dial recomputes HMAC-SHA256 with the shared secret (UTF-8) over the timestamp t, a dot and the raw request body, compares the hex digest with v1 in constant time, and rejects a timestamp more than 5 minutes from its clock. Retries keep the same X-SmartDial-Delivery id, so a repeated delivery can be ignored.",
+        "example": "Example check (Python)"
+      },
+      "errors": {
+        "load": "Could not load the webhook settings: {{message}}",
+        "save": "Not saved: {{message}}",
+        "secret": "No secret generated: {{message}}",
+        "notFound": "The project was not found (HTTP 404).",
+        "notConfigured": "Webhook delivery is not configured for this deployment (HTTP 503).",
+        "status": "The request was rejected (HTTP {{status}})."
+      }
+    }
   }
 }

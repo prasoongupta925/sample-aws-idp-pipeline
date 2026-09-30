@@ -7,6 +7,7 @@ import {
   requestArtifactDownloadUrl,
   requestDocumentDownloadUrl,
 } from '../lib/presignedUrls';
+import { ApiError, errorDetailFromBody } from '../lib/apiError';
 
 const CREDENTIAL_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
@@ -231,7 +232,9 @@ export function useAwsClient() {
       });
 
       if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
+        // Keep the backend's reason (FastAPI `detail`) for the caller to show.
+        const body = await response.text().catch(() => '');
+        throw new ApiError(response.status, errorDetailFromBody(body));
       }
 
       // 본문 없는 응답(예: 204 DELETE, 202 reanalyze)은 파싱하지 않고 undefined
@@ -258,7 +261,7 @@ export function useAwsClient() {
       });
 
       if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
+        throw new ApiError(response.status);
       }
 
       return response.blob();

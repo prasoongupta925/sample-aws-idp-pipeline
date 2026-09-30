@@ -1,9 +1,15 @@
 // @vitest-environment node
 import {
   CSV_HEADERS,
+  applicantUsageTotal,
   buildFileCheckCsv,
   consistencyTone,
   csvCell,
+  csvUsd,
+  documentUsage,
+  eraseConfirmMatches,
+  maskPan,
+  parseEraseResponse,
   fileCheckCsvFileName,
   fileCheckFindings,
   itemTone,
@@ -20,6 +26,7 @@ import {
   NOT_READY_RESULT,
   READY_OBLIGATIONS_RESULT,
   READY_WITH_REVIEW_RESULT,
+  USAGE_RESULT,
 } from '../components/FileCheckPanel/fixtures';
 
 describe('normalizeChecklists', () => {
@@ -162,9 +169,10 @@ describe('CSV', () => {
     expect(csv.charCodeAt(0)).toBe(0xfeff);
     const lines = csv.slice(1).split('\r\n');
     expect(lines[0]).toBe(CSV_HEADERS.join(','));
-    // header + 7 findings + trailing empty string after the final CRLF
-    expect(lines).toHaveLength(9);
-    expect(lines[8]).toBe('');
+    // header + 7 findings + 2 documents read + trailing empty string after
+    // the final CRLF
+    expect(lines).toHaveLength(11);
+    expect(lines[10]).toBe('');
     expect(lines[2]).toBe(
       [
         'Amit Suresh Patil',
@@ -175,8 +183,19 @@ describe('CSV', () => {
         'MISSING',
         '"missing Jun 2026, Jul 2026 slip(s); found: Aug 2026 (slip_aug.pdf)"',
         'slip_aug.pdf',
+        // no usage on a finding row
+        '',
+        '',
+        '',
+        '',
       ].join(','),
     );
+    // The applicant's documents follow its findings; the backend recorded
+    // no usage for them, so the usage cells stay empty.
+    expect(lines[8]).toBe(
+      'Amit Suresh Patil,NOT READY,Personal Loan - Salaried,Documents,slip_aug.pdf,READ,salary slip; unverified: net_salary; usage not recorded,slip_aug.pdf,,,,',
+    );
+    expect(lines[9]).toMatch(/^,,Personal Loan - Salaried,Not checked,/);
     expect(csv).toContain('₹72,000');
     expect(csv).toContain('application.pdf; slip_aug.pdf');
   });
@@ -313,5 +332,89 @@ describe('CSV obligations rows', () => {
       'Rahul Vijay Deshmukh,READY,Personal Loan - Salaried,Obligations,Loan EMI – KESARI FINSERV / PERSONAL LOAN EMI,NOT DECLARED,',
     );
     expect(csv).toContain('FOIR 17.8% vs limit 70%; max new EMI ₹43,050');
+  });
+});
+
+describe('CSV usage columns', () => {
+  it('adds model, tokens and cost per document read and a total row', () => {
+    expect(CSV_HEADERS.slice(-4)).toEqual([
+      'Model',
+      'Input tokens',
+      'Output tokens',
+      'Cost (USD)',
+    ]);
+    const lines = buildFileCheckCsv(USAGE_RESULT).slice(1).split('\r\n');
+    expect(lines[0].split(',')).toHaveLength(12);
+    const docs = lines.filter((l) => l.split(',')[3] === 'Documents');
+    expect(docs).toEqual([
+      'Amit Suresh Patil,NOT READY,Personal Loan - Salaried,Documents,application.pdf,READ,loan application,application.pdf,global.amazon.nova-2-lite-v1:0,12345,678,0.006321',
+      'Amit Suresh Patil,NOT READY,Personal Loan - Salaried,Documents,slip_aug.pdf,READ,salary slip; unverified: net_salary; usage not recorded,slip_aug.pdf,,,,',
+      'Amit Suresh Patil,NOT READY,Personal Loan - Salaried,Documents,Reading cost (total),INFO,1 of 2 documents with recorded usage,,,12345,678,0.006321',
+    ]);
+    // Documents come after the applicant's findings, before "Not checked".
+    const sections = lines.map((l) => l.split(',')[3]);
+    expect(sections.indexOf('Documents')).toBeGreaterThan(
+      sections.lastIndexOf('Consistency'),
+    );
+    expect(sections.lastIndexOf('Documents')).toBeLessThan(
+      sections.indexOf('Not checked'),
+    );
+  });
+
+  it('ignores malformed usage and writes plain numbers', () => {
+    expect(
+      documentUsage({
+        usage: {
+          model_id: 'm',
+          input_tokens: Number.NaN,
+          output_tokens: 1,
+          cost_usd: 0,
+        },
+      }),
+    ).toBeNull();
+    expect(documentUsage({ usage: null })).toBeNull();
+    expect(applicantUsageTotal({})).toBeNull();
+    expect(csvUsd(0.1 + 0.2)).toBe('0.3');
+    expect(csvUsd(0.00000049)).toBe('0');
+    expect(csvUsd(0.0123456789)).toBe('0.012346');
+  });
+});
+
+describe('erase helpers', () => {
+  it('requires the name exactly as shown', () => {
+    expect(eraseConfirmMatches('Amit Suresh Patil', 'Amit Suresh Patil')).toBe(
+      true,
+    );
+    // Only spacing the page does not show is forgiven.
+    expect(
+      eraseConfirmMatches('  Amit  Suresh Patil ', 'Amit Suresh Patil'),
+    ).toBe(true);
+    expect(eraseConfirmMatches('amit suresh patil', 'Amit Suresh Patil')).toBe(
+      false,
+    );
+    expect(eraseConfirmMatches('Amit Patil', 'Amit Suresh Patil')).toBe(false);
+    expect(eraseConfirmMatches('', '')).toBe(false);
+  });
+
+  it('validates the erase response', () => {
+    expect(
+      parseEraseResponse(
+        {
+          applicant: 'Amit Suresh Patil',
+          documents_deleted: [{ document_id: 'd1', name: 'application.pdf' }],
+          failed: [{ document_id: 'd2', name: 'slip_aug.pdf', error: 'x' }],
+          erased_at: '2026-09-30T10:00:00+00:00',
+        },
+        'Amit',
+      ),
+    ).toEqual({
+      applicant: 'Amit Suresh Patil',
+      documents_deleted: [{ document_id: 'd1', name: 'application.pdf' }],
+      failed: [{ document_id: 'd2', name: 'slip_aug.pdf', error: 'x' }],
+      erased_at: '2026-09-30T10:00:00+00:00',
+    });
+    expect(() => parseEraseResponse({ detail: 'x' }, 'Amit')).toThrow();
+    expect(maskPan('ckrpk7314m')).toBe('XXXXXX314M');
+    expect(maskPan(null)).toBeNull();
   });
 });

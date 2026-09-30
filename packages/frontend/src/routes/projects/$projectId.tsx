@@ -121,7 +121,17 @@ function ProjectDetailPage() {
   });
 
   // 7. File check (deterministic checklist verdict from the backend)
-  const fileCheck = useFileCheck({ fetchApi, projectId });
+  const { loadDocuments, loadWorkflows } = documentsHook;
+  // An erased applicant's documents are gone: reload the documents list.
+  const handleApplicantErased = useCallback(() => {
+    loadDocuments();
+    loadWorkflows();
+  }, [loadDocuments, loadWorkflows]);
+  const fileCheck = useFileCheck({
+    fetchApi,
+    projectId,
+    onApplicantErased: handleApplicantErased,
+  });
   const fileCheckAsk = useFileCheckAsk({ fetchApi, projectId });
   const [showFileCheck, setShowFileCheck] = useState(false);
   const [fileCheckFocus, setFileCheckFocus] = useState<FileCheckFocus | null>(
@@ -631,6 +641,7 @@ function ProjectDetailPage() {
         isOpen={projectData.showProjectSettings}
         onClose={() => projectData.setShowProjectSettings(false)}
         onSave={projectData.handleProjectSave}
+        fetchApi={fetchApi}
       />
 
       {/* Delete Document Confirmation Modal */}
@@ -663,7 +674,7 @@ function ProjectDetailPage() {
       <AgentSelectModal
         isOpen={agentsHook.showAgentModal}
         agents={agentsHook.agents}
-        selectedAgentName={agentsHook.selectedAgent?.name || null}
+        selectedAgentId={agentsHook.selectedAgent?.agent_id ?? null}
         loading={agentsHook.loadingAgents}
         onClose={() => agentsHook.setShowAgentModal(false)}
         onSelect={agentsHook.handleAgentSelect}

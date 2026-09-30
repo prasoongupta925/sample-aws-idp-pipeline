@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
 import { useAwsClient, StreamEvent } from '../hooks/useAwsClient';
+import { isBuiltinAgent } from '../lib/agents';
 
 export const Route = createFileRoute('/test')({
   component: RouteComponent,
@@ -21,6 +22,8 @@ interface Agent {
   name: string;
   content?: string;
   created_at: string;
+  /** Built-in agents are read-only (the API answers 403 to DELETE). */
+  builtin?: boolean;
 }
 
 function RouteComponent() {
@@ -342,41 +345,45 @@ function RouteComponent() {
                       >
                         View
                       </button>
-                      <button
-                        onClick={async () => {
-                          if (!window.confirm(`Delete agent "${agent.name}"?`))
-                            return;
-                          try {
-                            await fetchApi(
-                              `projects/${selectedProject.project_id}/agents/${agent.agent_id}`,
-                              {
-                                method: 'DELETE',
-                              },
-                            );
-                            setAgents(
-                              agents.filter(
-                                (a) => a.agent_id !== agent.agent_id,
-                              ),
-                            );
-                            if (selectedAgent?.agent_id === agent.agent_id) {
-                              setSelectedAgent(null);
+                      {!isBuiltinAgent(agent) && (
+                        <button
+                          onClick={async () => {
+                            if (
+                              !window.confirm(`Delete agent "${agent.name}"?`)
+                            )
+                              return;
+                            try {
+                              await fetchApi(
+                                `projects/${selectedProject.project_id}/agents/${agent.agent_id}`,
+                                {
+                                  method: 'DELETE',
+                                },
+                              );
+                              setAgents(
+                                agents.filter(
+                                  (a) => a.agent_id !== agent.agent_id,
+                                ),
+                              );
+                              if (selectedAgent?.agent_id === agent.agent_id) {
+                                setSelectedAgent(null);
+                              }
+                            } catch (e) {
+                              alert('Error: ' + (e as Error).message);
                             }
-                          } catch (e) {
-                            alert('Error: ' + (e as Error).message);
-                          }
-                        }}
-                        style={{
-                          padding: '4px 8px',
-                          fontSize: '12px',
-                          borderRadius: '4px',
-                          border: 'none',
-                          backgroundColor: '#dc3545',
-                          color: 'white',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        Delete
-                      </button>
+                          }}
+                          style={{
+                            padding: '4px 8px',
+                            fontSize: '12px',
+                            borderRadius: '4px',
+                            border: 'none',
+                            backgroundColor: '#dc3545',
+                            color: 'white',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Delete
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}

@@ -19,15 +19,18 @@ import {
 import type { FileCheckState } from '../../hooks/useFileCheck';
 import type { FileCheckAskState } from '../../hooks/useFileCheckAsk';
 import type { PainPointId, PainPointTarget } from '../../data/dsaPainPoints';
+import type { FileCheckApplicant } from '../../types/fileCheck';
 import {
   apiErrorStatus,
   buildFileCheckCsv,
   downloadTextFile,
   fileCheckCsvFileName,
   fileCheckFindings,
+  maskPan,
 } from '../../lib/fileCheck';
 import VerdictCard from './VerdictCard';
 import AskSection from './AskSection';
+import EraseApplicantDialog, { EraseResultCard } from './EraseApplicant';
 
 /** Where to scroll when the panel is opened from a "Show me" button. */
 export interface FileCheckFocus {
@@ -81,6 +84,14 @@ export default function FileCheckPanel({
   const runButtonRef = useRef<HTMLButtonElement>(null);
   // "Show me" asked for the obligations before any check was run.
   const [focusHint, setFocusHint] = useState<PainPointTarget | null>(null);
+  // Erase applicant: the confirmation dialog's applicant and its trigger.
+  const [eraseTarget, setEraseTarget] = useState<FileCheckApplicant | null>(
+    null,
+  );
+  const eraseOpenRef = useRef(false);
+  eraseOpenRef.current = eraseTarget !== null;
+  const eraseTriggerRef = useRef<HTMLElement | null>(null);
+  const eraseResultRef = useRef<HTMLElement>(null);
   const {
     checklists,
     checklistsLoaded,
@@ -98,6 +109,12 @@ export default function FileCheckPanel({
     running,
     error,
     runCheck,
+    erasing,
+    eraseError,
+    eraseResult,
+    eraseApplicant,
+    clearEraseError,
+    dismissEraseResult,
   } = state;
 
   useEffect(() => {
@@ -108,7 +125,10 @@ export default function FileCheckPanel({
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !e.defaultPrevented) onClose();
+      // The erase dialog closes itself on Escape; the panel stays open.
+      if (e.key === 'Escape' && !e.defaultPrevented && !eraseOpenRef.current) {
+        onClose();
+      }
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
@@ -157,6 +177,9 @@ export default function FileCheckPanel({
   }, [result]);
 
   const selected = checklists.find((c) => c.id === checklistId);
+  // The product of the checklist the shown verdict used (reminder {{product}}).
+  const resultProduct =
+    checklists.find((c) => c.id === result?.checklist?.id)?.product ?? null;
   const selectedFoir = selected?.foir;
   const foirLimitPct =
     typeof selectedFoir?.value === 'number' &&
@@ -180,6 +203,34 @@ export default function FileCheckPanel({
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
     if (!running) runCheck();
+  };
+
+  const openErase = (target: FileCheckApplicant, trigger: HTMLElement) => {
+    clearEraseError();
+    eraseTriggerRef.current = trigger;
+    setEraseTarget(target);
+  };
+
+  const cancelErase = () => {
+    setEraseTarget(null);
+    clearEraseError();
+    const trigger = eraseTriggerRef.current;
+    setTimeout(() => {
+      if (trigger?.isConnected) trigger.focus();
+    }, 0);
+  };
+
+  const confirmErase = async (typed: string) => {
+    if (!eraseTarget) return;
+    const response = await eraseApplicant(
+      { applicant: eraseTarget.applicant, pan: eraseTarget.pan },
+      typed,
+    );
+    if (!response) return;
+    // Answers in the Ask thread may quote the erased applicant's data.
+    askState.clear();
+    setEraseTarget(null);
+    setTimeout(() => eraseResultRef.current?.focus(), 0);
   };
 
   const handleDownload = () => {
@@ -381,6 +432,14 @@ export default function FileCheckPanel({
           </div>
         )}
 
+        {eraseResult && (
+          <EraseResultCard
+            ref={eraseResultRef}
+            result={eraseResult}
+            onDismiss={dismissEraseResult}
+          />
+        )}
+
         {stale && (
           <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800 dark:border-amber-800/50 dark:bg-amber-900/20 dark:text-amber-300">
             {t('fileCheck.staleResult', {
@@ -398,6 +457,8 @@ export default function FileCheckPanel({
               result={result}
               lastRunAt={lastRunAt}
               onPainPoint={onPainPoint}
+              product={resultProduct}
+              onEraseApplicant={openErase}
             />
           </div>
         ) : running ? (
@@ -433,6 +494,18 @@ export default function FileCheckPanel({
       <p className="px-4 py-2 border-t border-black/[0.08] dark:border-white/[0.08] text-[10px] leading-snug text-slate-500 dark:text-slate-400 flex-shrink-0">
         {t('fileCheck.syntheticNote')}
       </p>
+
+      {eraseTarget && (
+        <EraseApplicantDialog
+          applicant={eraseTarget.applicant}
+          pan={maskPan(eraseTarget.pan)}
+          erasing={erasing}
+          error={eraseError}
+          onCancel={cancelErase}
+          onConfirm={confirmErase}
+          onEdit={eraseError != null ? clearEraseError : undefined}
+        />
+      )}
     </div>
   );
 }

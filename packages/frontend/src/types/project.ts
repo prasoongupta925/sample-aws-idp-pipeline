@@ -202,6 +202,12 @@ export interface Agent {
   name: string;
   content?: string; // system prompt (only in detail response)
   created_at: string;
+  /**
+   * Shipped with the platform (ids start with `builtin-`): selectable like a
+   * custom agent, but the API refuses to change or delete it (403).
+   */
+  builtin?: boolean;
+  description?: string | null;
 }
 
 export interface Artifact {

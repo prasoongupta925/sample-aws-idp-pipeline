@@ -86,7 +86,8 @@ export interface ChatPanelProps {
   reasonings?: Record<string, ReasoningLevel>;
   onModelChange?: (modelValue: string) => void;
   onReasoningChange?: (reasonings: Record<string, ReasoningLevel>) => void;
-  onAgentSelect?: (agentName: string | null) => void;
+  /** agent_id, or null for the default assistant. */
+  onAgentSelect?: (agentId: string | null) => void;
   onAgentClick: () => void;
   onNewChat: () => void;
   onArtifactView?: (artifactId: string) => void;

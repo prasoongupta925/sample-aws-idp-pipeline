@@ -1,8 +1,17 @@
-import type { ReactNode } from 'react';
+import { useId, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { Check, Info, Minus, UserRound, X } from 'lucide-react';
+import {
+  Check,
+  Info,
+  MessageCircle,
+  Minus,
+  Trash2,
+  UserRound,
+  X,
+} from 'lucide-react';
 import type {
+  ApplicantUsageTotal,
   FileCheckApplicant,
   FileCheckConsistencyRow,
   FileCheckIncome,
@@ -10,7 +19,9 @@ import type {
   FileCheckResult,
 } from '../../types/fileCheck';
 import {
+  applicantUsageTotal,
   consistencyTone,
+  documentUsage,
   formatInr,
   formatYearMonth,
   itemTone,
@@ -21,12 +32,14 @@ import {
   type StatusTone,
   type VerdictTone,
 } from '../../lib/fileCheck';
+import { formatTokens, formatUsd } from '../../lib/fileCheckAsk';
 import {
   painPointForFinding,
   type PainPointId,
 } from '../../data/dsaPainPoints';
 import ObligationsSection from './ObligationsSection';
 import PainPointTag, { PainPointOpenContext } from './PainPointTag';
+import ReminderDraft from './ReminderDraft';
 
 // Colours / icons only: every verdict and status comes from the engine.
 
@@ -326,14 +339,57 @@ function IncomeGrid({ income }: { income: FileCheckIncome }) {
   );
 }
 
-function ApplicantSection({ applicant }: { applicant: FileCheckApplicant }) {
+/** "Reading this file cost $0.0123 for 5 documents (…tokens)". */
+export function usageTotalText(
+  t: TFunction,
+  total: ApplicantUsageTotal,
+): string {
+  if (total.documents_with_usage <= 0) return t('fileCheck.usage.none');
+  const main = t('fileCheck.usage.total', {
+    cost: formatUsd(total.cost_usd),
+    count: total.documents_with_usage,
+    input: formatTokens(total.input_tokens),
+    output: formatTokens(total.output_tokens),
+  });
+  const missing = total.documents_total - total.documents_with_usage;
+  return missing > 0
+    ? `${main} ${t('fileCheck.usage.partial', { count: missing })}`
+    : main;
+}
+
+const ACTION_BUTTON_CLASS =
+  'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1';
+
+interface ApplicantSectionProps {
+  applicant: FileCheckApplicant;
+  checklistId?: string | null;
+  /** The checklist's product id, for the reminder's {{product}}. */
+  product?: string | null;
+  /** Opens the erase confirmation; the trigger gets focus back on cancel. */
+  onErase?: (applicant: FileCheckApplicant, trigger: HTMLElement) => void;
+}
+
+function ApplicantSection({
+  applicant,
+  checklistId,
+  product,
+  onErase,
+}: ApplicantSectionProps) {
   const { t } = useTranslation();
+  const reminderId = useId();
+  const reminderButtonRef = useRef<HTMLButtonElement>(null);
+  const [reminderOpen, setReminderOpen] = useState(false);
+  const closeReminder = () => {
+    setReminderOpen(false);
+    reminderButtonRef.current?.focus();
+  };
   const tone = verdictTone(applicant.verdict);
   const reasons = applicant.reasons ?? [];
   const needsReview = applicant.needs_review ?? [];
   const items = applicant.checklist ?? [];
   const checks = applicant.consistency ?? [];
   const docs = applicant.documents ?? [];
+  const usageTotal = applicantUsageTotal(applicant);
   const month =
     applicant.reference_month_label ||
     (applicant.reference_month
@@ -364,6 +420,33 @@ function ApplicantSection({ applicant }: { applicant: FileCheckApplicant }) {
             .join(' · ')}
         </span>
       </header>
+
+      {tone === 'notReady' && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <button
+            ref={reminderButtonRef}
+            type="button"
+            onClick={() =>
+              reminderOpen ? closeReminder() : setReminderOpen(true)
+            }
+            aria-expanded={reminderOpen}
+            aria-controls={reminderOpen ? reminderId : undefined}
+            className={`${ACTION_BUTTON_CLASS} border-emerald-200 bg-emerald-50/70 text-emerald-800 hover:bg-emerald-100 focus-visible:ring-emerald-500 dark:border-emerald-800/50 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/40`}
+          >
+            <MessageCircle className="h-3 w-3" aria-hidden="true" />
+            {t('fileCheck.reminder.open')}
+          </button>
+        </div>
+      )}
+      {tone === 'notReady' && reminderOpen && (
+        <ReminderDraft
+          id={reminderId}
+          applicant={applicant}
+          checklistId={checklistId}
+          product={product}
+          onClose={closeReminder}
+        />
+      )}
 
       {reasons.length > 0 && (
         <Section
@@ -430,6 +513,7 @@ function ApplicantSection({ applicant }: { applicant: FileCheckApplicant }) {
           <ul className="mt-1.5 space-y-1">
             {docs.map((d, i) => {
               const unverified = d.unverified_fields ?? [];
+              const usage = documentUsage(d);
               return (
                 <li
                   key={`${d.document_id ?? d.document_name}-${i}`}
@@ -447,11 +531,59 @@ function ApplicantSection({ applicant }: { applicant: FileCheckApplicant }) {
                       })}
                     </span>
                   )}
+                  {usage ? (
+                    <span
+                      className="text-slate-500 dark:text-slate-400"
+                      data-testid="document-usage"
+                      title={
+                        usage.model_id
+                          ? t('fileCheck.usage.model', {
+                              model: usage.model_id,
+                            })
+                          : undefined
+                      }
+                    >
+                      {' · '}
+                      {t('fileCheck.usage.perDocument', {
+                        input: formatTokens(usage.input_tokens),
+                        output: formatTokens(usage.output_tokens),
+                        cost: formatUsd(usage.cost_usd),
+                      })}
+                    </span>
+                  ) : (
+                    usageTotal && (
+                      <span className="text-slate-400 dark:text-slate-500">
+                        {' · '}
+                        {t('fileCheck.usage.notRecorded')}
+                      </span>
+                    )
+                  )}
                 </li>
               );
             })}
           </ul>
         </details>
+      )}
+      {docs.length > 0 && usageTotal && (
+        <p
+          data-testid="usage-total"
+          className="text-[10px] leading-snug text-slate-500 dark:text-slate-400"
+        >
+          {usageTotalText(t, usageTotal)}
+        </p>
+      )}
+
+      {onErase && (
+        <div className="flex justify-end border-t border-black/[0.06] pt-2 dark:border-white/[0.06]">
+          <button
+            type="button"
+            onClick={(e) => onErase(applicant, e.currentTarget)}
+            className={`${ACTION_BUTTON_CLASS} border-red-200 bg-white/40 text-red-700 hover:border-red-300 hover:bg-red-50 focus-visible:ring-red-500 dark:border-red-800/50 dark:bg-transparent dark:text-red-400 dark:hover:bg-red-900/20`}
+          >
+            <Trash2 className="h-3 w-3" aria-hidden="true" />
+            {t('fileCheck.erase.action')}
+          </button>
+        </div>
       )}
     </section>
   );
@@ -495,12 +627,21 @@ interface VerdictCardProps {
   lastRunAt?: Date | null;
   /** Opens the "Why DSAs need this" card a finding's tag points to. */
   onPainPoint?: (id: PainPointId) => void;
+  /** Product id of the result's checklist (fills a reminder's {{product}}). */
+  product?: string | null;
+  /** Shows "Erase applicant data" per applicant; opens the confirmation. */
+  onEraseApplicant?: (
+    applicant: FileCheckApplicant,
+    trigger: HTMLElement,
+  ) => void;
 }
 
 export default function VerdictCard({
   result,
   lastRunAt,
   onPainPoint,
+  product,
+  onEraseApplicant,
 }: VerdictCardProps) {
   const { t } = useTranslation();
   const applicants = result.applicants ?? [];
@@ -586,7 +727,13 @@ export default function VerdictCard({
         </section>
 
         {applicants.map((a, i) => (
-          <ApplicantSection key={`${a.applicant}-${i}`} applicant={a} />
+          <ApplicantSection
+            key={`${a.applicant}-${i}`}
+            applicant={a}
+            checklistId={result.checklist?.id}
+            product={product}
+            onErase={onEraseApplicant}
+          />
         ))}
 
         <SkippedDocuments result={result} />

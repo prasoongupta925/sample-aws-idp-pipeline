@@ -1,7 +1,16 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Info, Hash, Type, AlignLeft, Globe, Palette } from 'lucide-react';
+import {
+  Info,
+  Hash,
+  Type,
+  AlignLeft,
+  Globe,
+  Palette,
+  Webhook,
+} from 'lucide-react';
 import { useModal } from '../hooks/useModal';
+import WebhookSettings from './WebhookSettings';
 
 export interface Project {
   project_id: string;
@@ -127,7 +136,7 @@ interface AdvancedSettings {
   document_prompt: string;
 }
 
-type SectionKey = 'basic' | 'instructions';
+type SectionKey = 'basic' | 'instructions' | 'integrations';
 
 interface ProjectSettingsModalProps {
   project: Project | null;
@@ -141,6 +150,8 @@ interface ProjectSettingsModalProps {
     document_prompt: string;
   }) => Promise<void>;
   isCreating?: boolean;
+  /** Enables the Integrations section (the project's CRM webhook). */
+  fetchApi?: <T>(url: string, init?: RequestInit) => Promise<T>;
 }
 
 export default function ProjectSettingsModal({
@@ -149,10 +160,15 @@ export default function ProjectSettingsModal({
   onClose,
   onSave,
   isCreating = false,
+  fetchApi,
 }: ProjectSettingsModalProps) {
   const { t } = useTranslation();
   const [saving, setSaving] = useState(false);
   const [activeSection, setActiveSection] = useState<SectionKey>('basic');
+  // Integrations stays mounted once opened, so a new secret shown once is
+  // not lost by switching sections (closing the modal forgets it).
+  const [integrationsOpened, setIntegrationsOpened] = useState(false);
+  const showIntegrations = !!fetchApi && !!project && !isCreating;
 
   const [formData, setFormData] = useState<FormData>({
     name: '',
@@ -189,6 +205,16 @@ export default function ProjectSettingsModal({
     }
     setActiveSection('basic');
   }, [project, isOpen]);
+
+  // Closing the modal forgets the webhook section (and a secret it showed).
+  useEffect(() => {
+    if (!isOpen) setIntegrationsOpened(false);
+  }, [isOpen]);
+
+  const selectSection = (key: SectionKey) => {
+    setActiveSection(key);
+    if (key === 'integrations') setIntegrationsOpened(true);
+  };
 
   const handleSave = async () => {
     if (!formData.name.trim()) return;
@@ -256,6 +282,21 @@ export default function ProjectSettingsModal({
           </svg>
         ),
       },
+      ...(showIntegrations
+        ? [
+            {
+              key: 'integrations' as const,
+              label: t('projectSettings.integrations'),
+              icon: (
+                <Webhook
+                  className="w-4 h-4 flex-shrink-0"
+                  strokeWidth={1.5}
+                  aria-hidden="true"
+                />
+              ),
+            },
+          ]
+        : []),
     ];
 
   return (
@@ -283,7 +324,8 @@ export default function ProjectSettingsModal({
               <button
                 key={item.key}
                 type="button"
-                onClick={() => setActiveSection(item.key)}
+                onClick={() => selectSection(item.key)}
+                aria-current={activeSection === item.key ? 'page' : undefined}
                 className={`bento-settings-nav-item ${
                   activeSection === item.key ? 'active' : ''
                 }`}
@@ -421,6 +463,15 @@ export default function ProjectSettingsModal({
                 </div>
               </div>
             )}
+
+            {showIntegrations && integrationsOpened && fetchApi && project && (
+              <div hidden={activeSection !== 'integrations'}>
+                <WebhookSettings
+                  fetchApi={fetchApi}
+                  projectId={project.project_id}
+                />
+              </div>
+            )}
           </div>
         </div>
 
@@ -429,22 +480,31 @@ export default function ProjectSettingsModal({
           className="bento-modal-footer"
           style={{ justifyContent: 'flex-end' }}
         >
-          <div className="bento-modal-actions">
-            <button onClick={onClose} className="bento-btn-cancel">
-              {t('common.cancel')}
-            </button>
-            <button
-              onClick={handleSave}
-              disabled={!formData.name.trim() || saving}
-              className="bento-btn-save"
-            >
-              {saving
-                ? t('common.saving')
-                : isCreating
-                  ? t('common.create')
-                  : t('common.save')}
-            </button>
-          </div>
+          {activeSection === 'integrations' ? (
+            // The webhook saves with its own buttons: nothing to save here.
+            <div className="bento-modal-actions">
+              <button onClick={onClose} className="bento-btn-cancel">
+                {t('common.close')}
+              </button>
+            </div>
+          ) : (
+            <div className="bento-modal-actions">
+              <button onClick={onClose} className="bento-btn-cancel">
+                {t('common.cancel')}
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={!formData.name.trim() || saving}
+                className="bento-btn-save"
+              >
+                {saving
+                  ? t('common.saving')
+                  : isCreating
+                    ? t('common.create')
+                    : t('common.save')}
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>

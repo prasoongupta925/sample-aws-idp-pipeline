@@ -1,19 +1,43 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { X, Plus, Pencil, Trash2, Check, Sparkles } from 'lucide-react';
+import {
+  X,
+  Plus,
+  Pencil,
+  Trash2,
+  Check,
+  Sparkles,
+  BadgeCheck,
+} from 'lucide-react';
 import { Agent } from '../types/project';
 import ConfirmModal from './ConfirmModal';
 import { useModal } from '../hooks/useModal';
+import { isBuiltinAgent, sortAgentsBuiltinFirst } from '../lib/agents';
+
+/** "Built-in" pill of a platform agent. */
+export function BuiltinAgentBadge() {
+  const { t } = useTranslation();
+  return (
+    <span
+      className="inline-flex flex-shrink-0 items-center gap-0.5 rounded-full border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-violet-700 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-300"
+      data-testid="builtin-badge"
+    >
+      <BadgeCheck className="h-2.5 w-2.5" aria-hidden="true" />
+      {t('agent.builtin')}
+    </span>
+  );
+}
 
 type ModalView = 'list' | 'create' | 'edit';
 
 interface AgentSelectModalProps {
   isOpen: boolean;
   agents: Agent[];
-  selectedAgentName: string | null;
+  /** agent_id of the selected agent; null: the default assistant. */
+  selectedAgentId: string | null;
   loading?: boolean;
   onClose: () => void;
-  onSelect: (agentName: string | null) => void;
+  onSelect: (agentId: string | null) => void;
   onCreate: (name: string, content: string) => Promise<void>;
   onUpdate: (agentId: string, content: string) => Promise<void>;
   onDelete: (agentId: string) => Promise<void>;
@@ -23,7 +47,7 @@ interface AgentSelectModalProps {
 export default function AgentSelectModal({
   isOpen,
   agents,
-  selectedAgentName,
+  selectedAgentId,
   loading = false,
   onClose,
   onSelect,
@@ -41,10 +65,12 @@ export default function AgentSelectModal({
   const [deleting, setDeleting] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
-  const [pendingAgentName, setPendingAgentName] = useState<string | null>(null);
+  const [pendingAgentId, setPendingAgentId] = useState<string | null>(null);
   const [showConfirm, setShowConfirm] = useState(false);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const contentInputRef = useRef<HTMLTextAreaElement>(null);
+  // Built-in agents first; they can be selected but never edited or deleted.
+  const orderedAgents = useMemo(() => sortAgentsBuiltinFirst(agents), [agents]);
 
   // Reset state when modal closes
   useEffect(() => {
@@ -54,7 +80,7 @@ export default function AgentSelectModal({
       setName('');
       setContent('');
       setDeleteConfirm(null);
-      setPendingAgentName(null);
+      setPendingAgentId(null);
       setShowConfirm(false);
     }
   }, [isOpen]);
@@ -101,6 +127,7 @@ export default function AgentSelectModal({
   };
 
   const handleEdit = async (agent: Agent) => {
+    if (isBuiltinAgent(agent)) return;
     setLoadingDetail(true);
     try {
       const detail = await onLoadDetail(agent.agent_id);
@@ -132,6 +159,7 @@ export default function AgentSelectModal({
   };
 
   const handleDelete = async (agentId: string) => {
+    if (isBuiltinAgent({ agent_id: agentId })) return;
     setDeleting(true);
     try {
       await onDelete(agentId);
@@ -147,19 +175,19 @@ export default function AgentSelectModal({
     }
   };
 
-  const handleSelect = (agentName: string | null) => {
+  const handleSelect = (agentId: string | null) => {
     // Same agent selected - just close
-    if (agentName === selectedAgentName) {
+    if (agentId === selectedAgentId) {
       onClose();
       return;
     }
     // Different agent - show confirm
-    setPendingAgentName(agentName);
+    setPendingAgentId(agentId);
     setShowConfirm(true);
   };
 
   const handleConfirmSelect = () => {
-    onSelect(pendingAgentName);
+    onSelect(pendingAgentId);
     onClose();
   };
 
@@ -209,21 +237,21 @@ export default function AgentSelectModal({
                 <button
                   onClick={() => handleSelect(null)}
                   className={`w-full flex items-center gap-3 p-3 rounded-xl border transition-all ${
-                    selectedAgentName === null
+                    selectedAgentId === null
                       ? 'border-blue-500 bg-blue-50 dark:bg-blue-500/10'
                       : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-800'
                   }`}
                 >
                   <div
                     className={`p-2 rounded-lg flex-shrink-0 ${
-                      selectedAgentName === null
+                      selectedAgentId === null
                         ? 'bg-blue-100 dark:bg-blue-500/20'
                         : 'bg-slate-100 dark:bg-slate-800'
                     }`}
                   >
                     <Sparkles
                       className={`w-4 h-4 ${
-                        selectedAgentName === null
+                        selectedAgentId === null
                           ? 'text-blue-600 dark:text-blue-400'
                           : 'text-slate-500 dark:text-slate-400'
                       }`}
@@ -232,7 +260,7 @@ export default function AgentSelectModal({
                   <div className="flex-1 text-left min-w-0">
                     <p
                       className={`text-sm font-medium truncate ${
-                        selectedAgentName === null
+                        selectedAgentId === null
                           ? 'text-blue-700 dark:text-blue-300'
                           : 'text-slate-700 dark:text-slate-300'
                       }`}
@@ -246,13 +274,13 @@ export default function AgentSelectModal({
                       )}
                     </p>
                   </div>
-                  {selectedAgentName === null && (
+                  {selectedAgentId === null && (
                     <Check className="w-4 h-4 text-blue-600 dark:text-blue-400 flex-shrink-0" />
                   )}
                 </button>
               )}
 
-              {/* Custom Agents */}
+              {/* Agents: built-in first, then the user's custom agents */}
               {loading ? (
                 <div className="flex items-center justify-center py-8">
                   <svg
@@ -276,92 +304,121 @@ export default function AgentSelectModal({
                   </svg>
                 </div>
               ) : (
-                agents.map((agent) => (
-                  <button
-                    key={agent.name}
-                    onClick={() =>
-                      showRightPanel
-                        ? handleEdit(agent)
-                        : handleSelect(agent.name)
-                    }
-                    disabled={loadingDetail && showRightPanel}
-                    className={`w-full group flex items-center gap-2 p-3 rounded-xl border transition-all text-left ${
-                      showRightPanel
-                        ? editingAgent?.name === agent.name
-                          ? 'border-blue-500 bg-blue-50 dark:bg-blue-500/10'
-                          : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-800'
-                        : selectedAgentName === agent.name
-                          ? 'border-blue-500 bg-blue-50 dark:bg-blue-500/10'
-                          : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-800'
-                    } disabled:opacity-50`}
-                  >
+                orderedAgents.map((agent) => {
+                  const builtin = isBuiltinAgent(agent);
+                  const active = showRightPanel
+                    ? editingAgent?.agent_id === agent.agent_id
+                    : selectedAgentId === agent.agent_id;
+                  // In create/edit mode the list picks an agent to edit.
+                  const disabled = showRightPanel && (builtin || loadingDetail);
+                  const created = new Date(agent.created_at);
+                  return (
                     <div
-                      className={`p-2 rounded-lg flex-shrink-0 ${
-                        (showRightPanel && editingAgent?.name === agent.name) ||
-                        (!showRightPanel && selectedAgentName === agent.name)
-                          ? 'bg-blue-100 dark:bg-blue-500/20'
-                          : 'bg-slate-100 dark:bg-slate-800'
-                      }`}
+                      key={agent.agent_id}
+                      data-agent-id={agent.agent_id}
+                      data-builtin={builtin ? 'true' : undefined}
+                      className={`group flex items-center rounded-xl border transition-all ${
+                        active
+                          ? 'border-blue-500 bg-blue-50 dark:bg-blue-500/10'
+                          : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-800'
+                      } ${disabled ? 'opacity-50' : ''}`}
                     >
-                      <Sparkles
-                        className={`w-4 h-4 ${
-                          (showRightPanel &&
-                            editingAgent?.name === agent.name) ||
-                          (!showRightPanel && selectedAgentName === agent.name)
-                            ? 'text-blue-600 dark:text-blue-400'
-                            : 'text-slate-500 dark:text-slate-400'
-                        }`}
-                      />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p
-                        className={`text-sm font-medium truncate ${
-                          (showRightPanel &&
-                            editingAgent?.name === agent.name) ||
-                          (!showRightPanel && selectedAgentName === agent.name)
-                            ? 'text-blue-700 dark:text-blue-300'
-                            : 'text-slate-700 dark:text-slate-300'
-                        }`}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          showRightPanel
+                            ? handleEdit(agent)
+                            : handleSelect(agent.agent_id)
+                        }
+                        disabled={disabled}
+                        title={
+                          showRightPanel && builtin
+                            ? t('agent.builtinReadOnly')
+                            : undefined
+                        }
+                        className="flex min-w-0 flex-1 items-center gap-2 rounded-xl p-3 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed"
                       >
-                        {agent.name}
-                      </p>
-                      {!showRightPanel && (
-                        <p className="text-xs text-slate-500 dark:text-slate-400">
-                          {new Date(agent.created_at).toLocaleDateString()}
-                        </p>
+                        <div
+                          className={`p-2 rounded-lg flex-shrink-0 ${
+                            active
+                              ? 'bg-blue-100 dark:bg-blue-500/20'
+                              : 'bg-slate-100 dark:bg-slate-800'
+                          }`}
+                        >
+                          <Sparkles
+                            className={`w-4 h-4 ${
+                              active
+                                ? 'text-blue-600 dark:text-blue-400'
+                                : 'text-slate-500 dark:text-slate-400'
+                            }`}
+                          />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="flex min-w-0 items-center gap-1.5">
+                            <span
+                              className={`text-sm font-medium truncate ${
+                                active
+                                  ? 'text-blue-700 dark:text-blue-300'
+                                  : 'text-slate-700 dark:text-slate-300'
+                              }`}
+                            >
+                              {agent.name}
+                            </span>
+                            {builtin && <BuiltinAgentBadge />}
+                          </p>
+                          {!showRightPanel &&
+                            (builtin ? (
+                              <p
+                                className="text-xs text-slate-500 dark:text-slate-400 line-clamp-2"
+                                title={agent.description || undefined}
+                              >
+                                {agent.description ||
+                                  t('agent.builtinDescription')}
+                              </p>
+                            ) : (
+                              !Number.isNaN(created.getTime()) && (
+                                <p className="text-xs text-slate-500 dark:text-slate-400">
+                                  {created.toLocaleDateString()}
+                                </p>
+                              )
+                            ))}
+                        </div>
+                        {!showRightPanel &&
+                          selectedAgentId === agent.agent_id && (
+                            <Check className="w-4 h-4 text-blue-600 dark:text-blue-400 flex-shrink-0" />
+                          )}
+                      </button>
+
+                      {/* Edit/Delete - list mode, custom agents only */}
+                      {!showRightPanel && !builtin && (
+                        <div className="flex items-center gap-1 pr-2 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
+                          <button
+                            type="button"
+                            onClick={() => handleEdit(agent)}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-500/10 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                            title={t('common.edit', 'Edit')}
+                            aria-label={t('agent.editNamed', {
+                              name: agent.name,
+                            })}
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setDeleteConfirm(agent.agent_id)}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
+                            title={t('common.delete', 'Delete')}
+                            aria-label={t('agent.deleteNamed', {
+                              name: agent.name,
+                            })}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       )}
                     </div>
-                    {!showRightPanel && selectedAgentName === agent.name && (
-                      <Check className="w-4 h-4 text-blue-600 dark:text-blue-400 flex-shrink-0" />
-                    )}
-
-                    {/* Edit/Delete buttons - only in list mode */}
-                    {!showRightPanel && (
-                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <div
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleEdit(agent);
-                          }}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-500/10 transition-colors cursor-pointer"
-                          title={t('common.edit', 'Edit')}
-                        >
-                          <Pencil className="w-3.5 h-3.5" />
-                        </div>
-                        <div
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setDeleteConfirm(agent.agent_id);
-                          }}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors cursor-pointer"
-                          title={t('common.delete', 'Delete')}
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </div>
-                      </div>
-                    )}
-                  </button>
-                ))
+                  );
+                })
               )}
 
               {/* Add new agent button */}
@@ -565,7 +622,7 @@ export default function AgentSelectModal({
         isOpen={showConfirm}
         onClose={() => {
           setShowConfirm(false);
-          setPendingAgentName(null);
+          setPendingAgentId(null);
         }}
         onConfirm={handleConfirmSelect}
         title={t('agent.changeAgent', 'Change Agent')}
@@ -591,7 +648,11 @@ export default function AgentSelectModal({
         message={t(
           'agent.deleteConfirmMessage',
           'Are you sure you want to delete "{{name}}"? This action cannot be undone.',
-          { name: deleteConfirm },
+          {
+            name:
+              agents.find((a) => a.agent_id === deleteConfirm)?.name ??
+              deleteConfirm,
+          },
         )}
         confirmText={t('common.delete', 'Delete')}
         variant="danger"

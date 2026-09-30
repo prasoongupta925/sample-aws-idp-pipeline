@@ -363,9 +363,10 @@ export function useChatSession({
         session.agent_id !== 'research'
       ) {
         opts.setVoiceChatMode(false);
-        const agent = opts.agents.find(
-          (a) => a.agent_id === session.agent_id || a.name === session.agent_id,
-        );
+        // The id first: a custom agent may share a built-in agent's name.
+        const agent =
+          opts.agents.find((a) => a.agent_id === session.agent_id) ??
+          opts.agents.find((a) => a.name === session.agent_id);
         if (agent) {
           opts.setSelectedAgent(agent);
         } else {

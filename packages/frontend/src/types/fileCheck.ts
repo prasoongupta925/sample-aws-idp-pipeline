@@ -96,6 +96,26 @@ export interface ChecklistRef {
   name?: string | null;
 }
 
+/**
+ * Tokens and cost of reading one document (the model calls of its analysis),
+ * as recorded by the backend. null: not recorded for this document.
+ */
+export interface DocumentUsage {
+  model_id?: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+}
+
+/** The applicant's documents' usage, summed by the backend. */
+export interface ApplicantUsageTotal {
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+  documents_with_usage: number;
+  documents_total: number;
+}
+
 export interface ApplicantDocument {
   document_id?: string | null;
   document_name: string;
@@ -104,6 +124,8 @@ export interface ApplicantDocument {
   grounded?: boolean | null;
   grounding_notes: string[];
   unverified_fields: string[];
+  /** Absent from backends without per-document usage. */
+  usage?: DocumentUsage | null;
 }
 
 export interface ChecklistItemResult {
@@ -178,6 +200,8 @@ export interface ApplicantResult {
   obligations?: FileCheckObligations | null;
   /** Indicative FOIR, if the checklist enables it; the lender's policy decides. */
   foir?: FileCheckFoir | null;
+  /** Reading cost of this applicant's documents. Absent from older backends. */
+  usage_total?: ApplicantUsageTotal | null;
 }
 
 // ------------------------------------------------------------------ obligations
@@ -422,4 +446,34 @@ export interface FileCheckUsage {
   input_tokens: number;
   output_tokens: number;
   cost_usd: number;
+}
+
+// ------------------------------------------------------------------ erase
+// POST /projects/{project_id}/applicants/erase: permanently deletes every
+// document of one applicant and the data derived from them. `confirm` must
+// repeat the applicant's name exactly (400 otherwise); 404 when the project
+// has no such applicant.
+
+export interface ApplicantEraseRequest {
+  applicant: string;
+  confirm: string;
+}
+
+export interface ErasedDocument {
+  document_id: string;
+  name: string;
+}
+
+export interface EraseFailedDocument {
+  document_id: string;
+  name: string;
+  error: string;
+}
+
+export interface ApplicantEraseResponse {
+  applicant: string;
+  documents_deleted: ErasedDocument[];
+  failed: EraseFailedDocument[];
+  /** ISO timestamp */
+  erased_at: string;
 }

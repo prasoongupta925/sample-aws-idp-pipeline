@@ -1,5 +1,9 @@
 import { useState, useCallback } from 'react';
 import type { Agent } from '../types/project';
+import { isBuiltinAgent } from '../lib/agents';
+
+/** Built-in agents are read-only: the API answers 403 to PUT and DELETE. */
+const BUILTIN_READ_ONLY = 'Built-in agents cannot be edited or deleted';
 
 interface UseAgentsOptions {
   fetchApi: <T>(url: string, init?: RequestInit) => Promise<T>;
@@ -60,6 +64,7 @@ export function useAgents({
     async (agentId: string, content: string) => {
       const agent = agents.find((a) => a.agent_id === agentId);
       if (!agent) return;
+      if (isBuiltinAgent(agent)) throw new Error(BUILTIN_READ_ONLY);
 
       await fetchApi(
         `projects/${projectId}/agents/${encodeURIComponent(agentId)}`,
@@ -76,6 +81,10 @@ export function useAgents({
 
   const handleAgentDelete = useCallback(
     async (agentId: string) => {
+      const agent = agents.find((a) => a.agent_id === agentId);
+      if (isBuiltinAgent(agent ?? { agent_id: agentId })) {
+        throw new Error(BUILTIN_READ_ONLY);
+      }
       await fetchApi(
         `projects/${projectId}/agents/${encodeURIComponent(agentId)}`,
         {
@@ -88,16 +97,17 @@ export function useAgents({
         onNewSession();
       }
     },
-    [fetchApi, projectId, loadAgents, selectedAgent, onNewSession],
+    [fetchApi, projectId, loadAgents, selectedAgent, onNewSession, agents],
   );
 
+  // By id: a custom agent may have the same name as a built-in one.
   const handleAgentSelect = useCallback(
-    (agentName: string | null) => {
+    (agentId: string | null) => {
       onNewSession();
-      if (agentName === null) {
+      if (agentId === null) {
         setSelectedAgent(null);
       } else {
-        const agent = agents.find((a) => a.name === agentName);
+        const agent = agents.find((a) => a.agent_id === agentId);
         setSelectedAgent(agent || null);
       }
     },

@@ -519,7 +519,12 @@
     "startNewChat": "新しい会話を開始",
     "deleteAgent": "エージェント削除",
     "deleteConfirmMessage": "「{{name}}」を削除しますか？この操作は取り消せません。",
-    "notFound": "「{{name}}」エージェントが見つかりません。デフォルトエージェントを使用します。"
+    "notFound": "「{{name}}」エージェントが見つかりません。デフォルトエージェントを使用します。",
+    "builtin": "組み込み",
+    "builtinDescription": "プラットフォームに組み込まれたエージェント",
+    "builtinReadOnly": "組み込みエージェントは編集・削除できません",
+    "editNamed": "{{name}} を編集",
+    "deleteNamed": "{{name}} を削除"
   },
   "artifacts": {
     "heroTag": "AI Generated Artifacts",
@@ -580,7 +585,8 @@
   "projectSettings": {
     "basicSettings": "基本設定",
     "ocrSettings": "OCR設定",
-    "analysisInstructions": "文書分析の指示"
+    "analysisInstructions": "文書分析の指示",
+    "integrations": "連携"
   },
   "settings": {
     "heroTitle": "設定と情報",
@@ -835,6 +841,76 @@
         "retention": "{{days}} 日を超えて保存されるものはありません",
         "synthetic": "合成データのみ。"
       }
+    },
+    "reminder": {
+      "open": "リマインダーを作成",
+      "close": "リマインダーを閉じる",
+      "title": "{{name}} さんへのリマインダー",
+      "language": "言語",
+      "channel": "チャネル",
+      "whatsapp": "WhatsApp",
+      "sms": "SMS",
+      "message": "メッセージ",
+      "templates": {
+        "T1": "書類の依頼",
+        "T2": "リマインダー",
+        "T3": "最終リマインダー",
+        "T5": "不一致 – 電話を依頼",
+        "T6": "書類があと 1 件"
+      },
+      "templateHints": {
+        "T1": "通話後の最初の依頼(アップロードリンク付き)。",
+        "T2": "書類がまだ揃っていないときの 2 日目のリマインダー。",
+        "T3": "新しい 7 日間リンク付きの 5 日目の最終リマインダー。その後はテレコーラーが引き継ぎます。",
+        "T5": "不一致のある書類の種類だけを伝え(値は決して含めません)、電話をお願いします。",
+        "T6": "月単位の書類が 1 件だけ残っているとき。"
+      },
+      "textLabel": "メッセージ (読み取り専用)",
+      "countWhatsapp": "{{count}} 文字 · WhatsApp 本文の上限 {{limit}} 文字",
+      "characters": "{{count}} 文字",
+      "segments": "SMS {{count}} セグメント",
+      "encodingGsm": "GSM-7: SMS 1 通 {{single}} 文字、分割時は 1 セグメント {{part}} 文字",
+      "encodingUnicode": "Unicode: SMS 1 通 {{single}} 文字、分割時は 1 セグメント {{part}} 文字",
+      "copyManual": "ここではコピーがブロックされています。テキストを選択したので Ctrl+C を押してください。",
+      "placeholders": "送信前に入力してください: {{names}}。文字数にはこれらが含まれます。",
+      "draftNote": "判定から埋めた下書きテンプレートです(AI は使いません)。Meta の承認や DLT 登録はまだです。使うのは名(ファーストネーム)と書類名だけで、PAN・Aadhaar・口座番号・金額は決して含めません。ヒンディー語とマラーティー語はネイティブスピーカーの確認を受けてください。",
+      "nothingToRequest": "申込者に依頼することはありません。必須書類の不足も書類の不一致もありません。判定が NOT READY の理由は下に表示されています。"
+    },
+    "erase": {
+      "action": "申込者データを消去",
+      "title": "{{name}} のデータを消去しますか?",
+      "pan": "PAN {{pan}}",
+      "body": "このプロジェクト内のこの申込者のすべての文書と、そこから作られたデータ(保存ファイル、抽出された事実とページテキスト、検索インデックスの項目、ナレッジグラフのデータ、分析記録)を完全に削除します。",
+      "cannotUndo": "元に戻せません。",
+      "scope": "分析中・失敗・申込者に未割り当ての文書は対象外です。申込者からの消去依頼に使ってください。",
+      "typeLabel": "確認のため、申込者の名前を入力してください:",
+      "exactHint": "大文字・小文字を含め、表示どおりに入力してください。",
+      "mismatchHint": "名前がまだ一致していません。",
+      "confirm": "完全に消去",
+      "erasing": "消去中…",
+      "errors": {
+        "mismatch": "入力した名前が申込者の名前と一致しません (HTTP 400)。",
+        "notFound": "このプロジェクトにその申込者はいません。すでに消去された可能性があります (HTTP 404)。",
+        "ambiguous": "同じ名前の申込者が複数います (HTTP 409)。",
+        "notConfigured": "ファイルチェックサービスが構成されていません (HTTP 503)。",
+        "failed": "消去に失敗しました (HTTP {{status}})。しばらくしてからもう一度お試しください。"
+      },
+      "result": {
+        "title": "{{name}} のデータを消去しました",
+        "deleted": "{{count}} 件の文書を削除しました",
+        "failed": "{{count}} 件の文書は完全には削除できませんでした:",
+        "failedHint": "文書一覧から削除するか、チェックを再実行してからもう一度消去してください。",
+        "rerun": "消去したデータを示していた判定はクリアしました。現在のファイルを見るにはチェックを再実行してください。",
+        "dismiss": "閉じる"
+      }
+    },
+    "usage": {
+      "perDocument": "入力 {{input}} / 出力 {{output}} トークン · {{cost}}",
+      "notRecorded": "使用量の記録なし",
+      "model": "モデル: {{model}}",
+      "total": "このファイルの読み取りコストは文書 {{count}} 件で {{cost}} でした (入力 {{input}} / 出力 {{output}} トークン)。",
+      "partial": "文書 {{count}} 件は使用量が記録されていません。",
+      "none": "これらの文書の読み取りコストは記録されていません(コスト記録の開始前に分析されました)。"
     }
   },
   "painPoints": {
@@ -854,5 +930,72 @@
     },
     "tagTitle": "DSA に必要な理由: {{title}}",
     "footer": "法的助言やコンプライアンスの主張ではありません。デモデータは合成データです。"
+  },
+  "integrations": {
+    "webhook": {
+      "title": "Smart Dial / CRM Webhook",
+      "intro": "オンの間、文書の分析が完了するたびに、その申込者のファイルチェック判定を署名付き HTTPS POST(イベント file_check.completed)で CRM に送信します。",
+      "loading": "Webhook 設定を読み込み中…",
+      "url": "エンドポイント URL",
+      "urlHint": "HTTPS のみ、公開ホストのみで、user:password@ は使えません。空にすると Webhook を削除します。",
+      "urlNotHttps": "URL は https:// で始まる必要があります。そうでない場合はサーバーが拒否します。",
+      "enabled": "送信を有効にする",
+      "enabledHint": "オフの間は何も送信しません。オンにするには URL と署名シークレットが必要です。",
+      "needsSecret": "送信をオンにする前に、下で署名シークレットを生成してください。",
+      "save": "Webhook を保存",
+      "unsaved": "未保存の変更があります",
+      "saved": "{{time}} に保存しました",
+      "secret": {
+        "title": "署名シークレット",
+        "set": "設定済み",
+        "notSet": "未設定",
+        "generate": "シークレットを生成",
+        "regenerate": "新しいシークレットを生成",
+        "hint": "Smart Dial はこのシークレットで、配信がここから送られたことを確認します。シークレットは生成時に一度だけ表示されます。",
+        "replaceTitle": "署名シークレットの置き換え",
+        "confirmReplace": "現在のシークレットを置き換えますか?以降の配信はすぐに新しいシークレットで署名されるため、Smart Dial 側でも更新するまで拒否されます。",
+        "replace": "シークレットを置き換え",
+        "once": "今すぐこのシークレットをコピーして Smart Dial に保存してください。再表示はできません。",
+        "copyManual": "ここではコピーがブロックされています。シークレットを選択したので Ctrl+C を押してください。",
+        "done": "保存しました"
+      },
+      "test": {
+        "send": "テストイベントを送信",
+        "sending": "送信中…",
+        "hint": "申込者データを含まない署名付きの \"test\" イベントを送信します(送信がオフでも動作します)。",
+        "needsSetup": "テストイベントを送るには URL を保存し、シークレットを生成してください。",
+        "delivered": "テストイベントを配信しました (HTTP {{status}})",
+        "deliveredNoStatus": "テストイベントを配信しました",
+        "failed": "テストイベントの配信に失敗しました",
+        "failedStatus": "テストイベントの配信に失敗しました (HTTP {{status}})",
+        "deliveryId": "配信 {{id}}"
+      },
+      "deliveries": {
+        "title": "最近の配信",
+        "refresh": "配信一覧を更新",
+        "empty": "まだ配信はありません。",
+        "at": "日時",
+        "event": "イベント",
+        "applicant": "申込者",
+        "result": "結果",
+        "delivered": "配信済み",
+        "failed": "失敗",
+        "retention": "過去 7 日間の直近 20 件です。それより古い記録は削除されます。"
+      },
+      "verify": {
+        "title": "Smart Dial での検証方法",
+        "intro": "各配信は JSON 本文と次のヘッダーを含む HTTPS POST です:",
+        "steps": "Smart Dial は共有シークレット(UTF-8)で、タイムスタンプ t、ドット、生のリクエスト本文に対する HMAC-SHA256 を再計算して 16 進ダイジェストを v1 と定数時間で比較し、自身の時計と 5 分を超えてずれたタイムスタンプを拒否します。再試行でも X-SmartDial-Delivery の ID は変わらないため、重複した配信は無視できます。",
+        "example": "検証の例 (Python)"
+      },
+      "errors": {
+        "load": "Webhook 設定を読み込めませんでした: {{message}}",
+        "save": "保存されませんでした: {{message}}",
+        "secret": "シークレットは生成されませんでした: {{message}}",
+        "notFound": "プロジェクトが見つかりません (HTTP 404)。",
+        "notConfigured": "このデプロイでは Webhook の配信が構成されていません (HTTP 503)。",
+        "status": "リクエストが拒否されました (HTTP {{status}})。"
+      }
+    }
   }
 }

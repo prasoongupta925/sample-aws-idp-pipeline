@@ -55,7 +55,8 @@ interface ChatInputBoxProps {
   reasonings?: Record<string, ReasoningLevel>;
   onModelChange?: (modelValue: string) => void;
   onReasoningChange?: (reasonings: Record<string, ReasoningLevel>) => void;
-  onAgentSelect?: (agentName: string | null) => void;
+  /** agent_id, or null for the default assistant. */
+  onAgentSelect?: (agentId: string | null) => void;
   onAgentClick: () => void;
   voiceChat: InputBoxVoiceChat;
   messagesLength: number;

@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronRight, Mic, Settings2, Sparkles } from 'lucide-react';
 import type { Agent, BidiModelType } from './types';
+import { isBuiltinAgent, sortAgentsBuiltinFirst } from '../../lib/agents';
 
 interface ToolsMenuVoiceChat {
   available?: boolean;
@@ -16,13 +17,14 @@ interface ToolsMenuVoiceChat {
 
 interface ToolsMenuPopoverProps {
   voiceChat: ToolsMenuVoiceChat;
-  onAgentSelect?: (agentName: string | null) => void;
+  /** agent_id, or null for the default assistant. */
+  onAgentSelect?: (agentId: string | null) => void;
   selectedAgent: Agent | null;
   agents: Agent[];
   messagesLength: number;
   onAgentClick: () => void;
   onClose: () => void;
-  onPendingAgentChange: (agentName: string | null) => void;
+  onPendingAgentChange: (agentId: string | null) => void;
   onShowRemoveAgentConfirm: () => void;
 }
 
@@ -39,6 +41,7 @@ export default function ToolsMenuPopover({
 }: ToolsMenuPopoverProps) {
   const { t } = useTranslation();
   const [showAgentSubmenu, setShowAgentSubmenu] = useState(false);
+  const orderedAgents = useMemo(() => sortAgentsBuiltinFirst(agents), [agents]);
 
   return (
     <div className="absolute bottom-full left-0 mb-2 w-56 bg-[#e4eaf4] dark:bg-slate-800 border border-white/60 dark:border-white/30 rounded-xl shadow-lg z-50 py-1">
@@ -137,26 +140,30 @@ export default function ToolsMenuPopover({
                   )}
                 </button>
 
-                {/* Custom agents */}
-                {agents.map((agent) => {
+                {/* Agents: built-in first, then custom */}
+                {orderedAgents.map((agent) => {
                   const isSelected = selectedAgent?.agent_id === agent.agent_id;
+                  const builtin = isBuiltinAgent(agent);
                   return (
                     <button
                       key={agent.agent_id}
                       type="button"
+                      title={
+                        builtin ? agent.description || undefined : undefined
+                      }
                       onClick={() => {
                         if (
                           messagesLength > 0 &&
                           selectedAgent?.agent_id !== agent.agent_id
                         ) {
-                          onPendingAgentChange(agent.name);
+                          onPendingAgentChange(agent.agent_id);
                           onShowRemoveAgentConfirm();
                         } else {
                           if (voiceChat.mode) {
                             voiceChat.setMode(false);
                             voiceChat.onDisconnect?.();
                           }
-                          onAgentSelect(agent.name);
+                          onAgentSelect(agent.agent_id);
                         }
                         onClose();
                         setShowAgentSubmenu(false);
@@ -175,6 +182,11 @@ export default function ToolsMenuPopover({
                       >
                         {agent.name}
                       </span>
+                      {builtin && (
+                        <span className="flex-shrink-0 rounded-full bg-violet-100 px-1.5 py-0.5 text-[9px] font-semibold leading-none text-violet-700 dark:bg-violet-500/20 dark:text-violet-300">
+                          {t('agent.builtin')}
+                        </span>
+                      )}
                       {isSelected && (
                         <Check className="w-4 h-4 text-blue-500 flex-shrink-0" />
                       )}

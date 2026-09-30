@@ -1,21 +1,33 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type {
+  ApplicantEraseRequest,
+  ApplicantEraseResponse,
   FileCheckChecklistSummary,
   FileCheckRequest,
   FileCheckResult,
 } from '../types/fileCheck';
-import { normalizeChecklists, pickDefaultChecklistId } from '../lib/fileCheck';
+import {
+  normalizeChecklists,
+  parseEraseResponse,
+  pickDefaultChecklistId,
+} from '../lib/fileCheck';
 
 interface UseFileCheckOptions {
   fetchApi: <T>(url: string, init?: RequestInit) => Promise<T>;
   projectId: string;
+  /** After an applicant's data was erased (e.g. reload the documents list). */
+  onApplicantErased?: (response: ApplicantEraseResponse) => void;
 }
 
 /**
  * State for the File Check panel. The verdict is whatever
  * POST /projects/{id}/file-check returns; nothing is computed here.
  */
-export function useFileCheck({ fetchApi, projectId }: UseFileCheckOptions) {
+export function useFileCheck({
+  fetchApi,
+  projectId,
+  onApplicantErased,
+}: UseFileCheckOptions) {
   const [checklists, setChecklists] = useState<FileCheckChecklistSummary[]>([]);
   const [checklistsLoaded, setChecklistsLoaded] = useState(false);
   const [checklistsLoading, setChecklistsLoading] = useState(false);
@@ -30,11 +42,20 @@ export function useFileCheck({ fetchApi, projectId }: UseFileCheckOptions) {
   const [lastRunAt, setLastRunAt] = useState<Date | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  // Erase applicant (POST .../applicants/erase)
+  const [erasing, setErasing] = useState(false);
+  const [eraseError, setEraseError] = useState<unknown>(null);
+  const [eraseResult, setEraseResult] = useState<ApplicantEraseResponse | null>(
+    null,
+  );
 
   // Ignore responses that arrive after a newer request or a project switch.
   const checklistsSeq = useRef(0);
   const runSeq = useRef(0);
+  const eraseSeq = useRef(0);
   const projectRef = useRef(projectId);
+  const onErasedRef = useRef(onApplicantErased);
+  onErasedRef.current = onApplicantErased;
 
   // The project page is reused across projects: start clean on a switch.
   useEffect(() => {
@@ -42,6 +63,10 @@ export function useFileCheck({ fetchApi, projectId }: UseFileCheckOptions) {
     projectRef.current = projectId;
     checklistsSeq.current += 1;
     runSeq.current += 1;
+    eraseSeq.current += 1;
+    setErasing(false);
+    setEraseError(null);
+    setEraseResult(null);
     setChecklists([]);
     setChecklistsLoaded(false);
     setChecklistsLoading(false);
@@ -88,6 +113,8 @@ export function useFileCheck({ fetchApi, projectId }: UseFileCheckOptions) {
     if (wantedApplicant) body.applicant = wantedApplicant;
     setRunning(true);
     setError(null);
+    // A new verdict replaces the "data was erased" note.
+    setEraseResult(null);
     try {
       const raw = await fetchApi<unknown>(`projects/${projectId}/file-check`, {
         method: 'POST',
@@ -128,6 +155,65 @@ export function useFileCheck({ fetchApi, projectId }: UseFileCheckOptions) {
     }
   }, [fetchApi, projectId, checklistId, applicant]);
 
+  /**
+   * Permanently erases one applicant's documents and derived data. The
+   * applicant is sent by PAN when the verdict has one (a name can match two
+   * applicants: 409); `confirm` repeats the name (the API answers 400
+   * otherwise). On success the verdict is cleared: it lists erased data.
+   */
+  const eraseApplicant = useCallback(
+    async (
+      target: { applicant: string; pan?: string | null },
+      confirm: string,
+    ): Promise<ApplicantEraseResponse | null> => {
+      const seq = ++eraseSeq.current;
+      const name = target.applicant;
+      const pan = target.pan?.trim();
+      const body: ApplicantEraseRequest = { applicant: pan || name, confirm };
+      setErasing(true);
+      setEraseError(null);
+      try {
+        const raw = await fetchApi<unknown>(
+          `projects/${projectId}/applicants/erase`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          },
+        );
+        if (seq !== eraseSeq.current) return null;
+        const response = parseEraseResponse(raw, name);
+        // The verdict (and any check still running) describes erased data.
+        runSeq.current += 1;
+        setRunning(false);
+        setResult(null);
+        setResultApplicant('');
+        setLastRunAt(null);
+        setError(null);
+        setKnownApplicants((prev) => prev.filter((a) => a !== name));
+        setApplicant((current) =>
+          current.trim() === name || (!!pan && current.trim() === pan)
+            ? ''
+            : current,
+        );
+        setEraseResult(response);
+        onErasedRef.current?.(response);
+        return response;
+      } catch (err) {
+        if (seq !== eraseSeq.current) return null;
+        console.error('Erase applicant failed:', err);
+        setEraseError(err);
+        return null;
+      } finally {
+        if (seq === eraseSeq.current) setErasing(false);
+      }
+    },
+    [fetchApi, projectId],
+  );
+
+  const clearEraseError = useCallback(() => setEraseError(null), []);
+  const dismissEraseResult = useCallback(() => setEraseResult(null), []);
+
   return {
     checklists,
     checklistsLoaded,
@@ -145,6 +231,12 @@ export function useFileCheck({ fetchApi, projectId }: UseFileCheckOptions) {
     running,
     error,
     runCheck,
+    erasing,
+    eraseError,
+    eraseResult,
+    eraseApplicant,
+    clearEraseError,
+    dismissEraseResult,
   };
 }
 

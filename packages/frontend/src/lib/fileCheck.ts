@@ -1,7 +1,11 @@
 // Display helpers for the File Check panel. Nothing here decides a verdict:
 // statuses and verdicts are mapped to colours / icons / CSV cells only.
 import type {
+  ApplicantDocument,
+  ApplicantEraseResponse,
+  ApplicantUsageTotal,
   ChecklistFoirPolicy,
+  DocumentUsage,
   FileCheckApplicant,
   FileCheckChecklistSummary,
   FileCheckDebit,
@@ -10,6 +14,7 @@ import type {
   FileCheckResult,
   FileCheckSkippedDocument,
 } from '../types/fileCheck';
+import { ApiError } from './apiError';
 
 /** Plan B's salaried personal-loan checklist (the engine's shipped default). */
 export const SALARIED_PERSONAL_LOAN_ID = 'salaried_personal_loan';
@@ -318,7 +323,16 @@ export type FindingSection =
   | 'Checklist'
   | 'Consistency'
   | 'Obligations'
+  | 'Documents'
   | 'Not checked';
+
+/** Usage cells of a CSV row (documents read and their total). */
+export interface FindingUsage {
+  model_id?: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+}
 
 export interface FileCheckFinding {
   applicant: string;
@@ -329,6 +343,7 @@ export interface FileCheckFinding {
   status: string;
   detail: string;
   documents: string[];
+  usage?: FindingUsage | null;
 }
 
 export const CSV_HEADERS = [
@@ -340,6 +355,10 @@ export const CSV_HEADERS = [
   'Status',
   'Detail',
   'Documents',
+  'Model',
+  'Input tokens',
+  'Output tokens',
+  'Cost (USD)',
 ] as const;
 
 const SKIPPED_GROUPS: {
@@ -503,55 +522,182 @@ export function obligationFindings(
   return findings;
 }
 
+// ------------------------------------------------------------------ usage
+
+/** A document's recorded reading usage; null when absent or malformed. */
+export function documentUsage(
+  doc: Pick<ApplicantDocument, 'usage'>,
+): DocumentUsage | null {
+  const u = doc.usage;
+  if (!u || typeof u !== 'object') return null;
+  const input = finite(u.input_tokens);
+  const output = finite(u.output_tokens);
+  const cost = finite(u.cost_usd);
+  if (input === null || output === null || cost === null) return null;
+  return {
+    model_id: typeof u.model_id === 'string' && u.model_id ? u.model_id : null,
+    input_tokens: input,
+    output_tokens: output,
+    cost_usd: cost,
+  };
+}
+
+/** The applicant's usage total; null for backends without usage. */
+export function applicantUsageTotal(
+  applicant: Pick<FileCheckApplicant, 'usage_total'>,
+): ApplicantUsageTotal | null {
+  const u = applicant.usage_total;
+  if (!u || typeof u !== 'object') return null;
+  const input = finite(u.input_tokens);
+  const output = finite(u.output_tokens);
+  const cost = finite(u.cost_usd);
+  if (input === null || output === null || cost === null) return null;
+  return {
+    input_tokens: input,
+    output_tokens: output,
+    cost_usd: cost,
+    documents_with_usage: finite(u.documents_with_usage) ?? 0,
+    documents_total: finite(u.documents_total) ?? 0,
+  };
+}
+
+/** 0.00632085 -> '0.006321' (a CSV number cell, no float noise). */
+export function csvUsd(value: number): string {
+  return String(Number(value.toFixed(6)));
+}
+
+function checklistFindings(
+  a: FileCheckApplicant,
+  checklist: string,
+): FileCheckFinding[] {
+  const findings: FileCheckFinding[] = [];
+  for (const row of a.checklist ?? []) {
+    findings.push({
+      applicant: a.applicant,
+      verdict: a.verdict,
+      checklist,
+      section: 'Checklist',
+      item: row.required === false ? `${row.item} (optional)` : row.item,
+      status: row.status,
+      detail: row.detail,
+      documents: row.documents ?? [],
+    });
+  }
+  for (const row of a.consistency ?? []) {
+    findings.push({
+      applicant: a.applicant,
+      verdict: a.verdict,
+      checklist,
+      section: 'Consistency',
+      item: row.check,
+      status: row.status,
+      detail: row.detail,
+      documents: row.documents ?? [],
+    });
+  }
+  findings.push(...obligationFindings(a, checklist));
+  return findings;
+}
+
+/**
+ * CSV rows of the documents read for one applicant, with the tokens and cost
+ * of reading each, and a total row when the backend reports one.
+ */
+export function documentFindings(
+  a: FileCheckApplicant,
+  checklist: string,
+): FileCheckFinding[] {
+  const base = {
+    applicant: a.applicant,
+    verdict: a.verdict,
+    checklist,
+    section: 'Documents' as const,
+  };
+  const findings: FileCheckFinding[] = (a.documents ?? []).map((d) => {
+    const usage = documentUsage(d);
+    const unverified = d.unverified_fields ?? [];
+    return {
+      ...base,
+      item: d.document_name,
+      status: 'READ',
+      detail: [
+        String(d.doc_type ?? '').replace(/_/g, ' '),
+        unverified.length > 0 ? `unverified: ${unverified.join(', ')}` : '',
+        usage ? '' : 'usage not recorded',
+      ]
+        .filter(Boolean)
+        .join('; '),
+      documents: [d.document_name],
+      usage,
+    };
+  });
+  const total = applicantUsageTotal(a);
+  if (total) {
+    findings.push({
+      ...base,
+      item: 'Reading cost (total)',
+      status: 'INFO',
+      detail: `${total.documents_with_usage} of ${total.documents_total} documents with recorded usage`,
+      documents: [],
+      usage: {
+        model_id: null,
+        input_tokens: total.input_tokens,
+        output_tokens: total.output_tokens,
+        cost_usd: total.cost_usd,
+      },
+    });
+  }
+  return findings;
+}
+
+function skippedFindings(
+  result: FileCheckResult,
+  checklist: string,
+): FileCheckFinding[] {
+  return skippedDocuments(result).map((skipped) => {
+    const name =
+      skipped.document.document_name || skipped.document.document_id || '';
+    return {
+      applicant: '',
+      verdict: '',
+      checklist,
+      section: 'Not checked' as const,
+      item: name,
+      status: skipped.status,
+      detail: skippedDetail(skipped),
+      documents: name ? [name] : [],
+    };
+  });
+}
+
+function checklistLabel(result: FileCheckResult): string {
+  return result.checklist?.name || result.checklist?.id || '';
+}
+
 /**
  * One finding per checklist item, consistency check, obligation row and
  * unchecked document.
  */
 export function fileCheckFindings(result: FileCheckResult): FileCheckFinding[] {
-  const checklist = result.checklist?.name || result.checklist?.id || '';
-  const findings: FileCheckFinding[] = [];
-  for (const a of result.applicants ?? []) {
-    for (const row of a.checklist ?? []) {
-      findings.push({
-        applicant: a.applicant,
-        verdict: a.verdict,
-        checklist,
-        section: 'Checklist',
-        item: row.required === false ? `${row.item} (optional)` : row.item,
-        status: row.status,
-        detail: row.detail,
-        documents: row.documents ?? [],
-      });
-    }
-    for (const row of a.consistency ?? []) {
-      findings.push({
-        applicant: a.applicant,
-        verdict: a.verdict,
-        checklist,
-        section: 'Consistency',
-        item: row.check,
-        status: row.status,
-        detail: row.detail,
-        documents: row.documents ?? [],
-      });
-    }
-    findings.push(...obligationFindings(a, checklist));
-  }
-  for (const skipped of skippedDocuments(result)) {
-    const name =
-      skipped.document.document_name || skipped.document.document_id || '';
-    findings.push({
-      applicant: '',
-      verdict: '',
-      checklist,
-      section: 'Not checked',
-      item: name,
-      status: skipped.status,
-      detail: skippedDetail(skipped),
-      documents: name ? [name] : [],
-    });
-  }
-  return findings;
+  const checklist = checklistLabel(result);
+  return [
+    ...(result.applicants ?? []).flatMap((a) =>
+      checklistFindings(a, checklist),
+    ),
+    ...skippedFindings(result, checklist),
+  ];
+}
+
+/** The CSV's rows: each applicant's findings, then its documents read. */
+export function fileCheckCsvRows(result: FileCheckResult): FileCheckFinding[] {
+  const checklist = checklistLabel(result);
+  return [
+    ...(result.applicants ?? []).flatMap((a) => [
+      ...checklistFindings(a, checklist),
+      ...documentFindings(a, checklist),
+    ]),
+    ...skippedFindings(result, checklist),
+  ];
 }
 
 /**
@@ -567,11 +713,14 @@ export function csvCell(value: unknown): string {
 /** Lets Excel detect UTF-8, so ₹ and Devanagari names survive. */
 const BOM = '\uFEFF';
 
-/** Excel-friendly CSV: UTF-8 BOM, CRLF line endings, one row per finding. */
+/**
+ * Excel-friendly CSV: UTF-8 BOM, CRLF line endings, one row per finding and
+ * per document read (with its tokens and cost when recorded).
+ */
 export function buildFileCheckCsv(result: FileCheckResult): string {
   const rows: unknown[][] = [
     [...CSV_HEADERS],
-    ...fileCheckFindings(result).map((f) => [
+    ...fileCheckCsvRows(result).map((f) => [
       f.applicant,
       f.verdict,
       f.checklist,
@@ -580,6 +729,10 @@ export function buildFileCheckCsv(result: FileCheckResult): string {
       f.status,
       f.detail,
       f.documents.join('; '),
+      f.usage?.model_id ?? '',
+      f.usage ? f.usage.input_tokens : '',
+      f.usage ? f.usage.output_tokens : '',
+      f.usage ? csvUsd(f.usage.cost_usd) : '',
     ]),
   ];
   return BOM + rows.map((r) => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
@@ -624,7 +777,75 @@ export function downloadTextFile(
 
 /** 'API error: 503' (useAwsClient.fetchApi) -> 503. */
 export function apiErrorStatus(error: unknown): number | null {
+  if (error instanceof ApiError) return error.status;
   const message = error instanceof Error ? error.message : String(error ?? '');
   const m = /API error:\s*(\d{3})/.exec(message);
   return m ? Number(m[1]) : null;
+}
+
+// ------------------------------------------------------------------ erase
+
+function eraseRows<T extends object>(
+  value: unknown,
+  pick: (o: Record<string, unknown>) => T | null,
+): T[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((v) =>
+      v && typeof v === 'object' ? pick(v as Record<string, unknown>) : null,
+    )
+    .filter((v): v is T => v !== null);
+}
+
+/** Validates POST .../applicants/erase; throws on anything but the contract. */
+export function parseEraseResponse(
+  raw: unknown,
+  applicant: string,
+): ApplicantEraseResponse {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error('unexpected response from the erase service');
+  }
+  const o = raw as Record<string, unknown>;
+  if (!Array.isArray(o.documents_deleted) && !Array.isArray(o.failed)) {
+    throw new Error('unexpected response from the erase service');
+  }
+  const text = (v: unknown) => (typeof v === 'string' ? v : '');
+  return {
+    applicant: str(o.applicant) ?? applicant,
+    documents_deleted: eraseRows(o.documents_deleted, (d) => ({
+      document_id: text(d.document_id),
+      name: text(d.name) || text(d.document_id),
+    })),
+    failed: eraseRows(o.failed, (d) => ({
+      document_id: text(d.document_id),
+      name: text(d.name) || text(d.document_id),
+      error: text(d.error),
+    })),
+    erased_at: text(o.erased_at),
+  };
+}
+
+/** Runs of spaces as one, as the page shows the name. */
+function collapseSpaces(value: string): string {
+  return value.trim().replace(/\s+/g, ' ');
+}
+
+/**
+ * The typed confirmation is the applicant's name exactly as shown (case
+ * included; leading, trailing and repeated spaces do not count).
+ */
+export function eraseConfirmMatches(typed: string, applicant: string): boolean {
+  const want = collapseSpaces(applicant);
+  return want.length > 0 && collapseSpaces(typed) === want;
+}
+
+/** 'CKRPK7314M' -> 'XXXXXX314M' (the engine's masking: last 4 shown). */
+export function maskPan(pan: string | null | undefined): string | null {
+  const p = String(pan ?? '')
+    .replace(/\s+/g, '')
+    .toUpperCase();
+  if (!p) return null;
+  return p.length <= 4
+    ? 'X'.repeat(p.length)
+    : 'X'.repeat(p.length - 4) + p.slice(-4);
 }
