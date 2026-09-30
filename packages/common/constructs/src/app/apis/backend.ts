@@ -1,8 +1,14 @@
 import { Construct } from 'constructs';
-import { ArnFormat, CfnOutput, RemovalPolicy, Stack } from 'aws-cdk-lib';
+import {
+  ArnFormat,
+  CfnOutput,
+  Duration,
+  RemovalPolicy,
+  Stack,
+} from 'aws-cdk-lib';
 import { Platform } from 'aws-cdk-lib/aws-ecr-assets';
 import { RuntimeConfig } from '../../core/runtime-config.js';
-import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
+import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import { StringParameter } from 'aws-cdk-lib/aws-ssm';
 import { SSM_KEYS } from '../../constants/ssm-keys.js';
 import {
@@ -10,25 +16,21 @@ import {
   FILE_CHECK_ASK_MODEL_ID,
   bedrockModelInvokeResources,
 } from '../../constants/bedrock.js';
-import { getRetentionDays } from '../retention-config.js';
+import { getRetentionDays, toLogRetention } from '../retention-config.js';
 import { Bucket, IBucket } from 'aws-cdk-lib/aws-s3';
 import { Table, ITable } from 'aws-cdk-lib/aws-dynamodb';
-import { IVpc, SubnetType, Port, SecurityGroup } from 'aws-cdk-lib/aws-ec2';
 import {
-  AwsLogDriver,
-  Cluster,
-  ContainerImage,
-  CpuArchitecture,
-  OperatingSystemFamily,
-} from 'aws-cdk-lib/aws-ecs';
-import { ApplicationLoadBalancedFargateService } from 'aws-cdk-lib/aws-ecs-patterns';
+  Architecture,
+  DockerImageCode,
+  DockerImageFunction,
+} from 'aws-cdk-lib/aws-lambda';
 import {
+  CfnApi,
+  CorsHttpMethod,
   HttpApi,
   HttpMethod,
-  VpcLink,
-  CorsHttpMethod,
 } from 'aws-cdk-lib/aws-apigatewayv2';
-import { HttpAlbIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
+import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import { HttpIamAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
 import {
   Effect,
@@ -37,7 +39,6 @@ import {
   PolicyStatement,
 } from 'aws-cdk-lib/aws-iam';
 import { Distribution } from 'aws-cdk-lib/aws-cloudfront';
-import { CfnApi } from 'aws-cdk-lib/aws-apigatewayv2';
 
 function getBucketFromSsm(
   scope: Construct,
@@ -60,7 +61,6 @@ function getTableFromSsm(
 }
 
 export interface BackendProps {
-  vpc: IVpc;
   /**
    * Model of POST /projects/{id}/file-check/ask (AWS-sold models only).
    * @default FILE_CHECK_ASK_MODEL_ID (Amazon Nova 2 Lite, global profile)
@@ -69,22 +69,19 @@ export interface BackendProps {
 }
 
 export class Backend extends Construct {
-  public readonly service: ApplicationLoadBalancedFargateService;
+  /** The FastAPI app (packages/backend image) behind the HTTP API. */
+  public readonly handler: DockerImageFunction;
   public readonly api: HttpApi;
 
-  constructor(scope: Construct, id: string, props: BackendProps) {
+  constructor(scope: Construct, id: string, props: BackendProps = {}) {
     super(scope, id);
 
-    const { vpc } = props;
     const fileCheckAskModelId =
       props.fileCheckAskModelId ?? FILE_CHECK_ASK_MODEL_ID;
 
-    const cluster = new Cluster(this, 'Cluster', {
-      vpc,
-    });
-
+    // Logs expire after retentionDays (default 7).
     const logGroup = new LogGroup(this, 'BackendLogGroup', {
-      retention: RetentionDays.ONE_WEEK,
+      retention: toLogRetention(getRetentionDays(this)),
       removalPolicy: RemovalPolicy.DESTROY,
     });
 
@@ -116,10 +113,6 @@ export class Backend extends Construct {
       this,
       'AgentStorageBucket',
       SSM_KEYS.AGENT_STORAGE_BUCKET_NAME,
-    );
-    const elasticacheEndpoint = StringParameter.valueForStringParameter(
-      this,
-      SSM_KEYS.ELASTICACHE_ENDPOINT,
     );
     const stepFunctionArn = StringParameter.valueForStringParameter(
       this,
@@ -159,64 +152,63 @@ export class Backend extends Construct {
       SSM_KEYS.WEBHOOK_SECRET_KEY_ARN,
     );
 
-    this.service = new ApplicationLoadBalancedFargateService(this, 'Service', {
-      cluster,
-      taskImageOptions: {
-        image: ContainerImage.fromAsset('../backend', {
-          platform: Platform.LINUX_ARM64,
-        }),
-        containerPort: 8000,
-        logDriver: new AwsLogDriver({
-          logGroup,
-          streamPrefix: 'backend',
-        }),
-        environment: {
-          AWS_REGION: Stack.of(this).region,
-          LANCEDB_LOCK_TABLE_NAME: lancedbLockTable.tableName,
-          DOCUMENT_STORAGE_BUCKET_NAME: documentStorage.bucketName,
-          BACKEND_TABLE_NAME: backendTable.tableName,
-          LANCEDB_EXPRESS_BUCKET_NAME: lancedbExpressBucketName,
-          SESSION_STORAGE_BUCKET_NAME: sessionStorage.bucketName,
-          AGENT_STORAGE_BUCKET_NAME: agentStorage.bucketName,
-          ELASTICACHE_ENDPOINT: elasticacheEndpoint,
-          STEP_FUNCTION_ARN: stepFunctionArn,
-          QA_REGENERATOR_FUNCTION_ARN: qaRegeneratorFunctionArn,
-          LANCEDB_FUNCTION_NAME: lancedbFunctionArn,
-          GRAPH_SERVICE_FUNCTION_NAME: graphServiceFunctionArn,
-          GRAPH_DELETE_QUEUE_URL: graphDeleteQueueUrl,
-          FILE_CHECK_FUNCTION_NAME: fileCheckFunctionArn,
-          // File-check Ask: model, and the lifetime of its usage-ledger items
-          // (DynamoDB TTL attribute expires_at, see StorageStack).
-          FILE_CHECK_ASK_MODEL_ID: fileCheckAskModelId,
-          RETENTION_DAYS: String(getRetentionDays(this)),
-          WEBHOOK_FUNCTION_NAME: webhookFunctionArn,
-          WEBHOOK_SECRET_KEY_ARN: webhookSecretKeyArn,
-        },
+    // The FastAPI app runs unchanged on Lambda: the Lambda Web Adapter in the
+    // image (packages/backend/Dockerfile) passes each API request to uvicorn
+    // on port 8000. Nothing runs, or costs, while the API is idle. The HTTP API
+    // answers the caller after 30 s, but the function keeps going for up to
+    // 120 s, as the Fargate task did: a long delete or an applicant erase
+    // finishes instead of stopping half way.
+    this.handler = new DockerImageFunction(this, 'Handler', {
+      functionName: 'idp-v2-backend-api',
+      description: 'Backend API (FastAPI on the Lambda Web Adapter)',
+      code: DockerImageCode.fromImageAsset('../backend', {
+        platform: Platform.LINUX_ARM64,
+      }),
+      architecture: Architecture.ARM_64,
+      memorySize: 2048,
+      timeout: Duration.seconds(120),
+      logGroup,
+      environment: {
+        // gzip large JSON answers (chat history, graphs) so they stay far
+        // below Lambda's 6 MB response limit.
+        AWS_LWA_ENABLE_COMPRESSION: 'true',
+        // AWS_REGION is reserved: Lambda sets it to the function's region.
+        LANCEDB_LOCK_TABLE_NAME: lancedbLockTable.tableName,
+        DOCUMENT_STORAGE_BUCKET_NAME: documentStorage.bucketName,
+        BACKEND_TABLE_NAME: backendTable.tableName,
+        LANCEDB_EXPRESS_BUCKET_NAME: lancedbExpressBucketName,
+        SESSION_STORAGE_BUCKET_NAME: sessionStorage.bucketName,
+        AGENT_STORAGE_BUCKET_NAME: agentStorage.bucketName,
+        STEP_FUNCTION_ARN: stepFunctionArn,
+        QA_REGENERATOR_FUNCTION_ARN: qaRegeneratorFunctionArn,
+        LANCEDB_FUNCTION_NAME: lancedbFunctionArn,
+        GRAPH_SERVICE_FUNCTION_NAME: graphServiceFunctionArn,
+        GRAPH_DELETE_QUEUE_URL: graphDeleteQueueUrl,
+        FILE_CHECK_FUNCTION_NAME: fileCheckFunctionArn,
+        // File-check Ask: model, and the lifetime of its usage-ledger items
+        // (DynamoDB TTL attribute expires_at, see StorageStack).
+        FILE_CHECK_ASK_MODEL_ID: fileCheckAskModelId,
+        RETENTION_DAYS: String(getRetentionDays(this)),
+        WEBHOOK_FUNCTION_NAME: webhookFunctionArn,
+        WEBHOOK_SECRET_KEY_ARN: webhookSecretKeyArn,
       },
-      runtimePlatform: {
-        cpuArchitecture: CpuArchitecture.ARM64,
-        operatingSystemFamily: OperatingSystemFamily.LINUX,
-      },
-      memoryLimitMiB: 2048,
-      cpu: 1024,
-      desiredCount: 1,
-      publicLoadBalancer: false,
     });
 
-    const taskRole = this.service.taskDefinition.taskRole;
+    // The function's role gets every permission the Fargate task role had.
+    const role = this.handler.grantPrincipal;
     // The web app's S3 transfers are presigned with this role (5 minutes, one
     // object): upload = s3:PutObject on the document bucket, downloads =
     // s3:GetObject on the document and agent buckets. The read/write grants
     // below (needed anyway for listing, reading and deleting documents,
     // sessions, agents and artifacts) cover them; nothing extra is granted.
-    documentStorage.bucket.grantReadWrite(taskRole);
-    sessionStorage.bucket.grantReadWrite(taskRole);
-    agentStorage.bucket.grantReadWrite(taskRole);
-    lancedbLockTable.table.grantReadWriteData(taskRole);
-    backendTable.table.grantReadWriteData(taskRole);
+    documentStorage.bucket.grantReadWrite(role);
+    sessionStorage.bucket.grantReadWrite(role);
+    agentStorage.bucket.grantReadWrite(role);
+    lancedbLockTable.table.grantReadWriteData(role);
+    backendTable.table.grantReadWriteData(role);
 
     // Grant GSI query permissions (fromTableName doesn't include GSI permissions)
-    taskRole.addToPrincipalPolicy(
+    role.addToPrincipalPolicy(
       new PolicyStatement({
         actions: ['dynamodb:Query'],
         resources: [
@@ -226,7 +218,7 @@ export class Backend extends Construct {
       }),
     );
 
-    taskRole.addToPrincipalPolicy(
+    role.addToPrincipalPolicy(
       new PolicyStatement({
         actions: ['s3express:*'],
         resources: ['*'],
@@ -234,7 +226,7 @@ export class Backend extends Construct {
     );
 
     // Grant Bedrock model invoke permissions
-    taskRole.addToPrincipalPolicy(
+    role.addToPrincipalPolicy(
       new PolicyStatement({
         actions: [
           'bedrock:InvokeModel',
@@ -246,7 +238,7 @@ export class Backend extends Construct {
     );
 
     // Only AWS-sold models: explicitly deny non-AWS-sold model providers.
-    taskRole.addToPrincipalPolicy(
+    role.addToPrincipalPolicy(
       new PolicyStatement({
         sid: 'DenyNonAwsSoldModels',
         effect: Effect.DENY,
@@ -260,7 +252,7 @@ export class Backend extends Construct {
 
     // Grant read on the chat model catalog parameter (GET /chat/models). The
     // parameter is created by CDK (AgentStack) from chat-models.json.
-    taskRole.addToPrincipalPolicy(
+    role.addToPrincipalPolicy(
       new PolicyStatement({
         actions: ['ssm:GetParameter'],
         resources: [
@@ -275,7 +267,7 @@ export class Backend extends Construct {
     );
 
     // Grant Step Functions start execution permission for re-analysis
-    taskRole.addToPrincipalPolicy(
+    role.addToPrincipalPolicy(
       new PolicyStatement({
         actions: ['states:StartExecution'],
         resources: [stepFunctionArn],
@@ -289,7 +281,7 @@ export class Backend extends Construct {
       resourceName: 'idp-v2-graph-builder',
       arnFormat: ArnFormat.COLON_RESOURCE_NAME,
     });
-    taskRole.addToPrincipalPolicy(
+    role.addToPrincipalPolicy(
       new PolicyStatement({
         actions: ['lambda:InvokeFunction'],
         resources: [
@@ -304,7 +296,7 @@ export class Backend extends Construct {
     // File-check Ask: Converse on the Ask model's inference profile and the
     // foundation models it routes to. (Also covered by the broad grant above;
     // kept explicit so the Ask keeps working if that grant is narrowed.)
-    taskRole.addToPrincipalPolicy(
+    role.addToPrincipalPolicy(
       new PolicyStatement({
         sid: 'InvokeFileCheckAskModel',
         actions: ['bedrock:InvokeModel'],
@@ -317,7 +309,7 @@ export class Backend extends Construct {
     );
 
     // File-check integration API: invoke only the file-check function.
-    taskRole.addToPrincipalPolicy(
+    role.addToPrincipalPolicy(
       new PolicyStatement({
         sid: 'InvokeFileCheck',
         actions: ['lambda:InvokeFunction'],
@@ -326,7 +318,7 @@ export class Backend extends Construct {
     );
 
     // CRM webhook test event: invoke only the webhook delivery function.
-    taskRole.addToPrincipalPolicy(
+    role.addToPrincipalPolicy(
       new PolicyStatement({
         sid: 'InvokeWebhookDelivery',
         actions: ['lambda:InvokeFunction'],
@@ -336,7 +328,7 @@ export class Backend extends Construct {
     // New webhook signing secrets are stored encrypted. Encrypt only: the
     // backend never reads a stored secret back (only the webhook Lambda may
     // decrypt it).
-    taskRole.addToPrincipalPolicy(
+    role.addToPrincipalPolicy(
       new PolicyStatement({
         sid: 'EncryptWebhookSecrets',
         actions: ['kms:Encrypt'],
@@ -350,7 +342,7 @@ export class Backend extends Construct {
     );
 
     // Grant SQS send for graph deletion queue
-    taskRole.addToPrincipalPolicy(
+    role.addToPrincipalPolicy(
       new PolicyStatement({
         actions: ['sqs:SendMessage'],
         resources: ['*'],
@@ -358,7 +350,7 @@ export class Backend extends Construct {
     );
 
     // Grant SageMaker endpoint management permissions
-    taskRole.addToPrincipalPolicy(
+    role.addToPrincipalPolicy(
       new PolicyStatement({
         actions: [
           'sagemaker:DescribeEndpoint',
@@ -369,32 +361,11 @@ export class Backend extends Construct {
     );
 
     // Grant CloudWatch alarm management permissions
-    taskRole.addToPrincipalPolicy(
+    role.addToPrincipalPolicy(
       new PolicyStatement({
         actions: ['cloudwatch:DescribeAlarms', 'cloudwatch:PutMetricAlarm'],
         resources: ['*'],
       }),
-    );
-
-    // Security Group for VPC Link
-    const vpcLinkSg = new SecurityGroup(this, 'VpcLinkSg', {
-      vpc,
-      description: 'Security group for VPC Link',
-      allowAllOutbound: true,
-    });
-
-    // VPC Link for API Gateway - use private subnets
-    const vpcLink = new VpcLink(this, 'VpcLink', {
-      vpc,
-      subnets: { subnetType: SubnetType.PRIVATE_WITH_EGRESS },
-      securityGroups: [vpcLinkSg],
-    });
-
-    // Allow VPC Link to access ALB
-    this.service.loadBalancer.connections.allowFrom(
-      vpcLinkSg,
-      Port.tcp(80),
-      'Allow from VPC Link',
     );
 
     // HTTP API with IAM auth
@@ -415,10 +386,11 @@ export class Backend extends Construct {
       },
     });
 
-    const integration = new HttpAlbIntegration(
-      'AlbIntegration',
-      this.service.listener,
-      { vpcLink },
+    // Lambda proxy integration (payload 2.0); it also grants API Gateway
+    // lambda:InvokeFunction for each route below.
+    const integration = new HttpLambdaIntegration(
+      'LambdaIntegration',
+      this.handler,
     );
 
     this.api.addRoutes({

@@ -7,7 +7,6 @@ import {
 } from ':idp-v2/common-constructs';
 import { Stack, StackProps } from 'aws-cdk-lib';
 import { PolicyStatement, Role } from 'aws-cdk-lib/aws-iam';
-import { Vpc } from 'aws-cdk-lib/aws-ec2';
 import { StringParameter } from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 import { TableV2 } from 'aws-cdk-lib/aws-dynamodb';
@@ -15,9 +14,6 @@ import { TableV2 } from 'aws-cdk-lib/aws-dynamodb';
 export class ApplicationStack extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
     super(scope, id, props);
-
-    const vpcId = StringParameter.valueFromLookup(this, SSM_KEYS.VPC_ID);
-    const vpc = Vpc.fromLookup(this, 'Vpc', { vpcId });
 
     // The web app only names the document bucket in the s3:// references it
     // sends to the agent (which reads them with its own role); the browser
@@ -61,13 +57,13 @@ export class ApplicationStack extends Stack {
     );
     userIdentity.addPostAuthenticationTrigger(backendTable);
 
-    const backend = new Backend(this, 'Backend', { vpc });
+    const backend = new Backend(this, 'Backend');
 
     const frontend = new Frontend(this, 'Frontend');
-    // Publish a new web app only after the backend task it calls is running
-    // (on an update the ECS service must reach a steady state first), so a new
+    // Publish a new web app only after the backend function it calls runs the
+    // new code (CloudFormation waits for the Lambda update to finish), so a new
     // bundle never goes live against an old backend.
-    frontend.bucketDeployment.node.addDependency(backend.service);
+    frontend.bucketDeployment.node.addDependency(backend.handler);
 
     new StringParameter(this, 'BackendUrlParam', {
       parameterName: SSM_KEYS.BACKEND_URL,
