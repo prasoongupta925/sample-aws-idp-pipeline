@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers import (
     agents,
+    applicants,
     artifacts,
     chat,
     datasets,
@@ -10,6 +11,7 @@ from app.routers import (
     file_check,
     graph,
     health,
+    integrations,
     projects,
     prompts,
     sagemaker,
@@ -45,6 +47,7 @@ app.add_middleware(
 )
 
 app.include_router(agents.router)
+app.include_router(applicants.router)
 app.include_router(artifacts.router)
 app.include_router(chat.router)
 app.include_router(datasets.router)
@@ -52,6 +55,7 @@ app.include_router(documents.router)
 app.include_router(file_check.router)
 app.include_router(graph.router)
 app.include_router(health.router)
+app.include_router(integrations.router)
 app.include_router(projects.router)
 app.include_router(prompts.router)
 app.include_router(sagemaker.router)

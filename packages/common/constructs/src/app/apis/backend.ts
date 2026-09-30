@@ -147,6 +147,12 @@ export class Backend extends Construct {
       this,
       SSM_KEYS.FILE_CHECK_MCP_FUNCTION_ARN,
     );
+    // CRM webhook delivery Lambda (WebhookStack, deployed before this stack)
+    // behind POST /projects/{id}/integrations/webhook/test.
+    const webhookFunctionArn = StringParameter.valueForStringParameter(
+      this,
+      SSM_KEYS.WEBHOOK_FUNCTION_ARN,
+    );
 
     this.service = new ApplicationLoadBalancedFargateService(this, 'Service', {
       cluster,
@@ -178,6 +184,7 @@ export class Backend extends Construct {
           // (DynamoDB TTL attribute expires_at, see StorageStack).
           FILE_CHECK_ASK_MODEL_ID: fileCheckAskModelId,
           RETENTION_DAYS: String(getRetentionDays(this)),
+          WEBHOOK_FUNCTION_NAME: webhookFunctionArn,
         },
       },
       runtimePlatform: {
@@ -309,6 +316,15 @@ export class Backend extends Construct {
         sid: 'InvokeFileCheck',
         actions: ['lambda:InvokeFunction'],
         resources: [fileCheckFunctionArn],
+      }),
+    );
+
+    // CRM webhook test event: invoke only the webhook delivery function.
+    taskRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'InvokeWebhookDelivery',
+        actions: ['lambda:InvokeFunction'],
+        resources: [webhookFunctionArn],
       }),
     );
 

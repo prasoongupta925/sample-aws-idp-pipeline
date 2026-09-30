@@ -32,6 +32,9 @@ class Config(BaseSettings):
     # Days a stored item may live (CDK context retentionDays, default 7): the Ask
     # usage ledger items get expires_at = now + retention_days (DynamoDB TTL).
     retention_days: int = 7
+    # CRM webhook delivery Lambda (WebhookStack, idp-v2-webhook-delivery): name or
+    # ARN. POST /projects/{id}/integrations/webhook/test invokes it.
+    webhook_function_name: str = ""
 
 
 @lru_cache

@@ -47,6 +47,7 @@ overridden with CDK context, which `deploy.sh`/`destroy.sh` pass through with
 | `enableWebSearch` | `false` | Create the AgentCore Web Search gateway target. The default is `true` only in us-east-1, eu-west-1 and ap-northeast-1, where the tool is offered |
 | `retentionDays` | `7` | Maximum age of client data, logs and queues |
 | `securityLogRetentionDays` | `retentionDays` (`7`) | Retention for security logs (access, audit and flow logs). Read by `getSecurityLogRetentionDays()` in `retention-config.ts`; no log group uses it yet, so it changes nothing today. See [Retention and security logs](#retention-and-security-logs) |
+| `neptuneStorageEncrypted` | `true` | Neptune encryption at rest (key `aws/rds`). It is fixed when the cluster is created. `false` leaves the setting out of the template, as for clusters created before encryption was added, so such a deployment updates without replacing its cluster. Switching an existing cluster means deleting and redeploying `IDP-V2-Neptune` (the graph refills as documents are analysed again) |
 
 Also note:
 
@@ -72,7 +73,8 @@ Also note:
   `retentionDays`, so those items delete themselves.
   Items without `expires_at` never expire. TTL deletion is asynchronous
   (usually within a few days of expiry); `GET .../file-check/usage` counts
-  only the last 7 days whatever TTL has removed.
+  only the last 7 days whatever TTL has removed. The CRM webhook delivery log
+  (`WHDLV#<timestamp>#<id>`, below) expires the same way.
 - Production in India: the Digital Personal Data Protection Rules, 2025,
   Rule 6(1)(e), require a Data Fiduciary to keep the logs used to detect,
   investigate and remediate unauthorised access, and the personal data they
@@ -82,6 +84,41 @@ Also note:
   log groups (API access logs, VPC flow logs, CloudFront/S3 access logs) and
   exempt those groups from the log-retention enforcer, which otherwise caps
   them back at `retentionDays`. Client data keeps `retentionDays`.
+
+### CRM webhook
+
+A project can push its loan-file verdict to a CRM (for example Smart Dial)
+each time a document finishes analysis. Stack `IDP-V2-Webhook` holds the
+delivery Lambda `idp-v2-webhook-delivery` (outside the VPC, so it has no path
+to private resources); deploy it with the rest (`--all`) or before
+`IDP-V2-Workflow` and `IDP-V2-Application`, which read its ARN from SSM.
+
+- Backend API, per project (`/projects/{id}/integrations`):
+  `PUT /webhook` `{"url": "https://crm.example.com/hooks/idp", "enabled": true}`
+  (https only, at most 2048 characters, no credentials, public hosts only;
+  `enabled` needs a URL and a secret), `POST /webhook/secret` (a new signing
+  secret, shown only in this response), `POST /webhook/test` (a signed `test`
+  event with empty `results`, also while disabled) and `GET /webhook`
+  (settings and the last 20 deliveries).
+- When a document completes, the workflow finalizer invokes the Lambda
+  asynchronously if the webhook is enabled; a webhook problem never fails the
+  workflow. The Lambda runs the file check (default checklist) and POSTs
+  `{event: "file_check.completed", delivery_id, project_id, document_id, at,
+  results: [{applicant, verdict, summary, missing, checklist_id}]}` for the
+  applicant(s) of that document (every applicant when the check cannot tell;
+  one entry with `applicant: null` when there is none).
+- Headers: `X-SmartDial-Event`, `X-SmartDial-Delivery` (retries reuse it:
+  deduplicate on it) and `X-SmartDial-Signature: t=<unix>,v1=<hex>`, the
+  HMAC-SHA256 of `<t>.<raw body>` keyed with the secret. The receiver verifies
+  it over the raw body in constant time, rejects timestamps more than 5
+  minutes off and answers 2xx. 5xx and network errors are retried (3 attempts,
+  5 s timeout each); 4xx and redirects are not.
+- At send time the URL is checked again and every address the host resolves to
+  must be public; the connection goes to those addresses only.
+- Delivery log items (`PROJ#<project>` / `WHDLV#<timestamp>#<id>`: status, HTTP
+  status, error and applicant names, never the payload or the secret) expire
+  after `retentionDays`. The URL and secret are project settings (the project's
+  `META` item) and are deleted with the project.
 
 ---
 

@@ -131,7 +131,8 @@ export class StorageStack extends Stack {
 
     // Backend Table (One Table Design)
     // TTL on expires_at (epoch seconds): items that set it delete themselves
-    // (today the file-check Ask usage ledger, PROJ#/FCASK#, now + retentionDays).
+    // (today the file-check Ask usage ledger, PROJ#/FCASK#, and the CRM webhook
+    // delivery log, PROJ#/WHDLV#: now + retentionDays).
     // Items without the attribute are never expired. Enabling TTL is an
     // in-place update; its REMOVE stream records match no WorkflowStream filter.
     const backendTable = new TableV2(this, 'BackendTable', {

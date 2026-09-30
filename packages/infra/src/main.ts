@@ -15,6 +15,7 @@ import { NeptuneStack } from './stacks/neptune-stack.js';
 import { WebsocketStack } from './stacks/websocket-stack.js';
 import { LanceServiceStack } from './stacks/lance-service-stack.js';
 import { RetentionStack } from './stacks/retention-stack.js';
+import { WebhookStack } from './stacks/webhook-stack.js';
 
 const app = new App();
 
@@ -79,6 +80,13 @@ const lanceServiceStack = new LanceServiceStack(app, 'IDP-V2-LanceService', {
 });
 lanceServiceStack.addDependency(storageStack);
 
+// CRM webhook delivery (signed loan-file verdict push). Reads the backend table
+// (Storage) and invokes the file-check Lambda (Mcp); the workflow finalizer and
+// the backend read its ARN from SSM, so both stacks deploy after it.
+const webhookStack = new WebhookStack(app, 'IDP-V2-Webhook', { env });
+webhookStack.addDependency(storageStack);
+webhookStack.addDependency(mcpStack);
+
 const workflowStack = new WorkflowStack(app, 'IDP-V2-Workflow', { env });
 workflowStack.addDependency(storageStack);
 workflowStack.addDependency(eventStack);
@@ -87,6 +95,7 @@ workflowStack.addDependency(ocrStack);
 workflowStack.addDependency(webcrawlerStack);
 workflowStack.addDependency(agentStack);
 workflowStack.addDependency(lanceServiceStack);
+workflowStack.addDependency(webhookStack);
 workflowStack.addDependency(vpcStack);
 
 const applicationStack = new ApplicationStack(app, 'IDP-V2-Application', {
@@ -98,6 +107,7 @@ applicationStack.addDependency(agentStack);
 applicationStack.addDependency(websocketStack);
 applicationStack.addDependency(mcpStack);
 applicationStack.addDependency(workflowStack);
+applicationStack.addDependency(webhookStack);
 applicationStack.addDependency(vpcStack);
 
 // Retention (daily sweeper + log retention enforcer). Deployed last so every
@@ -107,6 +117,7 @@ retentionStack.addDependency(storageStack);
 retentionStack.addDependency(workflowStack);
 retentionStack.addDependency(agentStack);
 retentionStack.addDependency(applicationStack);
+retentionStack.addDependency(webhookStack);
 
 // ============================================================
 // [Without Dependencies] - for independent stack deployment (dev)
@@ -127,6 +138,7 @@ retentionStack.addDependency(applicationStack);
 //   gateway: mcpStack.gateway,
 // });
 // new LanceServiceStack(app, 'IDP-V2-LanceService', { env });
+// new WebhookStack(app, 'IDP-V2-Webhook', { env });
 // new WebcrawlerStack(app, 'IDP-V2-Webcrawler', { env });
 // new ApplicationStack(app, 'IDP-V2-Application', {
 //   env,

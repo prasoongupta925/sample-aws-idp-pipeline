@@ -5,9 +5,34 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { SSM_KEYS } from ':idp-v2/common-constructs';
 
+/**
+ * Neptune encryption at rest from CDK context `neptuneStorageEncrypted`
+ * (default true; accepts true/false as booleans or strings, any case).
+ * Throws on any other value.
+ */
+export function getNeptuneStorageEncrypted(scope: Construct): boolean {
+  const value: unknown = scope.node.tryGetContext('neptuneStorageEncrypted');
+  if (value === undefined || value === null || String(value).trim() === '') {
+    return true;
+  }
+  const text = String(value).trim().toLowerCase();
+  if (text === 'true') {
+    return true;
+  }
+  if (text === 'false') {
+    return false;
+  }
+  throw new Error(
+    `Invalid CDK context neptuneStorageEncrypted=${String(value)}: ` +
+      'expected true or false (e.g. -c neptuneStorageEncrypted=false).',
+  );
+}
+
 export class NeptuneStack extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
     super(scope, id, props);
+
+    const storageEncrypted = getNeptuneStorageEncrypted(this);
 
     // Import VPC (valueFromLookup resolves at synth time, required by Vpc.fromLookup)
     const vpcId = ssm.StringParameter.valueFromLookup(this, SSM_KEYS.VPC_ID);
@@ -46,12 +71,14 @@ export class NeptuneStack extends Stack {
       vpcSecurityGroupIds: [neptuneSg.securityGroupId],
       iamAuthEnabled: true,
       // Encryption at rest (cluster storage, automated backups and snapshots)
-      // with the AWS managed key aws/rds. Chosen at creation only: on an
-      // existing cluster this change needs a replacement, which CloudFormation
-      // cannot do in place for the fixed dbClusterIdentifier, so delete and
-      // redeploy this stack (the new graph is empty until documents are
-      // analysed again).
-      storageEncrypted: true,
+      // with the AWS managed key aws/rds. Chosen at creation only: changing it
+      // on an existing cluster needs a replacement, which CloudFormation cannot
+      // do in place for the fixed dbClusterIdentifier (delete and redeploy
+      // this stack; the new graph is empty until documents are analysed
+      // again). -c neptuneStorageEncrypted=false leaves the property out, as in
+      // the template of clusters created before encryption was added, so such
+      // a deployment updates without touching its cluster.
+      storageEncrypted: storageEncrypted ? true : undefined,
       deletionProtection: false,
       // Automated backups hold graph data derived from documents: keep the
       // minimum (1 day).

@@ -943,7 +943,14 @@ export class WorkflowStack extends Stack {
       },
     );
 
-    // Workflow Finalizer (records workflow as COMPLETED after PostAnalysisParallel)
+    // CRM webhook delivery Lambda (WebhookStack, deployed before this stack)
+    const webhookFunctionArn = ssm.StringParameter.valueForStringParameter(
+      this,
+      SSM_KEYS.WEBHOOK_FUNCTION_ARN,
+    );
+
+    // Workflow Finalizer (records workflow as COMPLETED after PostAnalysisParallel,
+    // then queues the project's CRM webhook when it is enabled; never fatal)
     const workflowFinalizer = new lambda.Function(this, 'WorkflowFinalizer', {
       ...commonLambdaProps,
       functionName: 'idp-v2-workflow-finalizer',
@@ -952,9 +959,22 @@ export class WorkflowStack extends Stack {
       memorySize: 256,
       code: lambda.Code.fromAsset(
         path.join(__dirname, '../functions/step-functions/workflow-finalizer'),
+        { exclude: ['test_*.py', '__pycache__', '.pytest_cache'] },
       ),
       layers: [sharedLayer],
+      environment: {
+        ...commonLambdaProps.environment,
+        WEBHOOK_FUNCTION_NAME: webhookFunctionArn,
+      },
     });
+    // Asynchronous invoke of the webhook delivery Lambda only
+    workflowFinalizer.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'InvokeWebhookDelivery',
+        actions: ['lambda:InvokeFunction'],
+        resources: [webhookFunctionArn],
+      }),
+    );
 
     // QA Regenerator Lambda (single Q&A re-generation via Bedrock vision)
     const qaRegenerator = new lambda.Function(this, 'QaRegenerator', {
