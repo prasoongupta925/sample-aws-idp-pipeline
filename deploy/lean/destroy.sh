@@ -35,6 +35,12 @@ b.objects.all().delete()
 PY
 }
 
+# Remember the stacks' customer-managed KMS keys before the stacks go (they are retained, $1/month each).
+KMS_KEYS=$(for st in $(aws cloudformation list-stacks --query "StackSummaries[?StackStatus!='DELETE_COMPLETE' && (starts_with(StackName,'IDP-V2') || starts_with(StackName,'IDPV2'))].StackName" --output text); do
+  aws cloudformation describe-stack-resources --stack-name "$st" --query "StackResources[?ResourceType=='AWS::KMS::Key'].PhysicalResourceId" --output text 2>/dev/null
+done | tr '\t' '\n' | sed '/^$/d' | sort -u)
+say "customer KMS keys to retire after the stacks: $(echo $KMS_KEYS | wc -w)"
+
 say "emptying buckets"
 for b in $(aws s3 ls | awk '{print $3}' | grep -E '^idp-v2-.*|^idpv2-.*'); do empty_bucket "$b" & done
 for b in $(aws s3api list-directory-buckets --query 'Buckets[].Name' --output text 2>/dev/null); do
@@ -70,8 +76,9 @@ for id in $(aws cognito-idp list-user-pools --max-results 50 --query "UserPools[
     aws cognito-idp delete-user-pool --user-pool-id "$id" && say "deleted user pool $id" ) &
 done
 wait
-for k in $(aws kms list-aliases --query "Aliases[?starts_with(AliasName,'alias/idp-v2')].TargetKeyId" --output text); do
-  aws kms schedule-key-deletion --key-id "$k" --pending-window-in-days 7 --query DeletionDate --output text | sed "s/^/KMS $k deletes on /"
+for k in $KMS_KEYS; do  # customer keys the stacks created (retained on stack delete)
+  [ "$(aws kms describe-key --key-id "$k" --query KeyMetadata.KeyState --output text 2>/dev/null)" = "Enabled" ] || continue
+  aws kms schedule-key-deletion --key-id "$k" --pending-window-in-days 7 --query DeletionDate --output text | sed "s/^/KMS key scheduled for deletion on /"
 done
 for p in $(aws ssm get-parameters-by-path --path /idp-v2 --recursive --query 'Parameters[].Name' --output text); do
   aws ssm delete-parameter --name "$p"
