@@ -12,9 +12,8 @@ Run deploy.sh (CloudShell)
   → Create CloudFormation Stack
     → Provision CodeBuild Project
       → CDK Bootstrap
-        → Deploy VPC Stack
-          → Deploy remaining 11 stacks in parallel (concurrency=4)
-            → Create Cognito admin user
+        → Deploy all stacks in parallel (concurrency=4)
+          → Create Cognito admin user
 ```
 
 ---
@@ -47,7 +46,6 @@ overridden with CDK context, which `deploy.sh`/`destroy.sh` pass through with
 | `enableWebSearch` | `false` | Create the AgentCore Web Search gateway target. The default is `true` only in us-east-1, eu-west-1 and ap-northeast-1, where the tool is offered |
 | `retentionDays` | `7` | Maximum age of client data, logs and queues |
 | `securityLogRetentionDays` | `retentionDays` (`7`) | Retention for security logs (access, audit and flow logs). Read by `getSecurityLogRetentionDays()` in `retention-config.ts`; no log group uses it yet, so it changes nothing today. See [Retention and security logs](#retention-and-security-logs) |
-| `neptuneStorageEncrypted` | `true` | Neptune encryption at rest (key `aws/rds`). It is fixed when the cluster is created. `false` leaves the setting out of the template, as for clusters created before encryption was added, so such a deployment updates without replacing its cluster. Switching an existing cluster means deleting and redeploying `IDP-V2-Neptune` (the graph refills as documents are analysed again) |
 
 Also note:
 
@@ -81,7 +79,7 @@ Also note:
   hold, for one year unless another law requires otherwise. The demo keeps
   7 days. Before production, set `--context securityLogRetentionDays=365`,
   apply `toLogRetention(getSecurityLogRetentionDays(this))` to the security
-  log groups (API access logs, VPC flow logs, CloudFront/S3 access logs) and
+  log groups (API access logs, CloudFront/S3 access logs) and
   exempt those groups from the log-retention enforcer, which otherwise caps
   them back at `retentionDays`. Client data keeps `retentionDays`.
 
@@ -149,7 +147,7 @@ When prompted, enter the email address for the admin account. A Cognito user wil
 ---------------------------------------------------------------------------
   Deploys the full IDP pipeline via CodeBuild.
 
-  Stacks: Vpc, Storage, Event, Bda, Ocr, Transcribe, Workflow,
+  Stacks: Storage, Event, Bda, Ocr, Transcribe, Workflow,
           Websocket, Worker, Mcp, Agent, Application
 ===========================================================================
 
@@ -306,7 +304,7 @@ chmod +x ./destroy.sh
   Destroys all IDP pipeline resources via CodeBuild.
 
   Stacks: Application, Agent, Mcp, Worker, Websocket, Workflow,
-          Transcribe, Bda, Ocr, Event, Storage, Vpc
+          Transcribe, Bda, Ocr, Event, Storage
 ===========================================================================
 
 WARNING: This will permanently delete all IDP pipeline resources.
@@ -352,7 +350,6 @@ aws logs tail /aws/codebuild/sample-aws-idp-pipeline-deploy --since 10m
 | Bedrock model access not enabled | Enable required models in Bedrock Console |
 | Service quota exceeded | Request quota increase via AWS Support |
 | CDK Bootstrap failed | `aws cloudformation delete-stack --stack-name CDKToolkit` then redeploy |
-| VPC limit exceeded | Delete unused VPCs or request quota increase |
 
 ---
 

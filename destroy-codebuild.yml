@@ -164,6 +164,17 @@ Resources:
                   echo "=== CDK Destroy ==="
                   cd /tmp/project/packages/infra && npx cdk destroy --all --force --concurrency=4 $CDK_CONTEXT_ARGS || echo "CDK destroy completed with some issues"
                 - |
+                  # No longer in the CDK app, so the destroy above skips them; a
+                  # deployment made before they were removed still has them.
+                  echo "=== Post-cleanup: legacy Neptune and VPC stacks ==="
+                  for stack in IDP-V2-Neptune IDP-V2-Vpc; do
+                    if aws cloudformation describe-stacks --stack-name "$stack" >/dev/null 2>&1; then
+                      echo "Deleting legacy stack $stack..."
+                      aws cloudformation delete-stack --stack-name "$stack" 2>/dev/null || true
+                      aws cloudformation wait stack-delete-complete --stack-name "$stack" 2>/dev/null || true
+                    fi
+                  done
+                - |
                   echo "=== Post-cleanup: S3 Express Directory Buckets ==="
                   BUCKETS=$(aws s3api list-directory-buckets --query 'Buckets[].BucketName' --output text 2>/dev/null || echo "")
                   echo "Found directory buckets: $BUCKETS"

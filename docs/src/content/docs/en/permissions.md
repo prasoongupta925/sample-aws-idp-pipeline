@@ -43,7 +43,6 @@ The deploying IAM user or role requires permissions to create and manage resourc
 | S3 | `s3:*`, `s3express:*` | Document storage, LanceDB, sessions, frontend hosting |
 | DynamoDB | `dynamodb:*` | Workflow state, backend data |
 | ElastiCache | `elasticache:*` | Redis for WebSocket connections |
-| Neptune | `neptune-db:*`, `rds:*` | Knowledge graph database |
 
 ### AI / ML
 
@@ -96,8 +95,6 @@ The deploying IAM user or role requires permissions to create and manage resourc
         "s3express:*",
         "dynamodb:*",
         "elasticache:*",
-        "neptune-db:*",
-        "rds:*",
         "bedrock:*",
         "bedrock-agentcore:*",
         "sagemaker:*",

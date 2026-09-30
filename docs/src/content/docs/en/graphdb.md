@@ -3,6 +3,10 @@ title: "Graph Database"
 description: "Knowledge graph and entity relationship traversal with Neptune DB Serverless"
 ---
 
+:::note[Disabled in this build]
+This build has no graph database: the Neptune and VPC stacks are removed. `idp-v2-graph-service` and `idp-v2-graph-delete-consumer` stay deployed (same names, same SSM ARN, no VPC) with `GRAPH_DISABLED=true`: every graph action answers `statusCode` 200 with `graph_disabled: true` and an empty result, and queued graph deletes are acknowledged without work. Graph views are empty. The rest of this page describes the original design.
+:::
+
 ## Overview
 
 This project uses [Amazon Neptune DB Serverless](https://docs.aws.amazon.com/neptune/latest/userguide/neptune-serverless.html) as its graph database. Core entities extracted and normalized during document analysis are stored in a knowledge graph, enabling **entity-connection-based traversal** that is difficult to achieve with vector search alone.

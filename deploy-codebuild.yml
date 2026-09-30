@@ -146,7 +146,6 @@ Resources:
                   if [ -n "$DEPLOY_STACKS" ]; then
                     npx cdk deploy $DEPLOY_STACKS --require-approval=never --concurrency=4 $CDK_CONTEXT_ARGS
                   else
-                    npx cdk deploy IDP-V2-Vpc --require-approval=never $CDK_CONTEXT_ARGS
                     npx cdk deploy --all --require-approval=never --concurrency=4 $CDK_CONTEXT_ARGS
                   fi
             post_build:

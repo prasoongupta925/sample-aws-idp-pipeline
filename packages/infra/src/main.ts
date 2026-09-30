@@ -8,10 +8,8 @@ import { BdaStack } from './stacks/bda-stack.js';
 import { OcrStack } from './stacks/ocr-stack.js';
 import { TranscribeStack } from './stacks/transcribe-stack.js';
 import { WorkflowStack } from './stacks/workflow-stack.js';
-import { VpcStack } from './stacks/vpc-stack.js';
 import { WorkerStack } from './stacks/worker-stack.js';
 import { WebcrawlerStack } from './stacks/webcrawler-stack.js';
-import { NeptuneStack } from './stacks/neptune-stack.js';
 import { WebsocketStack } from './stacks/websocket-stack.js';
 import { LanceServiceStack } from './stacks/lance-service-stack.js';
 import { RetentionStack } from './stacks/retention-stack.js';
@@ -27,13 +25,7 @@ const env = {
 // ============================================================
 // [With Dependencies] - uncomment this block for production
 // ============================================================
-const vpcStack = new VpcStack(app, 'IDP-V2-Vpc', { env });
-
-const neptuneStack = new NeptuneStack(app, 'IDP-V2-Neptune', { env });
-neptuneStack.addDependency(vpcStack);
-
 const storageStack = new StorageStack(app, 'IDP-V2-Storage', { env });
-storageStack.addDependency(vpcStack);
 
 const eventStack = new EventStack(app, 'IDP-V2-Event', { env });
 eventStack.addDependency(storageStack);
@@ -50,17 +42,14 @@ transcribeStack.addDependency(eventStack);
 
 const websocketStack = new WebsocketStack(app, 'IDP-V2-Websocket', { env });
 websocketStack.addDependency(storageStack);
-websocketStack.addDependency(vpcStack);
 
 const mcpStack = new McpStack(app, 'IDP-V2-Mcp', { env });
 mcpStack.addDependency(storageStack);
 mcpStack.addDependency(websocketStack);
-mcpStack.addDependency(vpcStack);
 
 const workerStack = new WorkerStack(app, 'IDP-V2-Worker', { env });
 workerStack.addDependency(storageStack);
 workerStack.addDependency(websocketStack);
-workerStack.addDependency(vpcStack);
 
 const agentStack = new AgentStack(app, 'IDP-V2-Agent', {
   env,
@@ -90,13 +79,11 @@ webhookStack.addDependency(mcpStack);
 const workflowStack = new WorkflowStack(app, 'IDP-V2-Workflow', { env });
 workflowStack.addDependency(storageStack);
 workflowStack.addDependency(eventStack);
-workflowStack.addDependency(neptuneStack);
 workflowStack.addDependency(ocrStack);
 workflowStack.addDependency(webcrawlerStack);
 workflowStack.addDependency(agentStack);
 workflowStack.addDependency(lanceServiceStack);
 workflowStack.addDependency(webhookStack);
-workflowStack.addDependency(vpcStack);
 
 const applicationStack = new ApplicationStack(app, 'IDP-V2-Application', {
   env,
@@ -108,7 +95,6 @@ applicationStack.addDependency(websocketStack);
 applicationStack.addDependency(mcpStack);
 applicationStack.addDependency(workflowStack);
 applicationStack.addDependency(webhookStack);
-applicationStack.addDependency(vpcStack);
 
 // Retention (daily sweeper + log retention enforcer). Deployed last so every
 // resource it cleans up, and every log group it caps, already exists.
@@ -122,8 +108,6 @@ retentionStack.addDependency(webhookStack);
 // ============================================================
 // [Without Dependencies] - for independent stack deployment (dev)
 // ============================================================
-// new VpcStack(app, 'IDP-V2-Vpc', { env });
-// new NeptuneStack(app, 'IDP-V2-Neptune', { env });
 // new StorageStack(app, 'IDP-V2-Storage', { env });
 // new EventStack(app, 'IDP-V2-Event', { env });
 // new OcrStack(app, 'IDP-V2-Ocr', { env });

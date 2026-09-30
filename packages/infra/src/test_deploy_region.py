@@ -362,8 +362,10 @@ def test_deploy_buildspec_passes_cdk_context():
         for line in cmd.splitlines()
         if line.strip().startswith('npx cdk deploy')
     ]
-    assert len(deploy_lines) == 3
+    # Targeted stacks, or --all (no VPC stack to deploy first any more).
+    assert len(deploy_lines) == 2
     assert all(line.endswith('$CDK_CONTEXT_ARGS') for line in deploy_lines)
+    assert not any('IDP-V2-Vpc' in line or 'IDP-V2-Neptune' in line for line in deploy_lines)
 
 
 def test_destroy_buildspec_passes_cdk_context():

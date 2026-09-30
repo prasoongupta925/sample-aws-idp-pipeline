@@ -8,7 +8,6 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
-import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as eventsTargets from 'aws-cdk-lib/aws-events-targets';
 import { Platform } from 'aws-cdk-lib/aws-ecr-assets';
@@ -271,27 +270,12 @@ export class WorkflowStack extends Stack {
     );
 
     // ========================================
-    // GraphService (Neptune DB Serverless Gateway Lambda)
+    // GraphService (graph disabled: no Neptune, no VPC)
     // ========================================
-
-    const neptuneEndpoint = ssm.StringParameter.valueForStringParameter(
-      this,
-      SSM_KEYS.NEPTUNE_CLUSTER_ENDPOINT,
-    );
-    const neptunePort = ssm.StringParameter.valueForStringParameter(
-      this,
-      SSM_KEYS.NEPTUNE_CLUSTER_PORT,
-    );
-    // Import VPC for graph-service Lambda (valueFromLookup resolves at synth time)
-    const vpcId = ssm.StringParameter.valueFromLookup(this, SSM_KEYS.VPC_ID);
-    const vpc = ec2.Vpc.fromLookup(this, 'GraphServiceVpc', { vpcId });
-
-    // Security group for graph-service Lambda
-    const graphServiceSg = new ec2.SecurityGroup(this, 'GraphServiceSG', {
-      vpc,
-      description: 'Security group for graph-service Lambda',
-      allowAllOutbound: true,
-    });
+    // The lean build has no graph database. Both graph Lambdas keep their
+    // names (callers and the SSM ARN are unchanged) but run with
+    // GRAPH_DISABLED=true: graph-service answers every action with an empty
+    // result, graph-delete-consumer acks its messages. No always-on cost.
 
     const graphService = new lambda.Function(this, 'GraphService', {
       functionName: 'idp-v2-graph-service',
@@ -299,25 +283,14 @@ export class WorkflowStack extends Stack {
       handler: 'index.handler',
       code: lambda.Code.fromAsset(
         path.join(__dirname, '../functions/graph-service'),
+        { exclude: ['test_*.py', '__pycache__', '.pytest_cache'] },
       ),
       timeout: Duration.minutes(5),
       memorySize: 1024,
-      vpc,
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
-      securityGroups: [graphServiceSg],
       environment: {
-        NEPTUNE_ENDPOINT: neptuneEndpoint,
-        NEPTUNE_PORT: neptunePort,
+        GRAPH_DISABLED: 'true',
       },
     });
-
-    // Grant Neptune DB access (IAM auth)
-    graphService.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ['neptune-db:*'],
-        resources: ['*'],
-      }),
-    );
 
     // Graph Delete Consumer (SQS consumer for async graph deletion)
     const graphDeleteConsumer = new lambda.Function(
@@ -329,26 +302,17 @@ export class WorkflowStack extends Stack {
         handler: 'index.handler',
         code: lambda.Code.fromAsset(
           path.join(__dirname, '../functions/graph-delete-consumer'),
+          { exclude: ['test_*.py', '__pycache__', '.pytest_cache'] },
         ),
         timeout: Duration.minutes(5),
         memorySize: 256,
         architecture: lambda.Architecture.ARM_64,
-        vpc,
-        vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
-        securityGroups: [graphServiceSg],
         reservedConcurrentExecutions: reserveConcurrency ? 1 : undefined,
         environment: {
-          NEPTUNE_ENDPOINT: neptuneEndpoint,
-          NEPTUNE_PORT: neptunePort,
+          GRAPH_DISABLED: 'true',
           GRAPH_DELETE_QUEUE_URL: graphDeleteQueue.queueUrl,
         },
       },
-    );
-    graphDeleteConsumer.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ['neptune-db:*'],
-        resources: ['*'],
-      }),
     );
     graphDeleteConsumer.addEventSourceMapping('GraphDeleteQueueTrigger', {
       eventSourceArn: graphDeleteQueue.queueArn,

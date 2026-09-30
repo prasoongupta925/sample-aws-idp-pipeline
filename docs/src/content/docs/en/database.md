@@ -3,6 +3,10 @@ title: "Database Overview"
 description: "Why we combine vector search and graph traversal, and the search architecture"
 ---
 
+:::note[Graph disabled in this build]
+This build has no graph database (Neptune removed), so the graph traversal described below returns no results and search relies on LanceDB alone. See [Graph Database](/graphdb).
+:::
+
 ## Background
 
 This project analyzes documents **page by page**. Each page is separated into independent segments, processed through AI analysis, and the results are stored as vector embeddings. With this structure, there are problems that vector search alone cannot solve.

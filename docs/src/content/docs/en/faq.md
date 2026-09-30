@@ -11,7 +11,6 @@ Yes, costs are incurred based on AWS resource usage. The main billable resources
 
 | Resource | Description |
 |----------|-------------|
-| NAT Gateway | VPC external communication (hourly + data transfer) |
 | ECS Fargate | FastAPI backend container (vCPU + memory) |
 | ElastiCache Redis | WebSocket connection management |
 | S3 / S3 Express One Zone | Document storage, vector DB, sessions, artifacts |
@@ -53,10 +52,6 @@ The default Lambda concurrent execution limit is 1,000 per region, but some acco
 ### Bedrock quota limits during large document analysis
 
 When analyzing documents with many pages, you may hit Bedrock service quotas (requests per minute, tokens per minute, etc.), causing analysis to fail or slow down. Start by testing with small documents first, then request a Bedrock quota increase via the Service Quotas dashboard if needed.
-
-### Neptune Serverless deployment fails (free-tier account)
-
-Neptune Serverless is not available on AWS free-tier accounts. A non-free-tier account is required to use the knowledge graph feature.
 
 ### Deployment failed. What should I do?
 

@@ -77,7 +77,7 @@ MCP tools accessed through the AgentCore Gateway.
 |---|---|
 | `summarize` | Hybrid search (vector + FTS) → Haiku summarization, returns qa_ids |
 | `graph_traverse` | Entity graph traversal based on qa_ids, discovers related pages |
-| `graph_keyword` | Keyword similarity search via LanceDB graph keywords + Neptune traversal |
+| `graph_keyword` | Keyword similarity search via LanceDB graph keywords (graph lookup disabled: returns the matched keywords only) |
 | `overview` | List project documents |
 
 ### Document MCP

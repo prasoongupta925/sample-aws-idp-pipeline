@@ -151,7 +151,8 @@ export class RetentionStack extends Stack {
       }),
     );
 
-    // Graph (Neptune) delete is queued like the backend does
+    // Graph delete is queued like the backend does (acked without work while
+    // the graph is disabled)
     sweeper.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['sqs:SendMessage'],

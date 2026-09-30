@@ -67,7 +67,7 @@ An AI-powered IDP prototype that transforms unstructured data into actionable in
   - Result reranking with Bedrock Cohere Rerank v3.5
 
 - **[Knowledge Graph](docs/src/content/docs/en/graphdb.md)**
-  - Neptune DB Serverless for core entity storage
+  - No graph database in this build (Neptune removed): graph traversal and graph views return empty results
   - LLM-based entity extraction (parallel per segment) + core entity normalization
   - Core entities stored in LanceDB for cross-document keyword search
   - Graph traversal and keyword graph search to discover related pages
@@ -103,9 +103,7 @@ An AI-powered IDP prototype that transforms unstructured data into actionable in
 ### CDK Stack Structure
 
 ```
-@idp-v2/infra (15 stacks)
-├── VpcStack              - VPC (10.0.0.0/16, 2 AZ, NAT Gateway)
-├── NeptuneStack          - Neptune DB Serverless (knowledge graph)
+@idp-v2/infra (13 stacks)
 ├── StorageStack          - S3 buckets, DynamoDB tables, ElastiCache Redis
 ├── EventStack            - S3 EventBridge, SQS queues, file type detection Lambda
 ├── OcrStack              - PaddleOCR (Lambda CPU + SageMaker GPU)
@@ -148,7 +146,7 @@ S3 Upload (Presigned URL)
         -> Document Summarizer (Claude Sonnet 4.6)
             -> Vector Embedding (Nova 1024d) -> LanceDB
         -> Graph Builder (Core Entity Normalization + LanceDB Keywords)
-            -> Neptune DB (core entities)
+            -> Graph Service (disabled: no graph database)
 ```
 
 #### 2. Real-time Notifications (WebSocket)
@@ -176,7 +174,7 @@ User Query
       '- IDP Agent (Claude Sonnet 4.6)
           -> MCP Gateway
             +- Search Tool Lambda -> LanceDB Service -> Hybrid Search (Vector + FTS)
-            +- Search Tool Lambda -> Graph Service   -> Neptune (graph traversal)
+            +- Search Tool Lambda -> Graph Service   -> (disabled: empty result)
             +- Search Tool Lambda -> LanceDB Service -> Keyword Graph Search
             +- Artifact Tool Lambda -> S3
             '- Code Interpreter -> Python execution
@@ -192,7 +190,7 @@ API Gateway HTTP (IAM Auth)
   -> VPC Link -> Private ALB -> ECS Fargate (FastAPI)
     +- DynamoDB     -- Project/document CRUD, workflow status
     +- LanceDB      -- Hybrid search (Vector + FTS) via Lambda invoke
-    +- Neptune      -- Knowledge graph queries
+    +- Graph Service -- Knowledge graph queries (disabled: empty result)
     +- Bedrock      -- Cohere Rerank v3.5
     +- S3           -- Presigned URL, sessions (DuckDB), agents, artifacts
     +- Redis        -- Query cache
@@ -207,7 +205,7 @@ API Gateway HTTP (IAM Auth)
 | Step Functions payload -> DynamoDB intermediate storage | Bypass Step Functions 256KB payload limit |
 | Only segment indices passed in workflow | Support for 3000+ page documents |
 | LanceDB + S3 Express One Zone | Low-latency storage optimized for vector search |
-| Neptune DB Serverless | Knowledge graph for entity relationships, scales to zero when idle |
+| No graph database | Neptune Serverless and the VPC NAT gateway cost about $4/day even when idle; the graph service stays deployed and answers with empty results |
 | PaddleOCR dual backend (Lambda + SageMaker) | CPU model (PP-OCRv5) on Rust Lambda, GPU model (VL) on SageMaker |
 | SageMaker Auto-scaling 0->1 | Cost optimization (Scale-to-zero when idle) |
 | ElastiCache Redis | WebSocket connection state management (faster than DynamoDB TTL) |
@@ -329,7 +327,7 @@ pnpm nx lint @idp-v2/infra --configuration=fix  # Auto-fix
 |------|-------------|
 | summarize | Hybrid search across project documents (Vector + FTS + Rerank) |
 | graph_traverse | Knowledge graph traversal from search results to discover related pages |
-| graph_keyword | Keyword similarity search via LanceDB graph keywords + Neptune traversal |
+| graph_keyword | Keyword similarity search via LanceDB graph keywords (graph lookup disabled: returns the matched keywords only) |
 | overview | Project document overview and summaries |
 | save/load/edit_markdown | Create and edit markdown artifacts |
 | create_pdf, extract_pdf_text/tables | PDF generation and extraction |
@@ -406,7 +404,6 @@ sample-aws-idp-pipeline/
 ### Backend (Python)
 - FastAPI (ECS Fargate, ARM64)
 - LanceDB + S3 Express One Zone (vector storage)
-- Neptune DB Serverless (knowledge graph)
 - DynamoDB (One Table Design)
 - DuckDB (direct S3 queries)
 

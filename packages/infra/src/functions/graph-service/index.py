@@ -1,3 +1,9 @@
+"""Graph Service Lambda (openCypher gateway to Neptune DB Serverless).
+
+With no graph database (GRAPH_DISABLED=true or no NEPTUNE_ENDPOINT, as in the
+lean build) every known action answers statusCode 200 with graph_disabled=True
+and the empty result its callers read; no connection is ever opened.
+"""
 import hashlib
 import json
 import os
@@ -13,6 +19,13 @@ from botocore.awsrequest import AWSRequest
 
 NEPTUNE_ENDPOINT = os.environ.get('NEPTUNE_ENDPOINT', '')
 NEPTUNE_PORT = os.environ.get('NEPTUNE_PORT', '8182')
+
+
+def graph_disabled() -> bool:
+    """True when there is no graph database: GRAPH_DISABLED is set, or no endpoint."""
+    flag = os.environ.get('GRAPH_DISABLED', '').strip().lower()
+    return flag in ('1', 'true', 'yes', 'on') or not NEPTUNE_ENDPOINT
+
 
 _session = None
 
@@ -1301,44 +1314,123 @@ def action_get_document_tagcloud(params: dict) -> dict:
     return {'success': True, 'tags': tags}
 
 
+ACTIONS = {
+    # Write
+    'add_segment_links': action_add_segment_links,
+    'add_analyses': action_add_analyses,
+    'add_entities': action_add_entities,
+    'add_relationships': action_add_relationships,
+    'build_clusters': action_build_clusters,
+    'link_documents': action_link_documents,
+    'unlink_documents': action_unlink_documents,
+    'get_linked_documents': action_get_linked_documents,
+    'delete_analysis': action_delete_analysis,
+    'delete_by_workflow': action_delete_by_workflow,
+    'clear_all': action_clear_all,
+    'raw_query': lambda params: {'success': True, 'results': run_query(params['query'], params.get('parameters'))},
+    # Read
+    'search_graph': action_search_graph,
+    'traverse': action_traverse,
+    'find_related_segments': action_find_related_segments,
+    'get_entity_graph': action_get_entity_graph,
+    'get_document_graph': action_get_document_graph,
+    'expand_entity_cluster': action_expand_entity_cluster,
+    'expand_all_clusters': action_expand_all_clusters,
+    'get_document_tagcloud': action_get_document_tagcloud,
+}
+
+
+# ========================================
+# Graph disabled (no graph database)
+# ========================================
+# Each action gets the keys of its normal result for a graph with no data, so
+# callers need no change: writes and deletes are dropped, reads come back empty.
+
+def _int_or_value(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return value
+
+
+def _disabled_document_graph(params: dict) -> dict:
+    """Empty get_document_graph result, with the mode keys the backend passes on."""
+    result = {'nodes': [], 'edges': [], 'clustered': False, 'total_segments': 0}
+    if params.get('search'):
+        result['mode'] = 'search'
+    elif params.get('page') is not None:
+        result.update(mode='page', focus_page=_int_or_value(params['page']))
+    elif params.get('from_page') is not None and params.get('to_page') is not None:
+        result.update(
+            mode='range',
+            from_page=_int_or_value(params['from_page']),
+            to_page=_int_or_value(params['to_page']),
+        )
+    return result
+
+
+DISABLED_RESULTS = {
+    # Write
+    'add_segment_links': lambda p: {
+        'document_id': p.get('document_id', ''),
+        'segment_range': f"{p.get('start_index', 0)}-{p.get('end_index', p.get('segment_count', 0))}",
+    },
+    'add_analyses': lambda p: {'created': 0},
+    'add_entities': lambda p: {'created': 0},
+    'add_relationships': lambda p: {'created': 0},
+    'build_clusters': lambda p: {'clustered': False, 'entity_count': 0, 'cluster_count': 0},
+    'link_documents': lambda p: {},
+    'unlink_documents': lambda p: {},
+    'get_linked_documents': lambda p: {'links': []},
+    'delete_analysis': lambda p: {'analysis_id': p.get('analysis_id', '')},
+    'delete_by_workflow': lambda p: {},
+    'clear_all': lambda p: {'deleted_edges': 0, 'deleted_nodes': 0},
+    'raw_query': lambda p: {'results': []},
+    # Read
+    'search_graph': lambda p: {'entities': [], 'segments': []},
+    'traverse': lambda p: {'nodes': []},
+    'find_related_segments': lambda p: {'segments': []},
+    'get_entity_graph': lambda p: {'nodes': [], 'edges': [], 'tagcloud': [], 'total_entities': 0},
+    'get_document_graph': _disabled_document_graph,
+    'expand_entity_cluster': lambda p: {'nodes': [], 'edges': [], 'entity_type': p.get('entity_type', '')},
+    'expand_all_clusters': lambda p: {'nodes': [], 'edges': []},
+    'get_document_tagcloud': lambda p: {'tags': []},
+}
+
+
+def _disabled_response(action, params) -> dict:
+    """Answer without a graph database. Logs one short line (never the payload)."""
+    if action not in ACTIONS:
+        print(f'Unknown action: {action}')
+        return {
+            'statusCode': 400,
+            'error': f'Unknown action: {action}',
+        }
+    print(f'Graph disabled, skipped {action}')
+    empty = DISABLED_RESULTS.get(action, lambda p: {})
+    return {
+        'statusCode': 200,
+        'success': True,
+        'graph_disabled': True,
+        **empty(params if isinstance(params, dict) else {}),
+    }
+
 
 # ========================================
 # Handler
 # ========================================
 
 def handler(event, _context):
-    print(f'Event: {json.dumps(event)}')
-
     action = event.get('action')
     params = event.get('params', {})
+
+    if graph_disabled():
+        return _disabled_response(action, params)
+
+    print(f'Event: {json.dumps(event)}')
     print(f'Action: {action}')
 
-    actions = {
-        # Write
-        'add_segment_links': action_add_segment_links,
-        'add_analyses': action_add_analyses,
-        'add_entities': action_add_entities,
-        'add_relationships': action_add_relationships,
-        'build_clusters': action_build_clusters,
-        'link_documents': action_link_documents,
-        'unlink_documents': action_unlink_documents,
-        'get_linked_documents': action_get_linked_documents,
-        'delete_analysis': action_delete_analysis,
-        'delete_by_workflow': action_delete_by_workflow,
-        'clear_all': action_clear_all,
-        'raw_query': lambda params: {'success': True, 'results': run_query(params['query'], params.get('parameters'))},
-        # Read
-        'search_graph': action_search_graph,
-        'traverse': action_traverse,
-        'find_related_segments': action_find_related_segments,
-        'get_entity_graph': action_get_entity_graph,
-        'get_document_graph': action_get_document_graph,
-        'expand_entity_cluster': action_expand_entity_cluster,
-        'expand_all_clusters': action_expand_all_clusters,
-        'get_document_tagcloud': action_get_document_tagcloud,
-    }
-
-    if action not in actions:
+    if action not in ACTIONS:
         print(f'Unknown action: {action}')
         return {
             'statusCode': 400,
@@ -1347,7 +1439,7 @@ def handler(event, _context):
 
     try:
         print(f'Executing action: {action}')
-        result = actions[action](params)
+        result = ACTIONS[action](params)
         print(f'Action result keys: {list(result.keys())}')
         return {
             'statusCode': 200,

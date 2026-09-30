@@ -7,7 +7,7 @@ echo "--------------------------------------------------------------------------
 echo "  Destroys all IDP pipeline resources via CodeBuild."
 echo ""
 echo "  Stacks: Application, Agent, Mcp, Worker, Websocket, Workflow,"
-echo "          Transcribe, Bda, Ocr, Event, Storage, Vpc"
+echo "          Transcribe, Bda, Ocr, Event, Storage"
 echo "==========================================================================="
 echo ""
 

@@ -3,6 +3,9 @@
 SQS consumer that deletes graph data from Neptune in batches.
 Phases: analyses -> segments -> documents -> orphan_cleanup
 Re-queues itself if more items remain.
+
+With no graph database (GRAPH_DISABLED=true or no NEPTUNE_ENDPOINT, as in the
+lean build) every message is acked without work and nothing is re-queued.
 """
 import json
 import os
@@ -16,6 +19,13 @@ from botocore.awsrequest import AWSRequest
 NEPTUNE_ENDPOINT = os.environ.get('NEPTUNE_ENDPOINT', '')
 NEPTUNE_PORT = os.environ.get('NEPTUNE_PORT', '8182')
 GRAPH_DELETE_QUEUE_URL = os.environ.get('GRAPH_DELETE_QUEUE_URL', '')
+
+
+def graph_disabled() -> bool:
+    """True when there is no graph database: GRAPH_DISABLED is set, or no endpoint."""
+    flag = os.environ.get('GRAPH_DISABLED', '').strip().lower()
+    return flag in ('1', 'true', 'yes', 'on') or not NEPTUNE_ENDPOINT
+
 
 _session = None
 _sqs_client = None
@@ -109,6 +119,12 @@ def send_to_queue(message: dict):
 
 
 def handler(event, _context):
+    if graph_disabled():
+        # Ack the whole batch: nothing to delete, nothing to re-queue.
+        records = event.get('Records') or []
+        print(f'Graph disabled, acked {len(records)} delete message(s)')
+        return {'batchItemFailures': []}
+
     for record in event.get('Records', []):
         body = json.loads(record['body'])
         project_id = body['project_id']
