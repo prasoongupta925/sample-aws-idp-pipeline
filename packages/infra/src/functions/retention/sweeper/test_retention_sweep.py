@@ -632,6 +632,7 @@ def artifact_world():
     # App configuration: never deleted, however old
     world.s3.put(AGENT_BUCKET, '__prompts/analysis/system_prompt.md', modified=ago(300))
     world.s3.put(AGENT_BUCKET, '__prompts/proj/artifacts/x/y.md', modified=ago(300))
+    world.s3.put(AGENT_BUCKET, '__prompts/builtin_agents/builtin-file-checker.json', modified=ago(300))
     world.s3.put(AGENT_BUCKET, 'user-1/proj-1/agents/credit_checker.md', modified=ago(300))
     return world
 
@@ -650,6 +651,7 @@ def test_artifacts_expire_but_prompts_and_agents_never():
     assert 'user-1/proj-1/artifacts/art_fresh/chart.png' in keys
     assert '__prompts/analysis/system_prompt.md' in keys
     assert '__prompts/proj/artifacts/x/y.md' in keys
+    assert '__prompts/builtin_agents/builtin-file-checker.json' in keys  # built-in agents
     assert 'user-1/proj-1/agents/credit_checker.md' in keys
     assert not any(e[2].startswith('__prompts/') or '/agents/' in e[2]
                    for e in mutations(world) if e[0] == 's3.delete')

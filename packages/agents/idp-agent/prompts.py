@@ -1,11 +1,21 @@
 import json
 import logging
+import re
 
 import boto3
 
 from config import get_config
 
 logger = logging.getLogger(__name__)
+
+# Built-in agents ship with the platform (packages/infra/src/prompts/builtin_agents/,
+# deployed to __prompts/builtin_agents/{agent_id}.json in the agent bucket): the
+# same read-only agent for every user and project.
+BUILTIN_AGENT_PREFIX = "builtin-"
+BUILTIN_AGENTS_S3_PREFIX = "__prompts/builtin_agents/"
+_BUILTIN_AGENT_ID = re.compile(r"builtin-[a-z0-9-]{1,64}")  # fullmatch: no trailing newline
+# A custom agent id is one S3 key segment: no separators, glob syntax or control characters.
+_UNSAFE_AGENT_ID = re.compile(r"[*?\[\]{}/\\\x00-\x1f\x7f]")
 
 DEFAULT_SYSTEM_PROMPT = """You are an Intelligent Document Processing (IDP) assistant.
 You help users find, understand, and analyze information from their uploaded documents.
@@ -189,21 +199,34 @@ def build_system_prompt(
     """
     system_prompt = fetch_system_prompt() or DEFAULT_SYSTEM_PROMPT
 
+    custom_prompt = None
     if agent_id and user_id and project_id:
         custom_prompt = fetch_custom_agent_prompt(user_id, project_id, agent_id)
-        if custom_prompt:
-            system_prompt += f"""
 
-## Custom Instructions
-{custom_prompt}
-"""
-
+    language_block = ""
     if language_code:
-        system_prompt += f"""
+        language_block = f"""
 You MUST respond in the language corresponding to code: {language_code}.
 This applies to all explanatory text only.
 Keep tool calls, code, document titles, and direct quotations in their original language.
 """
+
+    if custom_prompt:
+        # The project language comes first so that an agent's own language rule (e.g. "reply in
+        # the customer's language: Hindi or Marathi") is read last and can take precedence.
+        if language_block:
+            system_prompt += language_block
+            system_prompt += (
+                "Exception: if the Custom Instructions below say which language to reply in "
+                "(for example, the customer's own language), follow them instead.\n"
+            )
+        system_prompt += f"""
+
+## Custom Instructions
+{custom_prompt}
+"""
+    elif language_block:
+        system_prompt += language_block
 
     return system_prompt
 
@@ -228,14 +251,34 @@ def fetch_system_prompt() -> str | None:
         return None
 
 
+def agent_prompt_key(user_id: str, project_id: str, agent_id: str) -> str | None:
+    """S3 key of an agent's JSON (built-in or the user's custom agent); None for a malformed id."""
+    if agent_id.startswith(BUILTIN_AGENT_PREFIX):
+        if _BUILTIN_AGENT_ID.fullmatch(agent_id):
+            return f"{BUILTIN_AGENTS_S3_PREFIX}{agent_id}.json"
+        return None
+    if not agent_id or agent_id in (".", "..") or len(agent_id) > 256 or _UNSAFE_AGENT_ID.search(agent_id):
+        return None
+    return f"{user_id}/{project_id}/agents/{agent_id}.json"
+
+
 def fetch_custom_agent_prompt(user_id: str, project_id: str, agent_id: str) -> str | None:
-    """Fetch custom agent prompt from S3."""
+    """Fetch the agent prompt from S3.
+
+    ``builtin-*`` ids load the built-in agent from ``__prompts/builtin_agents/``;
+    any other id loads the user's custom agent in the project. A malformed id
+    is rejected without reading S3.
+    """
     config = get_config()
     if not config.agent_storage_bucket_name:
         return None
 
+    key = agent_prompt_key(user_id, project_id, agent_id)
+    if key is None:
+        logger.warning("Rejected malformed agent id: %r", agent_id[:80])
+        return None
+
     s3 = boto3.client("s3")
-    key = f"{user_id}/{project_id}/agents/{agent_id}.json"
 
     try:
         response = s3.get_object(
@@ -243,10 +286,18 @@ def fetch_custom_agent_prompt(user_id: str, project_id: str, agent_id: str) -> s
             Key=key,
         )
         data = json.loads(response["Body"].read().decode("utf-8"))
-        return data.get("content")
     except s3.exceptions.NoSuchKey:
         logger.warning(f"Agent not found: {agent_id}")
         return None
     except Exception as e:
         logger.error(f"Failed to fetch agent prompt: {e}")
         return None
+
+    if not isinstance(data, dict):
+        logger.error(f"Agent file is not a JSON object: {agent_id}")
+        return None
+    if agent_id.startswith(BUILTIN_AGENT_PREFIX) and data.get("agent_id") != agent_id:
+        logger.error(f"Built-in agent file does not name its id: {agent_id}")
+        return None
+    content = data.get("content")
+    return content if isinstance(content, str) else None

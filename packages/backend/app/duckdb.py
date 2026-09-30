@@ -19,6 +19,9 @@ class AgentListItem(BaseModel):
     agent_id: str
     name: str
     created_at: str
+    # Shipped with the platform (id starts with "builtin-"): read-only.
+    builtin: bool = False
+    description: str | None = None
 
 
 def get_duckdb_connection() -> duckdb.DuckDBPyConnection:

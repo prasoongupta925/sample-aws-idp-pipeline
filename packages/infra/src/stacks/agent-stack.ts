@@ -199,6 +199,69 @@ export class AgentStack extends Stack {
       });
     }
 
+    // Built-in agents: read-only agents every user sees in every project.
+    // Each src/prompts/builtin_agents/<agent_id>.json is uploaded to
+    // __prompts/builtin_agents/<agent_id>.json and re-uploaded when it
+    // changes, like the analysis prompts. The backend lists them; the IDP
+    // agent loads one when a chat uses its id.
+    const builtinAgentsDir = path.resolve(
+      process.cwd(),
+      'src/prompts/builtin_agents',
+    );
+    const builtinAgentFiles = fs
+      .readdirSync(builtinAgentsDir)
+      .filter((file) => file.endsWith('.json'))
+      .sort();
+
+    for (const file of builtinAgentFiles) {
+      const agentId = file.slice(0, -'.json'.length);
+      const body = fs.readFileSync(path.join(builtinAgentsDir, file), 'utf-8');
+      const agent = JSON.parse(body) as Record<string, unknown> | null;
+      if (
+        !/^builtin-[a-z0-9-]{1,64}$/.test(agentId) ||
+        agent?.agent_id !== agentId ||
+        typeof agent.name !== 'string' ||
+        typeof agent.content !== 'string'
+      ) {
+        throw new Error(
+          `Built-in agent ${file}: expected <agent_id>.json with agent_id ` +
+            'builtin-[a-z0-9-]{1,64} equal to the file name, and string name and content',
+        );
+      }
+      const contentHash = crypto
+        .createHash('md5')
+        .update(body)
+        .digest('hex')
+        .slice(0, 8);
+
+      const s3PutParams = {
+        service: 'S3',
+        action: 'putObject',
+        parameters: {
+          Bucket: agentStorageBucketName,
+          Key: `__prompts/builtin_agents/${file}`,
+          Body: body,
+          ContentType: 'application/json',
+        },
+        physicalResourceId: cr.PhysicalResourceId.of(
+          `${agentId}-${contentHash}`,
+        ),
+      };
+
+      new cr.AwsCustomResource(this, `InitBuiltinAgent-${agentId}`, {
+        onCreate: s3PutParams,
+        onUpdate: s3PutParams,
+        policy: cr.AwsCustomResourcePolicy.fromStatements([
+          new iam.PolicyStatement({
+            actions: ['s3:PutObject'],
+            resources: [
+              `${agentStorageBucket.bucketArn}/__prompts/builtin_agents/*`,
+            ],
+          }),
+        ]),
+      });
+    }
+
     // Create Code Interpreter for IDP Agent
     const idpCodeInterpreter = new CodeInterpreterCustom(
       this,
