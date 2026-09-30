@@ -514,7 +514,7 @@
     "name": "Name",
     "namePlaceholder": "my-agent",
     "systemPrompt": "System Prompt",
-    "promptPlaceholder": "# Financial Document Analyst\n\nYou are a financial document analysis expert.\n\n## Role\n- Extract key financial metrics and figures\n- Identify important dates and deadlines\n- Summarize contract terms and conditions\n\n## Output Format\n- Use structured tables for numerical data\n- Highlight critical information\n- Provide Korean translation when needed",
+    "promptPlaceholder": "# Financial Document Analyst\n\nYou are a financial document analysis expert.\n\n## Role\n- Extract key financial metrics and figures\n- Identify important dates and deadlines\n- Summarize contract terms and conditions\n\n## Output Format\n- Use structured tables for numerical data\n- Highlight critical information\n- Provide a Hindi or Marathi summary when needed",
     "changeConfirmMessage": "Changing agent will start a new conversation. Current conversation will be saved in history.",
     "startNewChat": "Start New Chat",
     "deleteAgent": "Delete Agent",

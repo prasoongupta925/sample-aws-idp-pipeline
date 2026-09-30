@@ -1,4 +1,4 @@
 export default {
-  applicationName: 'AWS IDP',
+  applicationName: 'Smart Dial Document AI',
   logo: '/logo.png',
 };

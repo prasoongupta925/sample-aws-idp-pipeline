@@ -485,7 +485,7 @@ const AppLayout: React.FC<React.PropsWithChildren> = ({ children }) => {
         {!pathname.match(/^\/projects\/[^/]+/) && (
           <footer className="app-footer">
             <span className="text-xs font-medium bg-gradient-to-r from-slate-400 to-slate-500 dark:from-slate-500 dark:to-slate-600 bg-clip-text text-transparent">
-              Powered by Korea PACE Team
+              {Config.applicationName} · Demo with synthetic data
             </span>
           </footer>
         )}
