@@ -34,5 +34,24 @@ del "$AWS_REGION" IDP-V2-Neptune &
 wait
 for i in 1 2 3 4; do del "$AWS_REGION" IDP-V2-Vpc && break; say "VPC still has network interfaces in use; retry in 5 min ($i/4)"; sleep 300; done
 
+# The us-east-1 CDK bootstrap existed only for the WAF stack: remove it when nothing else there uses it.
+LEFT=$(aws cloudformation list-stacks --region us-east-1 --query "StackSummaries[?StackStatus!='DELETE_COMPLETE' && StackName!='CDKToolkit'].StackName" --output text)
+if [ -z "$LEFT" ] && aws cloudformation describe-stacks --region us-east-1 --stack-name CDKToolkit >/dev/null 2>&1; then
+  ACCT=$(aws sts get-caller-identity --query Account --output text)
+  B="cdk-hnb659fds-assets-${ACCT}-us-east-1"
+  "${PYTHON:-python3}" - "$B" <<'PY' 2>/dev/null || aws s3 rm "s3://$B" --recursive --region us-east-1 --only-show-errors
+import os, sys, boto3
+b = boto3.Session(profile_name=os.environ.get("AWS_PROFILE"), region_name="us-east-1").resource("s3").Bucket(sys.argv[1])
+b.object_versions.delete()
+b.objects.all().delete()
+PY
+  aws ecr delete-repository --region us-east-1 --repository-name "cdk-hnb659fds-container-assets-${ACCT}-us-east-1" --force >/dev/null 2>&1
+  del us-east-1 CDKToolkit
+  aws s3 rb "s3://$B" --force --region us-east-1 >/dev/null 2>&1 && say "deleted the us-east-1 bootstrap bucket"
+  aws ssm delete-parameter --region us-east-1 --name /cdk-bootstrap/hnb659fds/version >/dev/null 2>&1
+fi
+SNAP=$(aws neptune describe-db-cluster-snapshots --query 'DBClusterSnapshots[].DBClusterSnapshotIdentifier' --output text 2>/dev/null)
+[ -n "$SNAP" ] && say "Neptune snapshots left (they bill): $SNAP"
+
 if [ -n "$GUARD" ]; then say "putting the IAM guard back"; "$GUARD" | tail -1; fi
 say "migration done in $(( ($(date +%s) - T0) / 60 )) min"

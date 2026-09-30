@@ -53,3 +53,4 @@ packages/infra/src/lambda-layers/
 
 # Rust
 target/
+*.tsbuildinfo
