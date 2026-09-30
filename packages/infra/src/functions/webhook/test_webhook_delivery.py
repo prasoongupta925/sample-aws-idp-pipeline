@@ -1,9 +1,10 @@
-"""Tests for the webhook delivery Lambda (index.py). No AWS or network calls.
+"""Tests for the webhook delivery Lambda (index.py). No AWS calls, no network beyond localhost.
 
-DynamoDB and the file-check Lambda are fakes, DNS resolution and the HTTP POST
-are stubbed at the module's seams (_resolve, _post_once), and sleeping is
-recorded instead of waited. One test runs the real file-check engine
-(packages/lambda/file-check-mcp) in-process. Synthetic data only.
+DynamoDB, KMS and the file-check Lambda are fakes, DNS resolution and the HTTP
+POST are stubbed at the module's seams (_resolve, _post_once), and sleeping is
+recorded instead of waited. The attempt-deadline tests talk to a local socket
+server; one test runs the real file-check engine (packages/lambda/file-check-mcp)
+in-process. Synthetic data only.
 
 Run (from this folder): python -m pytest -q
 """
@@ -15,13 +16,17 @@ import importlib.util
 import io
 import json
 import os
+import re
 import socket
 import ssl
 import sys
+import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from botocore.exceptions import ClientError
 
 os.environ.setdefault("AWS_DEFAULT_REGION", "ap-south-1")
 os.environ.setdefault("AWS_ACCESS_KEY_ID", "testing")
@@ -55,10 +60,17 @@ def _load(name, path, env=None):
     return module
 
 
+KEY_ARN = "arn:aws:kms:ap-south-1:111111111111:key/00000000-0000-4000-8000-000000000000"
+
 wh = _load(
     "webhook_delivery_index",
     HERE / "index.py",
-    {"BACKEND_TABLE_NAME": "test-table", "FILE_CHECK_FUNCTION_NAME": "idp-v2-file-check-mcp", "RETENTION_DAYS": "7"},
+    {
+        "BACKEND_TABLE_NAME": "test-table",
+        "FILE_CHECK_FUNCTION_NAME": "idp-v2-file-check-mcp",
+        "RETENTION_DAYS": "7",
+        "WEBHOOK_SECRET_KEY_ARN": KEY_ARN,
+    },
 )
 
 PROJECT_ID = "proj_demo"
@@ -96,6 +108,39 @@ class FakeTable:
         self.puts.append(copy.deepcopy(Item))
 
 
+class FakeKms:
+    """KMS stub: a ciphertext decrypts only with the key and the encryption context it was made with."""
+
+    PREFIX = b"fake-kms:"
+
+    def __init__(self, error=None):
+        self.decrypts = []
+        self.error = error
+
+    @classmethod
+    def encrypt(cls, KeyId, Plaintext, EncryptionContext):
+        blob = json.dumps({"key": KeyId, "context": EncryptionContext, "pt": base64.b64encode(Plaintext).decode()})
+        return {"CiphertextBlob": cls.PREFIX + blob.encode("utf-8"), "KeyId": KeyId}
+
+    def decrypt(self, CiphertextBlob, KeyId=None, EncryptionContext=None):
+        self.decrypts.append({"KeyId": KeyId, "EncryptionContext": EncryptionContext})
+        if self.error is not None:
+            raise self.error
+        invalid = ClientError({"Error": {"Code": "InvalidCiphertextException", "Message": "x"}}, "Decrypt")
+        if not CiphertextBlob.startswith(self.PREFIX):
+            raise invalid
+        data = json.loads(CiphertextBlob[len(self.PREFIX) :])
+        if KeyId != data["key"] or EncryptionContext != data["context"]:
+            raise invalid
+        return {"Plaintext": base64.b64decode(data["pt"]), "KeyId": data["key"]}
+
+
+def sealed(secret=SECRET, project_id=PROJECT_ID, key=KEY_ARN):
+    """A secret as the backend stores it: base64 of the KMS ciphertext made with the project's context."""
+    blob = FakeKms.encrypt(key, secret.encode("utf-8"), ws.secret_encryption_context(project_id))["CiphertextBlob"]
+    return base64.b64encode(blob).decode("ascii")
+
+
 class FileCheckLambda:
     """boto3 Lambda client stub: answers each invoke with the next canned file check."""
 
@@ -113,12 +158,14 @@ class FileCheckLambda:
         return response
 
 
-def meta(enabled=True, url=CRM_URL, secret=SECRET):
+def meta(enabled=True, url=CRM_URL, secret=SECRET, secret_enc=None):
     item = {"PK": f"PROJ#{PROJECT_ID}", "SK": "META", "data": {"name": "Demo"}}
     if url is not None:
         item["webhook_url"] = url
-    if secret is not None:
-        item["webhook_secret"] = secret
+    if secret_enc is not None:
+        item["webhook_secret_enc"] = secret_enc
+    elif secret is not None:
+        item["webhook_secret_enc"] = sealed(secret)
     item["webhook_enabled"] = enabled
     return item
 
@@ -175,8 +222,10 @@ class Poster:
         self.script = list(script)
         self.calls = []
 
-    def __call__(self, target, addresses, body, headers):
-        self.calls.append({"target": target, "addresses": addresses, "body": body, "headers": dict(headers)})
+    def __call__(self, target, addresses, body, headers, timeout_s=None):
+        self.calls.append(
+            {"target": target, "addresses": addresses, "body": body, "headers": dict(headers), "timeout_s": timeout_s}
+        )
         step = self.script.pop(0) if len(self.script) > 1 else self.script[0]
         if isinstance(step, BaseException):
             raise step
@@ -202,12 +251,14 @@ def env(monkeypatch):
     state = {
         "table": FakeTable([meta()]),
         "lambda": FileCheckLambda(check(SNEHA, RAHUL)),
+        "kms": FakeKms(),
         "post": Poster(200),
         "resolve": resolver(PUBLIC_IP),
         "sleeps": [],
     }
     monkeypatch.setattr(wh, "_table", state["table"])
     monkeypatch.setattr(wh, "_lambda_client", state["lambda"])
+    monkeypatch.setattr(wh, "_kms_client", state["kms"])
     monkeypatch.setattr(wh, "_post_once", state["post"])
     monkeypatch.setattr(wh, "_resolve", state["resolve"])
     monkeypatch.setattr(wh, "_sleep", state["sleeps"].append)
@@ -219,7 +270,13 @@ def env(monkeypatch):
 def use(monkeypatch, env, **overrides):
     for key, value in overrides.items():
         env[key] = value
-        attr = {"table": "_table", "lambda": "_lambda_client", "post": "_post_once", "resolve": "_resolve"}[key]
+        attr = {
+            "table": "_table",
+            "lambda": "_lambda_client",
+            "kms": "_kms_client",
+            "post": "_post_once",
+            "resolve": "_resolve",
+        }[key]
         monkeypatch.setattr(wh, attr, value)
 
 
@@ -273,8 +330,14 @@ def test_delivers_signed_payload_for_the_documents_applicant(env, capsys):
     custom = json.loads(base64.b64decode(invoke["ClientContext"]))["custom"]
     assert custom == {"bedrockAgentCoreToolName": "filecheck___run_file_check"}
 
-    # META read strongly consistent; one log item with a 7-day TTL.
+    # META read strongly consistent; the secret is decrypted with the webhook key and the project's context.
     assert env["table"].gets[0]["ConsistentRead"] is True
+    assert "webhook_secret_enc" in env["table"].gets[0]["ProjectionExpression"]
+    assert env["kms"].decrypts == [
+        {"KeyId": KEY_ARN, "EncryptionContext": {"project_id": PROJECT_ID, "purpose": "webhook-signing-secret"}}
+    ]
+    assert call["timeout_s"] == 5
+    # One log item with a 7-day TTL.
     (item,) = env["table"].puts
     assert item == {
         "PK": f"PROJ#{PROJECT_ID}",
@@ -310,12 +373,66 @@ def test_ready_applicant_summary_has_no_issue_list(env):
     }
 
 
-def test_unknown_document_reports_every_applicant(env):
-    wh.handler(doc_event("not-in-any-applicant"), None)
+def _no_applicant_data(env, capsys=None):
+    """Nothing about any applicant left the function: payload, log item and logs."""
+    body = env["post"].calls[0]["body"].decode("utf-8")
+    for value in ("Sneha", "Kulkarni", "Rahul", "Deshmukh", "ABCDE1234F", "Salary slip"):
+        assert value not in body, value
+    assert "applicant" not in env["table"].puts[0]
+    if capsys is not None:
+        assert "Sneha" not in capsys.readouterr().out
 
-    results = json.loads(env["post"].calls[0]["body"])["results"]
-    assert [r["applicant"] for r in results] == ["Sneha Anil Kulkarni", "Rahul Vijay Deshmukh"]
-    assert env["table"].puts[0]["applicant"] == "Sneha Anil Kulkarni, Rahul Vijay Deshmukh"
+
+def test_unattributed_document_gets_one_project_level_result(env, capsys):
+    """Data minimisation: a document the check cannot place never pushes every applicant."""
+    result = wh.handler(doc_event("not-in-any-applicant"), None)
+
+    assert result["status"] == "delivered"
+    assert json.loads(env["post"].calls[0]["body"])["results"] == [
+        {
+            "applicant": None,
+            "verdict": "NOT READY",
+            "summary": (
+                "Document not attributed to an applicant: it is not in the file check (2 applicants in the file)"
+            ),
+            "missing": [],
+            "checklist_id": "salaried_personal_loan",
+        }
+    ]
+    _no_applicant_data(env, capsys)
+
+
+@pytest.mark.parametrize(
+    ("bucket", "reason"),
+    [
+        ("pending_documents", "it is still being analysed"),
+        ("failed_documents", "its analysis failed"),
+        ("no_facts_documents", "no facts were extracted from it"),
+        ("unsupported_documents", "the file check does not read this file type"),
+        ("unassigned_documents", "no applicant could be identified in it"),
+    ],
+)
+def test_unattributed_document_says_why(env, monkeypatch, bucket, reason):
+    answer = check(SNEHA, RAHUL)
+    answer[bucket] = [{"document_id": "x-01", "document_name": "Sneha_Kulkarni_statement.xlsx"}]
+    use(monkeypatch, env, **{"lambda": FileCheckLambda(answer)})
+
+    wh.handler(doc_event("x-01"), None)
+
+    (result,) = json.loads(env["post"].calls[0]["body"])["results"]
+    assert result["applicant"] is None
+    assert result["summary"] == f"Document not attributed to an applicant: {reason} (2 applicants in the file)"
+    _no_applicant_data(env)
+
+
+def test_without_a_document_id_no_applicant_is_reported(env):
+    wh.handler({"project_id": PROJECT_ID, "event": "file_check.completed", "document_id": "../bad"}, None)
+
+    (result,) = json.loads(env["post"].calls[0]["body"])["results"]
+    assert result["summary"] == (
+        "Document not attributed to an applicant: no document was named (2 applicants in the file)"
+    )
+    _no_applicant_data(env)
 
 
 def test_no_applicant_gives_one_project_level_result(env, monkeypatch):
@@ -356,6 +473,12 @@ def test_recheck_is_bounded(env, monkeypatch):
     assert result["status"] == "delivered"
     assert len(env["lambda"].calls) == 3
     assert env["sleeps"] == [2, 4]
+    # Still pending: a project-level result, not Rahul's verdict.
+    (sent,) = json.loads(env["post"].calls[0]["body"])["results"]
+    assert (sent["applicant"], sent["summary"]) == (
+        None,
+        "Document not attributed to an applicant: it is still being analysed (1 applicant in the file)",
+    )
 
 
 def test_real_engine_results(monkeypatch, env):
@@ -510,16 +633,62 @@ def test_dns_failure_is_retried(env, monkeypatch):
     assert env["sleeps"] == [1, 2]
 
 
+class Clock:
+    """_monotonic stub: returns `now`; tests move it."""
+
+    def __init__(self, now=0.0):
+        self.now = now
+
+    def __call__(self):
+        return self.now
+
+
 def test_retries_stop_at_the_delivery_budget(env, monkeypatch):
-    clock = iter([0.0, 21.0])  # start, then after the first attempt: 21 + 1 + 5 > 25
-    monkeypatch.setattr(wh, "_monotonic", lambda: next(clock))
-    use(monkeypatch, env, post=Poster(500))
+    clock = Clock()
+    monkeypatch.setattr(wh, "_monotonic", clock)
+
+    def slow_500(target, addresses, body, headers, timeout_s=None):
+        clock.now += 21.0  # after the first attempt: 21 + 1 + 5 > 25
+        return 500
+
+    use(monkeypatch, env, post=slow_500)
 
     result = wh.handler(doc_event(), None)
 
-    assert result["status"] == "failed"
-    assert len(env["post"].calls) == 1
+    assert (result["status"], result["http_status"]) == ("failed", 500)
     assert env["sleeps"] == []
+    assert env["table"].puts[0]["attempts"] == 1
+
+
+def test_an_attempt_never_runs_past_the_delivery_budget(env, monkeypatch):
+    """A slow DNS answer counts: the POST only gets what is left of the 25 s."""
+    clock = Clock()
+    monkeypatch.setattr(wh, "_monotonic", clock)
+
+    def slow_dns(host, port, type=None):
+        clock.now += 22.0
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (PUBLIC_IP, port))]
+
+    use(monkeypatch, env, resolve=slow_dns)
+
+    assert wh.handler(doc_event(), None)["status"] == "delivered"
+    assert [c["timeout_s"] for c in env["post"].calls] == [3.0]
+
+
+def test_no_post_once_the_budget_is_used_up(env, monkeypatch):
+    clock = Clock()
+    monkeypatch.setattr(wh, "_monotonic", clock)
+
+    def very_slow_dns(host, port, type=None):
+        clock.now += 24.5
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (PUBLIC_IP, port))]
+
+    use(monkeypatch, env, resolve=very_slow_dns)
+
+    result = wh.handler(doc_event(), None)
+
+    assert (result["status"], result["error"]) == ("failed", "delivery time budget used up")
+    assert env["post"].calls == []
 
 
 # ------------------------------------------------------------------ blocked
@@ -531,6 +700,9 @@ def test_retries_stop_at_the_delivery_budget(env, monkeypatch):
         ("127.0.0.1",),
         ("::1",),
         ("fd00:ec2::254",),
+        ("::ffff:0:a9fe:a9fe",),  # IPv4-translated 169.254.169.254
+        ("::ffff:0:7f00:1",),  # IPv4-translated 127.0.0.1
+        ("4000::1",),  # reserved IPv6 outside 2000::/3
         (PUBLIC_IP, "192.168.1.20"),
     ],
 )
@@ -552,7 +724,13 @@ def test_dns_answer_with_a_private_address_is_blocked(env, monkeypatch, addresse
 
 @pytest.mark.parametrize(
     "url",
-    ["http://crm.example.com/hook", "https://169.254.169.254/latest/meta-data/", "https://localhost/x"],
+    [
+        "http://crm.example.com/hook",
+        "https://169.254.169.254/latest/meta-data/",
+        "https://localhost/x",
+        "https://[::ffff:0:127.0.0.1]/x",
+        "https://crm.example.com:22/x",
+    ],
 )
 def test_url_is_checked_again_at_send_time(env, monkeypatch, url):
     use(monkeypatch, env, table=FakeTable([meta(url=url)]))
@@ -582,9 +760,57 @@ def test_disabled_or_incomplete_makes_no_calls(env, monkeypatch, item, reason):
 
     assert result == {"status": "skipped", "reason": reason}
     assert env["lambda"].calls == []
+    assert env["kms"].decrypts == []
     assert env["post"].calls == []
     assert env["resolve"].calls == []
     assert env["table"].puts == []
+
+
+def test_a_plaintext_secret_is_not_used(env, monkeypatch):
+    """Only the KMS ciphertext counts: a plaintext webhook_secret attribute is ignored."""
+    item = meta(secret=None)
+    item["webhook_secret"] = SECRET
+    use(monkeypatch, env, table=FakeTable([item]))
+
+    assert wh.handler(doc_event(), None) == {"status": "skipped", "reason": "webhook URL or secret not set"}
+    assert env["post"].calls == []
+
+
+@pytest.mark.parametrize(
+    ("item", "kms", "error"),
+    [
+        (meta(secret_enc=sealed(project_id="proj_other")), FakeKms(), "decrypt failed (InvalidCiphertextException)"),
+        (meta(secret_enc=sealed(key=KEY_ARN.replace("0000-4000", "1111-4000"))), FakeKms(), "decrypt failed"),
+        (meta(secret_enc="%%%not-base64%%%"), FakeKms(), "stored secret is malformed"),
+        (
+            meta(),
+            FakeKms(error=ClientError({"Error": {"Code": "AccessDeniedException", "Message": "no"}}, "Decrypt")),
+            "decrypt failed (AccessDeniedException)",
+        ),
+    ],
+)
+def test_undecryptable_secret_fails_the_delivery_and_sends_nothing(env, monkeypatch, item, kms, error):
+    use(monkeypatch, env, table=FakeTable([item]), kms=kms)
+
+    result = wh.handler(doc_event(), None)
+
+    assert result["status"] == "failed"
+    assert result["error"].startswith(f"signing secret unavailable: {error}")
+    assert env["lambda"].calls == []  # no file check either
+    assert env["post"].calls == []
+    logged = env["table"].puts[0]
+    assert (logged["status"], logged["attempts"]) == ("failed", 0)
+    assert "applicant" not in logged
+
+
+def test_missing_key_configuration_fails_the_delivery(env, monkeypatch):
+    monkeypatch.setattr(wh, "SECRET_KEY_ARN", "")
+
+    result = wh.handler(doc_event(), None)
+
+    assert result["error"] == "signing secret unavailable: secret key is not configured"
+    assert env["kms"].decrypts == []
+    assert env["post"].calls == []
 
 
 def test_missing_meta_webhook_fields_count_as_disabled(env, monkeypatch):
@@ -617,6 +843,7 @@ def test_test_event_needs_no_enable_and_carries_no_applicant_data(env, monkeypat
     assert env["lambda"].calls == []
     (call,) = env["post"].calls
     assert call["headers"]["X-SmartDial-Event"] == "test"
+    assert ws.verify_signature(SECRET, call["headers"]["X-SmartDial-Signature"], call["body"], now=1_790_000_000)
     payload = json.loads(call["body"])
     assert payload["event"] == "test"
     assert payload["document_id"] is None
@@ -669,14 +896,24 @@ class RecordingContext:
     def __init__(self):
         self.wrapped = []
 
-    def wrap_socket(self, sock, server_hostname=None):
-        self.wrapped.append(server_hostname)
+    def wrap_socket(self, sock, server_hostname=None, do_handshake_on_connect=True):
+        self.wrapped.append((server_hostname, do_handshake_on_connect))
         return sock
 
 
 class DummySocket:
+    def __init__(self):
+        self.timeouts = []
+        self.handshakes = 0
+
     def setsockopt(self, *args):
         pass
+
+    def settimeout(self, value):
+        self.timeouts.append(value)
+
+    def do_handshake(self):
+        self.handshakes += 1
 
     def close(self):
         pass
@@ -696,13 +933,169 @@ def test_pinned_connection_connects_to_checked_addresses_only(monkeypatch):
 
     monkeypatch.setattr(socket, "create_connection", fake_create_connection)
     monkeypatch.setattr(socket, "getaddrinfo", no_dns)
+    monkeypatch.setattr(wh, "_monotonic", Clock(100.0))
     context = RecordingContext()
     connection = wh.PinnedHTTPSConnection("crm.example.com", 8443, ["203.0.113.1", PUBLIC_IP], 5, context)
 
     connection.connect()
 
     assert connected == [(("203.0.113.1", 8443), 5), ((PUBLIC_IP, 8443), 5)]
-    assert context.wrapped == ["crm.example.com"]  # SNI and certificate check use the host name
+    # SNI and certificate check use the host name; the handshake runs once the socket can be aborted.
+    assert context.wrapped == [("crm.example.com", False)]
+    assert connection.sock.handshakes == 1
+
+
+def test_pinned_connection_tries_two_addresses_at_most(monkeypatch):
+    tried = []
+
+    def refuse(address, timeout=None, source_address=None):
+        tried.append(address[0])
+        raise ConnectionRefusedError(111, "refused")
+
+    monkeypatch.setattr(socket, "create_connection", refuse)
+    addresses = ["93.184.216.34", "93.184.216.35", "93.184.216.36", "2606:2800:220:1::1"]
+    connection = wh.PinnedHTTPSConnection("crm.example.com", 443, addresses, 5, RecordingContext())
+
+    with pytest.raises(ConnectionRefusedError):
+        connection.connect()
+    assert tried == ["93.184.216.34", "93.184.216.35"]
+
+
+def test_each_connect_gets_only_the_time_left(monkeypatch):
+    clock = Clock(10.0)
+    monkeypatch.setattr(wh, "_monotonic", clock)
+    timeouts = []
+    socks = []
+
+    def slow_then_ok(address, timeout=None, source_address=None):
+        timeouts.append(timeout)
+        if len(timeouts) == 1:
+            clock.now += 3.5  # the first address takes 3.5 s to refuse
+            raise ConnectionRefusedError(111, "refused")
+        socks.append(DummySocket())
+        return socks[-1]
+
+    monkeypatch.setattr(socket, "create_connection", slow_then_ok)
+    connection = wh.PinnedHTTPSConnection("crm.example.com", 443, ["203.0.113.1", PUBLIC_IP], 5, RecordingContext())
+
+    connection.connect()
+
+    assert timeouts == [5, 1.5]
+    assert socks[0].timeouts == [1.5]  # the TLS handshake and the reads get what is left too
+
+
+def test_connect_after_the_deadline_is_a_timeout(monkeypatch):
+    clock = Clock(10.0)
+    monkeypatch.setattr(wh, "_monotonic", clock)
+    monkeypatch.setattr(socket, "create_connection", lambda *a, **k: pytest.fail("must not connect"))
+    connection = wh.PinnedHTTPSConnection(
+        "crm.example.com", 443, [PUBLIC_IP], 5, RecordingContext(), deadline=clock.now - 0.1
+    )
+
+    with pytest.raises(TimeoutError):
+        connection.connect()
+
+
+def test_abort_before_the_handshake_stops_the_attempt(monkeypatch):
+    sock = DummySocket()
+    monkeypatch.setattr(socket, "create_connection", lambda *a, **k: sock)
+    connection = wh.PinnedHTTPSConnection("crm.example.com", 443, [PUBLIC_IP], 5, RecordingContext())
+    connection.abort()
+
+    with pytest.raises(TimeoutError):
+        connection.connect()
+    assert sock.handshakes == 0
+
+
+# ------------------------------------------------------------------ attempt deadline (local socket server)
+class _PlainSocket(socket.socket):
+    """What PlainContext.wrap_socket returns: the TCP socket itself, with a no-op handshake."""
+
+    def do_handshake(self):
+        pass
+
+
+class PlainContext:
+    """An ssl.SSLContext stand-in without TLS, so a local plain-TCP server can answer."""
+
+    def wrap_socket(self, sock, server_hostname=None, do_handshake_on_connect=True):
+        timeout = sock.gettimeout()
+        plain = _PlainSocket(sock.family, sock.type, sock.proto, fileno=sock.detach())
+        plain.settimeout(timeout)
+        return plain
+
+
+def _read_request(conn) -> bytes:
+    data = b""
+    while b"\r\n\r\n" not in data:
+        data += conn.recv(65536)
+    head, _, body = data.partition(b"\r\n\r\n")
+    length = int(re.search(rb"(?i)content-length: *(\d+)", head).group(1))
+    while len(body) < length:
+        body += conn.recv(65536)
+    return data
+
+
+def _local_server(chunks, interval):
+    """Accept one connection, read the request, then send `chunks` one every `interval` seconds."""
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+
+    def serve():
+        with server:
+            conn, _ = server.accept()
+            with conn:
+                conn.settimeout(10)
+                try:
+                    _read_request(conn)
+                    for chunk in chunks:
+                        conn.sendall(chunk)
+                        time.sleep(interval)
+                    while conn.recv(65536):  # until the client hangs up
+                        pass
+                except OSError:
+                    pass
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    return server.getsockname()[1], thread
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        # Status line, then one header line every 50 ms, never the blank line: each read
+        # returns long before a per-read timeout would fire.
+        [b"HTTP/1.1 200 OK\r\n"] + [b"X-Slow: 1\r\n"] * 200,
+        # The status line byte by byte.
+        [bytes([b]) for b in b"HTTP/1.1 200 OK\r\n\r\n"] * 20,
+        # Nothing at all.
+        [],
+    ],
+    ids=["dripped-headers", "dripped-status", "silent"],
+)
+def test_a_slow_server_cannot_hold_an_attempt_past_its_timeout(monkeypatch, chunks):
+    port, thread = _local_server(chunks, interval=0.05)
+    monkeypatch.setattr(wh, "_tls_context", PlainContext())
+    target = ws.WebhookTarget("crm.example.com", port, "/hooks")
+
+    started = time.monotonic()
+    with pytest.raises(TimeoutError):
+        wh._post_once(target, ["127.0.0.1"], b"{}", {"Content-Type": "application/json"}, timeout_s=0.6)
+    elapsed = time.monotonic() - started
+
+    assert 0.5 <= elapsed < 2.5
+    thread.join(timeout=12)
+
+
+def test_a_prompt_answer_within_the_timeout_is_returned(monkeypatch):
+    port, thread = _local_server([b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n"], interval=0)
+    monkeypatch.setattr(wh, "_tls_context", PlainContext())
+    target = ws.WebhookTarget("crm.example.com", port, "/hooks")
+
+    assert wh._post_once(target, ["127.0.0.1"], b"{}", {}, timeout_s=2) == 204
+    thread.join(timeout=12)
 
 
 def test_pinned_connection_raises_when_no_address_connects(monkeypatch):
@@ -720,8 +1113,13 @@ def test_post_once_sends_one_post_and_returns_the_status(monkeypatch):
     requests = []
 
     class FakeConnection:
-        def __init__(self, host, port, addresses, timeout, context):
+        aborted = False
+
+        def __init__(self, host, port, addresses, timeout, context, deadline=None):
             requests.append({"host": host, "port": port, "addresses": addresses, "timeout": timeout})
+
+        def abort(self):
+            pass
 
         def request(self, method, target, body=None, headers=None):
             requests[-1].update(method=method, target=target, body=body, headers=headers)

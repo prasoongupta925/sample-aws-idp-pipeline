@@ -2,10 +2,13 @@
 
 Settings are top-level attributes of the project META item
 (PK = PROJ#{project_id}, SK = META): webhook_url, webhook_enabled and
-webhook_secret. They sit beside `data`, so update_project_data (which replaces
-`data`) never touches them, and every write here sets or removes only these
-attributes. Reads project PK and the three attributes only; the secret never
-leaves this module except as `secret_set`.
+webhook_secret_enc, the signing secret encrypted with the webhook KMS key
+(app/webhook_secret.py; only the delivery Lambda can decrypt it). They sit
+beside `data`, so update_project_data (which replaces `data`) never touches
+them, and every write here sets or removes only these attributes (and the
+plaintext webhook_secret of earlier builds, which is never read). Reads project
+PK and the three attributes only; the ciphertext never leaves this module
+except as `secret_set`.
 
 The delivery Lambda (packages/infra/src/functions/webhook) writes one item per
 delivery in the project's partition:
@@ -34,7 +37,7 @@ _DELIVERY_SK_UPPER = "WHDLV$"
 class WebhookSettings:
     url: str | None
     enabled: bool
-    secret: str | None
+    secret_set: bool
 
 
 def _key(project_id: str) -> dict[str, str]:
@@ -50,18 +53,18 @@ def get_webhook_settings(project_id: str) -> WebhookSettings | None:
     """The project's webhook settings, or None when the project does not exist."""
     response = get_table().get_item(
         Key=_key(project_id),
-        ProjectionExpression="PK, webhook_url, webhook_enabled, webhook_secret",
+        ProjectionExpression="PK, webhook_url, webhook_enabled, webhook_secret_enc",
         ConsistentRead=True,
     )
     item = response.get("Item")
     if not item:
         return None
     url = item.get("webhook_url")
-    secret = item.get("webhook_secret")
+    secret_enc = item.get("webhook_secret_enc")
     return WebhookSettings(
         url=url if isinstance(url, str) and url else None,
         enabled=item.get("webhook_enabled") is True,
-        secret=secret if isinstance(secret, str) and secret else None,
+        secret_set=isinstance(secret_enc, str) and bool(secret_enc),
     )
 
 
@@ -90,7 +93,7 @@ def put_webhook_settings(project_id: str, *, url: str | None, enabled: bool) -> 
         values[":url"] = url
     condition = "attribute_exists(PK)"
     if enabled:
-        condition += " AND attribute_exists(webhook_secret)"
+        condition += " AND attribute_exists(webhook_secret_enc)"
     return _conditional_update(
         project_id,
         UpdateExpression=expression,
@@ -99,13 +102,13 @@ def put_webhook_settings(project_id: str, *, url: str | None, enabled: bool) -> 
     )
 
 
-def put_webhook_secret(project_id: str, secret: str) -> bool:
-    """Store a new signing secret (replacing the old one); False when the project does not exist."""
+def put_webhook_secret(project_id: str, secret_enc: str) -> bool:
+    """Store a new encrypted signing secret (replacing the old one); False when the project does not exist."""
     return _conditional_update(
         project_id,
-        UpdateExpression="SET webhook_secret = :secret",
+        UpdateExpression="SET webhook_secret_enc = :secret REMOVE webhook_secret",
         ConditionExpression="attribute_exists(PK)",
-        ExpressionAttributeValues={":secret": secret},
+        ExpressionAttributeValues={":secret": secret_enc},
     )
 
 

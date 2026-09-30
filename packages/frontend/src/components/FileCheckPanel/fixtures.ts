@@ -378,7 +378,7 @@ export const AMIT_PAN_MISMATCH_RESULT: FileCheckResult = {
   ],
 };
 
-/** NOT_READY_RESULT with the per-document reading cost the backend records. */
+/** NOT_READY_RESULT with the per-document facts extraction cost the backend records. */
 export const USAGE_RESULT: FileCheckResult = {
   ...NOT_READY_RESULT,
   applicants: [

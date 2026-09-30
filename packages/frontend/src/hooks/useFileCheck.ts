@@ -1,12 +1,14 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type {
-  ApplicantEraseRequest,
   ApplicantEraseResponse,
+  FileCheckApplicant,
   FileCheckChecklistSummary,
   FileCheckRequest,
   FileCheckResult,
 } from '../types/fileCheck';
 import {
+  eraseMayBeIncomplete,
+  eraseRequestBody,
   normalizeChecklists,
   parseEraseResponse,
   pickDefaultChecklistId,
@@ -15,9 +17,30 @@ import {
 interface UseFileCheckOptions {
   fetchApi: <T>(url: string, init?: RequestInit) => Promise<T>;
   projectId: string;
-  /** After an applicant's data was erased (e.g. reload the documents list). */
-  onApplicantErased?: (response: ApplicantEraseResponse) => void;
+  /**
+   * After an applicant's data was erased (e.g. reload the documents list);
+   * null when the erase failed without an answer and may have run in part.
+   */
+  onApplicantErased?: (response: ApplicantEraseResponse | null) => void;
 }
+
+/** The applicant of the verdict to erase: name, PAN and the documents shown. */
+export type EraseTarget = Pick<
+  FileCheckApplicant,
+  'applicant' | 'pan' | 'documents'
+>;
+
+export type EraseOutcome =
+  | { kind: 'erased'; response: ApplicantEraseResponse }
+  /** Refused before anything was deleted; eraseError says why. */
+  | { kind: 'failed' }
+  /**
+   * No usable answer (connection lost, gateway timeout, server error): the
+   * erase may have run in part. The verdict was cleared; eraseError says so.
+   */
+  | { kind: 'uncertain' }
+  /** A newer erase or a project switch replaced this one. */
+  | { kind: 'ignored' };
 
 /**
  * State for the File Check panel. The verdict is whatever
@@ -156,34 +179,20 @@ export function useFileCheck({
   }, [fetchApi, projectId, checklistId, applicant]);
 
   /**
-   * Permanently erases one applicant's documents and derived data. The
-   * applicant is sent by PAN when the verdict has one (a name can match two
-   * applicants: 409); `confirm` repeats the name (the API answers 400
-   * otherwise). On success the verdict is cleared: it lists erased data.
+   * Permanently erases one applicant's documents and derived data
+   * (eraseRequestBody: PAN first, the typed name, the documents the verdict
+   * shows). On success the verdict is cleared: it lists erased data. So it is
+   * when the answer is lost, since the erase may have run in part; the
+   * documents list is reloaded then too (onApplicantErased(null)).
    */
   const eraseApplicant = useCallback(
-    async (
-      target: { applicant: string; pan?: string | null },
-      confirm: string,
-    ): Promise<ApplicantEraseResponse | null> => {
+    async (target: EraseTarget, confirm: string): Promise<EraseOutcome> => {
       const seq = ++eraseSeq.current;
       const name = target.applicant;
       const pan = target.pan?.trim();
-      const body: ApplicantEraseRequest = { applicant: pan || name, confirm };
-      setErasing(true);
-      setEraseError(null);
-      try {
-        const raw = await fetchApi<unknown>(
-          `projects/${projectId}/applicants/erase`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-          },
-        );
-        if (seq !== eraseSeq.current) return null;
-        const response = parseEraseResponse(raw, name);
-        // The verdict (and any check still running) describes erased data.
+      const body = eraseRequestBody(target, confirm);
+      // The verdict (and any check still running) may describe erased data.
+      const clearVerdict = () => {
         runSeq.current += 1;
         setRunning(false);
         setResult(null);
@@ -196,14 +205,32 @@ export function useFileCheck({
             ? ''
             : current,
         );
+      };
+      setErasing(true);
+      setEraseError(null);
+      try {
+        const raw = await fetchApi<unknown>(
+          `projects/${projectId}/applicants/erase`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          },
+        );
+        if (seq !== eraseSeq.current) return { kind: 'ignored' };
+        const response = parseEraseResponse(raw, name);
+        clearVerdict();
         setEraseResult(response);
         onErasedRef.current?.(response);
-        return response;
+        return { kind: 'erased', response };
       } catch (err) {
-        if (seq !== eraseSeq.current) return null;
+        if (seq !== eraseSeq.current) return { kind: 'ignored' };
         console.error('Erase applicant failed:', err);
         setEraseError(err);
-        return null;
+        if (!eraseMayBeIncomplete(err)) return { kind: 'failed' };
+        clearVerdict();
+        onErasedRef.current?.(null);
+        return { kind: 'uncertain' };
       } finally {
         if (seq === eraseSeq.current) setErasing(false);
       }

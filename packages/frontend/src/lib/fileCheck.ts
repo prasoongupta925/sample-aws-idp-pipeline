@@ -2,6 +2,7 @@
 // statuses and verdicts are mapped to colours / icons / CSV cells only.
 import type {
   ApplicantDocument,
+  ApplicantEraseRequest,
   ApplicantEraseResponse,
   ApplicantUsageTotal,
   ChecklistFoirPolicy,
@@ -14,7 +15,7 @@ import type {
   FileCheckResult,
   FileCheckSkippedDocument,
 } from '../types/fileCheck';
-import { ApiError } from './apiError';
+import { ApiError, apiErrorDetail } from './apiError';
 
 /** Plan B's salaried personal-loan checklist (the engine's shipped default). */
 export const SALARIED_PERSONAL_LOAN_ID = 'salaried_personal_loan';
@@ -326,7 +327,11 @@ export type FindingSection =
   | 'Documents'
   | 'Not checked';
 
-/** Usage cells of a CSV row (documents read and their total). */
+/**
+ * Usage cells of a CSV row (documents read and their total): the tokens and
+ * cost of each document's facts extraction, the file-check step's one model
+ * call; the other analysis steps are not included.
+ */
 export interface FindingUsage {
   model_id?: string | null;
   input_tokens: number;
@@ -355,10 +360,11 @@ export const CSV_HEADERS = [
   'Status',
   'Detail',
   'Documents',
-  'Model',
-  'Input tokens',
-  'Output tokens',
-  'Cost (USD)',
+  // The facts extraction of each document only (see FindingUsage).
+  'Facts extraction model',
+  'Facts extraction input tokens',
+  'Facts extraction output tokens',
+  'Facts extraction cost (USD)',
 ] as const;
 
 const SKIPPED_GROUPS: {
@@ -601,7 +607,9 @@ function checklistFindings(
 
 /**
  * CSV rows of the documents read for one applicant, with the tokens and cost
- * of reading each, and a total row when the backend reports one.
+ * of each one's facts extraction, and a total row when the backend reports
+ * one (empty usage cells when no document has recorded usage, as the panel
+ * says "not recorded" rather than $0).
  */
 export function documentFindings(
   a: FileCheckApplicant,
@@ -633,18 +641,26 @@ export function documentFindings(
   });
   const total = applicantUsageTotal(a);
   if (total) {
+    const recorded = total.documents_with_usage > 0;
     findings.push({
       ...base,
-      item: 'Reading cost (total)',
+      item: 'Facts extraction cost (total)',
       status: 'INFO',
-      detail: `${total.documents_with_usage} of ${total.documents_total} documents with recorded usage`,
+      detail: [
+        recorded
+          ? 'file-check facts step only, other analysis steps not included'
+          : 'not recorded (analysed before costs were recorded)',
+        `${total.documents_with_usage} of ${total.documents_total} documents with recorded usage`,
+      ].join('; '),
       documents: [],
-      usage: {
-        model_id: null,
-        input_tokens: total.input_tokens,
-        output_tokens: total.output_tokens,
-        cost_usd: total.cost_usd,
-      },
+      usage: recorded
+        ? {
+            model_id: null,
+            input_tokens: total.input_tokens,
+            output_tokens: total.output_tokens,
+            cost_usd: total.cost_usd,
+          }
+        : null,
     });
   }
   return findings;
@@ -821,8 +837,67 @@ export function parseEraseResponse(
       name: text(d.name) || text(d.document_id),
       error: text(d.error),
     })),
+    delivery_log_redacted:
+      typeof o.delivery_log_redacted === 'number' &&
+      Number.isFinite(o.delivery_log_redacted)
+        ? o.delivery_log_redacted
+        : null,
+    not_erased: Array.isArray(o.not_erased)
+      ? o.not_erased.filter((v): v is string => typeof v === 'string')
+      : [],
     erased_at: text(o.erased_at),
   };
+}
+
+/** The document ids the verdict lists under an applicant, once each. */
+export function eraseDocumentIds(
+  applicant: Pick<FileCheckApplicant, 'documents'>,
+): string[] {
+  return Array.from(
+    new Set(
+      (applicant.documents ?? [])
+        .map((d) => d.document_id)
+        .filter((id): id is string => typeof id === 'string' && !!id.trim()),
+    ),
+  );
+}
+
+/**
+ * Body of POST .../applicants/erase for an applicant of the verdict: the PAN
+ * when there is one (a name can match two applicants: 409), the typed name,
+ * and the documents the verdict shows (409 when they changed since).
+ */
+export function eraseRequestBody(
+  applicant: Pick<FileCheckApplicant, 'applicant' | 'pan' | 'documents'>,
+  confirm: string,
+): ApplicantEraseRequest {
+  const pan = applicant.pan?.trim();
+  return {
+    applicant: pan || applicant.applicant,
+    confirm,
+    document_ids: eraseDocumentIds(applicant),
+  };
+}
+
+// The erase API's errors that come before anything is deleted
+// (packages/backend/app/routers/applicants.py).
+const ERASE_NOT_STARTED_DETAILS = [
+  'File check is not configured',
+  'Applicant lookup',
+];
+
+/**
+ * True when a failed erase may have deleted some or all documents: no answer
+ * (the connection dropped, or the answer was unreadable) or a 5xx that is not
+ * one of the API's own errors from before deleting (e.g. a gateway timeout).
+ * 4xx answers mean nothing was deleted.
+ */
+export function eraseMayBeIncomplete(error: unknown): boolean {
+  const status = apiErrorStatus(error);
+  if (status === null) return true;
+  if (status < 500) return false;
+  const detail = apiErrorDetail(error) ?? '';
+  return !ERASE_NOT_STARTED_DETAILS.some((d) => detail.startsWith(d));
 }
 
 /** Runs of spaces as one, as the page shows the name. */

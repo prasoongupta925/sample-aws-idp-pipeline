@@ -22,18 +22,31 @@ import {
 } from '../lib/integrations';
 import type { WebhookDelivery } from '../types/integrations';
 
-// Status codes of packages/backend/app/routers/integrations.py; the API's
-// detail (e.g. why a URL is refused) is shown as it is.
+// The API's own 503 details (packages/backend/app/routers/integrations.py);
+// any other 503 comes from the gateway, not from a missing setting.
+const NOT_CONFIGURED_DETAILS = [
+  'Webhook delivery is not configured',
+  'Webhook secret encryption is not configured',
+];
+
+// Status codes of packages/backend/app/routers/integrations.py: a localized
+// message first, then the API's detail (e.g. why a URL is refused, in
+// English) where the message is generic.
 export function describeWebhookError(t: TFunction, error: unknown): string {
   const detail = apiErrorDetail(error);
   const status = apiErrorStatus(error);
-  if (status === 404) return t('integrations.webhook.errors.notFound');
-  if (detail) return detail;
-  if (status === 503) return t('integrations.webhook.errors.notConfigured');
-  if (status !== null) {
-    return t('integrations.webhook.errors.status', { status });
+  if (status === null) {
+    return error instanceof Error ? error.message : String(error);
   }
-  return error instanceof Error ? error.message : String(error);
+  if (status === 404) return t('integrations.webhook.errors.notFound');
+  if (status === 503 && detail && NOT_CONFIGURED_DETAILS.includes(detail)) {
+    return t('integrations.webhook.errors.notConfigured');
+  }
+  const message =
+    status === 429
+      ? t('integrations.webhook.errors.tooMany')
+      : t('integrations.webhook.errors.status', { status });
+  return detail ? `${message} (${detail})` : message;
 }
 
 function formatAt(iso: string): string {
@@ -72,6 +85,109 @@ function DeliveryResult({ delivery }: { delivery: WebhookDelivery }) {
           {delivery.error}
         </p>
       )}
+    </div>
+  );
+}
+
+interface DeliveriesSectionProps {
+  deliveries: WebhookDelivery[];
+  loading: boolean;
+  /** A failed (re)load: the table may be out of date. */
+  loadError: unknown;
+  onRefresh: () => void;
+}
+
+/** Recent deliveries, with the reason when refreshing them failed. */
+export function DeliveriesSection({
+  deliveries,
+  loading,
+  loadError,
+  onRefresh,
+}: DeliveriesSectionProps) {
+  const { t } = useTranslation();
+  return (
+    <div className={SECTION_CLASS}>
+      <div className="flex items-center gap-2">
+        <h4 className="flex-1 text-sm font-medium text-slate-700 dark:text-slate-200">
+          {t('integrations.webhook.deliveries.title')}
+        </h4>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={loading}
+          className={BUTTON_CLASS}
+          aria-label={t('integrations.webhook.deliveries.refresh')}
+          title={t('integrations.webhook.deliveries.refresh')}
+        >
+          <RefreshCw
+            className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`}
+          />
+        </button>
+      </div>
+      {loadError != null && (
+        <p
+          role="alert"
+          data-testid="webhook-reload-error"
+          className="break-words rounded-lg border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs text-red-700 dark:border-red-800/50 dark:bg-red-900/20 dark:text-red-300"
+        >
+          {t('integrations.webhook.errors.reload', {
+            message: describeWebhookError(t, loadError),
+          })}
+        </p>
+      )}
+      {deliveries.length === 0 ? (
+        <p className="text-xs text-slate-500 dark:text-slate-400">
+          {t('integrations.webhook.deliveries.empty')}
+        </p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table
+            className="w-full text-left text-[11px] text-slate-600 dark:text-slate-300"
+            data-testid="webhook-deliveries"
+          >
+            <thead className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              <tr>
+                <th scope="col" className="py-1 pr-2 font-semibold">
+                  {t('integrations.webhook.deliveries.at')}
+                </th>
+                <th scope="col" className="py-1 pr-2 font-semibold">
+                  {t('integrations.webhook.deliveries.event')}
+                </th>
+                <th scope="col" className="py-1 pr-2 font-semibold">
+                  {t('integrations.webhook.deliveries.applicant')}
+                </th>
+                <th scope="col" className="py-1 font-semibold">
+                  {t('integrations.webhook.deliveries.result')}
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-black/[0.06] dark:divide-white/[0.06]">
+              {deliveries.map((d) => (
+                <tr key={d.delivery_id} className="align-top">
+                  <td
+                    className="whitespace-nowrap py-1.5 pr-2 tabular-nums"
+                    title={d.delivery_id}
+                  >
+                    {formatAt(d.at)}
+                  </td>
+                  <td className="py-1.5 pr-2 font-mono text-[10px]">
+                    {d.event || '–'}
+                  </td>
+                  <td className="break-words py-1.5 pr-2">
+                    {d.applicant || '–'}
+                  </td>
+                  <td className="py-1.5">
+                    <DeliveryResult delivery={d} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="text-[10px] text-slate-400">
+        {t('integrations.webhook.deliveries.retention')}
+      </p>
     </div>
   );
 }
@@ -534,78 +650,12 @@ export default function WebhookSettings({
       </div>
 
       {/* Deliveries */}
-      <div className={SECTION_CLASS}>
-        <div className="flex items-center gap-2">
-          <h4 className="flex-1 text-sm font-medium text-slate-700 dark:text-slate-200">
-            {t('integrations.webhook.deliveries.title')}
-          </h4>
-          <button
-            type="button"
-            onClick={() => load()}
-            disabled={loading}
-            className={BUTTON_CLASS}
-            aria-label={t('integrations.webhook.deliveries.refresh')}
-            title={t('integrations.webhook.deliveries.refresh')}
-          >
-            <RefreshCw
-              className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`}
-            />
-          </button>
-        </div>
-        {deliveries.length === 0 ? (
-          <p className="text-xs text-slate-500 dark:text-slate-400">
-            {t('integrations.webhook.deliveries.empty')}
-          </p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table
-              className="w-full text-left text-[11px] text-slate-600 dark:text-slate-300"
-              data-testid="webhook-deliveries"
-            >
-              <thead className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400">
-                <tr>
-                  <th scope="col" className="py-1 pr-2 font-semibold">
-                    {t('integrations.webhook.deliveries.at')}
-                  </th>
-                  <th scope="col" className="py-1 pr-2 font-semibold">
-                    {t('integrations.webhook.deliveries.event')}
-                  </th>
-                  <th scope="col" className="py-1 pr-2 font-semibold">
-                    {t('integrations.webhook.deliveries.applicant')}
-                  </th>
-                  <th scope="col" className="py-1 font-semibold">
-                    {t('integrations.webhook.deliveries.result')}
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-black/[0.06] dark:divide-white/[0.06]">
-                {deliveries.map((d) => (
-                  <tr key={d.delivery_id} className="align-top">
-                    <td
-                      className="whitespace-nowrap py-1.5 pr-2 tabular-nums"
-                      title={d.delivery_id}
-                    >
-                      {formatAt(d.at)}
-                    </td>
-                    <td className="py-1.5 pr-2 font-mono text-[10px]">
-                      {d.event || '–'}
-                    </td>
-                    <td className="break-words py-1.5 pr-2">
-                      {d.applicant || '–'}
-                    </td>
-                    <td className="py-1.5">
-                      <DeliveryResult delivery={d} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        <p className="text-[10px] text-slate-400">
-          {t('integrations.webhook.deliveries.retention')}
-        </p>
-      </div>
+      <DeliveriesSection
+        deliveries={deliveries}
+        loading={loading}
+        loadError={loadError}
+        onRefresh={() => load()}
+      />
 
       {/* How the receiver checks a delivery */}
       <div className={SECTION_CLASS} data-testid="webhook-verify">

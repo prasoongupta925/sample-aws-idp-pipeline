@@ -17,6 +17,7 @@ import type {
   FileCheckIncome,
   FileCheckItemRow,
   FileCheckResult,
+  PendingDocument,
 } from '../../types/fileCheck';
 import {
   applicantUsageTotal,
@@ -339,7 +340,7 @@ function IncomeGrid({ income }: { income: FileCheckIncome }) {
   );
 }
 
-/** "Reading this file cost $0.0123 for 5 documents (…tokens)". */
+/** "Facts extraction (the file-check step only) cost $0.0123 for 5 documents (…tokens). …" */
 export function usageTotalText(
   t: TFunction,
   total: ApplicantUsageTotal,
@@ -365,6 +366,10 @@ interface ApplicantSectionProps {
   checklistId?: string | null;
   /** The checklist's product id, for the reminder's {{product}}. */
   product?: string | null;
+  /** The verdict's as_of date, for the reminder's Form-16 / ITR year. */
+  asOf?: string | null;
+  /** The verdict's documents still being analysed (the reminder warns). */
+  pendingDocuments?: PendingDocument[];
   /** Opens the erase confirmation; the trigger gets focus back on cancel. */
   onErase?: (applicant: FileCheckApplicant, trigger: HTMLElement) => void;
 }
@@ -373,6 +378,8 @@ function ApplicantSection({
   applicant,
   checklistId,
   product,
+  asOf,
+  pendingDocuments,
   onErase,
 }: ApplicantSectionProps) {
   const { t } = useTranslation();
@@ -444,6 +451,8 @@ function ApplicantSection({
           applicant={applicant}
           checklistId={checklistId}
           product={product}
+          asOf={asOf}
+          pendingDocuments={pendingDocuments}
           onClose={closeReminder}
         />
       )}
@@ -732,6 +741,8 @@ export default function VerdictCard({
             applicant={a}
             checklistId={result.checklist?.id}
             product={product}
+            asOf={result.as_of}
+            pendingDocuments={result.pending_documents ?? []}
             onErase={onEraseApplicant}
           />
         ))}

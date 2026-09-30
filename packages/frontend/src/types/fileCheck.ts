@@ -97,8 +97,9 @@ export interface ChecklistRef {
 }
 
 /**
- * Tokens and cost of reading one document (the model calls of its analysis),
- * as recorded by the backend. null: not recorded for this document.
+ * Tokens and cost of one document's facts extraction (the file-check step's
+ * one model call; the other analysis steps are not included), as recorded by
+ * the backend. null: not recorded for this document.
  */
 export interface DocumentUsage {
   model_id?: string | null;
@@ -107,7 +108,7 @@ export interface DocumentUsage {
   cost_usd: number;
 }
 
-/** The applicant's documents' usage, summed by the backend. */
+/** The applicant's documents' facts-extraction usage, summed by the backend. */
 export interface ApplicantUsageTotal {
   input_tokens: number;
   output_tokens: number;
@@ -200,7 +201,7 @@ export interface ApplicantResult {
   obligations?: FileCheckObligations | null;
   /** Indicative FOIR, if the checklist enables it; the lender's policy decides. */
   foir?: FileCheckFoir | null;
-  /** Reading cost of this applicant's documents. Absent from older backends. */
+  /** Facts extraction cost of this applicant's documents. Absent from older backends. */
   usage_total?: ApplicantUsageTotal | null;
 }
 
@@ -450,13 +451,18 @@ export interface FileCheckUsage {
 
 // ------------------------------------------------------------------ erase
 // POST /projects/{project_id}/applicants/erase: permanently deletes every
-// document of one applicant and the data derived from them. `confirm` must
-// repeat the applicant's name exactly (400 otherwise); 404 when the project
-// has no such applicant.
+// document of one applicant and the data derived from them, and removes the
+// name from the webhook delivery log. `confirm` must repeat the applicant's
+// name exactly (400 otherwise) and `document_ids` must be exactly the
+// applicant's documents now (409 otherwise); 404 when the project has no such
+// applicant.
 
 export interface ApplicantEraseRequest {
+  /** PAN (preferred: a name can match two applicants) or name. */
   applicant: string;
   confirm: string;
+  /** The documents the verdict listed under the applicant (what the user confirmed). */
+  document_ids: string[];
 }
 
 export interface ErasedDocument {
@@ -474,6 +480,10 @@ export interface ApplicantEraseResponse {
   applicant: string;
   documents_deleted: ErasedDocument[];
   failed: EraseFailedDocument[];
+  /** Webhook delivery log entries the name was removed from; null when that failed. */
+  delivery_log_redacted: number | null;
+  /** What the erase does not delete, in the backend's words. */
+  not_erased: string[];
   /** ISO timestamp */
   erased_at: string;
 }

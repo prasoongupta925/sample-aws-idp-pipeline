@@ -8,6 +8,7 @@ the real DELETE /documents/{id} code. S3, the LanceDB Lambda and SQS are fakes
 that record their calls.
 """
 
+import copy
 import datetime as dt
 import io
 import json
@@ -66,6 +67,7 @@ class FakeTable:
     def __init__(self, items=()):
         self.items = {(i["PK"], i["SK"]): i for i in items}
         self.deletes = []
+        self.updates = []
         self.fail_delete = set()  # (PK, SK) keys whose delete raises
 
     def get_item(self, Key):
@@ -74,6 +76,19 @@ class FakeTable:
 
     def put_item(self, Item):
         self.items[(Item["PK"], Item["SK"])] = Item
+
+    def update_item(self, Key, UpdateExpression, ConditionExpression=None, ExpressionAttributeValues=None):
+        """The subset the erase uses on delivery log items: REMOVE applicant / SET applicant = :applicant."""
+        key = (Key["PK"], Key["SK"])
+        self.updates.append((key, UpdateExpression))
+        assert ConditionExpression == "attribute_exists(PK)"
+        if key not in self.items:
+            raise ClientError({"Error": {"Code": "ConditionalCheckFailedException"}}, "UpdateItem")
+        if UpdateExpression == "REMOVE applicant":
+            self.items[key].pop("applicant", None)
+        else:
+            assert UpdateExpression == "SET applicant = :applicant"
+            self.items[key]["applicant"] = ExpressionAttributeValues[":applicant"]
 
     def delete_item(self, Key):
         key = (Key["PK"], Key["SK"])
@@ -266,8 +281,31 @@ def world(monkeypatch):
         yield w
 
 
-def _erase(applicant=RAHUL_PAN, confirm=RAHUL, headers=HEADERS):
-    return client.post(ERASE, headers=headers, json={"applicant": applicant, "confirm": confirm})
+def ids(facts):
+    return [_doc_id(f) for f in facts]
+
+
+def _erase(applicant=RAHUL_PAN, confirm=RAHUL, headers=HEADERS, document_ids=None):
+    """POST the erase with the documents the verdict shows under Rahul, unless told otherwise."""
+    body = {
+        "applicant": applicant,
+        "confirm": confirm,
+        "document_ids": ids(rahul()) if document_ids is None else document_ids,
+    }
+    return client.post(ERASE, headers=headers, json=body)
+
+
+def delivery(n, applicant=None, project_id=PROJECT_ID):
+    item = {
+        "PK": f"PROJ#{project_id}",
+        "SK": f"WHDLV#2026-09-30T10:00:0{n}.000000+00:00#d-{n}",
+        "delivery_id": f"d-{n}",
+        "event": "file_check.completed",
+        "status": "delivered",
+    }
+    if applicant is not None:
+        item["applicant"] = applicant
+    return item
 
 
 # ------------------------------------------------------------------ happy path
@@ -278,7 +316,14 @@ class TestErase:
 
         assert response.status_code == 200
         data = response.json()
-        assert set(data) == {"applicant", "documents_deleted", "failed", "erased_at"}
+        assert set(data) == {
+            "applicant",
+            "documents_deleted",
+            "failed",
+            "delivery_log_redacted",
+            "not_erased",
+            "erased_at",
+        }
         assert data["applicant"] == RAHUL
         assert data["documents_deleted"] == [
             {"document_id": _doc_id(f), "name": f["document_name"]} for f in by_name(rahul())
@@ -309,6 +354,16 @@ class TestErase:
         assert {(b["project_id"], b["phase"]) for b in bodies} == {(PROJECT_ID, "clusters")}
         assert {c.kwargs["QueueUrl"] for c in world.sqs.send_message.call_args_list} == {QUEUE_URL}
 
+    def test_what_is_not_erased_is_stated(self, world):
+        data = _erase().json()
+
+        assert data["delivery_log_redacted"] == 0
+        assert data["not_erased"] == [
+            "Chat conversations and artifacts that mention the applicant: delete them in the chat and artifact "
+            "lists, or the retention sweep deletes them after 7 days",
+            "Verdicts the CRM webhook already delivered: erase them in the CRM",
+        ]
+
     def test_erase_by_name_and_the_second_erase_finds_nobody(self, world):
         first = _erase("Rahul V. Deshmukh", confirm=RAHUL)
         assert first.status_code == 200
@@ -332,7 +387,15 @@ class TestErase:
         assert response.status_code == 200
 
         (item,) = world.table.erase_items()
-        assert set(item) == {"PK", "SK", "documents_matched", "documents_deleted", "documents_failed", "expires_at"}
+        assert set(item) == {
+            "PK",
+            "SK",
+            "documents_matched",
+            "documents_deleted",
+            "documents_failed",
+            "delivery_log_redacted",
+            "expires_at",
+        }
         assert item["PK"] == f"PROJ#{PROJECT_ID}"
         prefix, stamp, token = item["SK"].split("#")
         assert prefix == "ERASE" and len(token) == 32
@@ -366,6 +429,122 @@ class TestErase:
         assert response.status_code == 200
         assert len(response.json()["documents_deleted"]) == 7
         assert "audit write failed" in capsys.readouterr().out
+
+
+# ------------------------------------------------------------------ what the user confirmed
+class TestConfirmedDocuments:
+    """The grouping runs again at request time: nothing is deleted unless it is what the user confirmed."""
+
+    def test_a_document_that_joined_the_applicant_since_the_check_is_409(self, world):
+        late = copy.deepcopy(rahul()[2])
+        late.update(document_id="r-late", document_name="08_salary_slip_2026-05_may.pdf")
+        late["fields"]["month"] = "2026-05"
+        for item in project_items([late]):
+            world.table.put_item(item)
+
+        response = _erase()  # confirms the 7 documents the verdict showed
+
+        assert response.status_code == 409
+        assert response.json() == {
+            "detail": (
+                "The applicant's documents changed since the check (8 now, 7 confirmed): run the file check "
+                "again and review them before erasing"
+            )
+        }
+        _nothing_deleted(world)
+
+    @pytest.mark.parametrize(
+        "document_ids",
+        [
+            ids(rahul())[:-1],  # one left out (it left the group, or the user never saw it)
+            ids(rahul()) + [ids(sneha())[0]],  # someone else's document
+            ids(sneha()),
+            ["no-such-document"],
+        ],
+    )
+    def test_any_other_set_is_409_and_nothing_is_deleted(self, world, document_ids):
+        response = _erase(document_ids=document_ids)
+
+        assert response.status_code == 409
+        _nothing_deleted(world)
+
+    def test_order_and_repeats_do_not_matter(self, world):
+        document_ids = list(reversed(ids(rahul()))) + ids(rahul())[:2]
+        assert _erase(document_ids=document_ids).status_code == 200
+
+    @pytest.mark.parametrize(
+        "document_ids",
+        [[], [""], ["  "], ["x" * 257], [f"d{n}" for n in range(501)], "r-01", None],
+    )
+    def test_invalid_document_ids_are_422(self, world, document_ids):
+        body = {"applicant": RAHUL_PAN, "confirm": RAHUL, "document_ids": document_ids}
+        response = client.post(ERASE, headers=HEADERS, json=body)
+
+        assert response.status_code == 422
+        assert world.file_check.calls == []
+        _nothing_deleted(world)
+
+
+# ------------------------------------------------------------------ webhook delivery log
+class TestDeliveryLog:
+    def test_the_name_is_removed_from_the_delivery_log(self, world, capsys):
+        for item in (
+            delivery(1, RAHUL),
+            delivery(2, f"Sneha Anil Kulkarni, {RAHUL}"),
+            delivery(3, "rahul  vijay DESHMUKH"),  # the same name, other spacing and case
+            delivery(4, "Sneha Anil Kulkarni"),
+            delivery(5),  # a test event: no applicant
+            delivery(6, RAHUL, project_id="proj_other"),
+        ):
+            world.table.put_item(item)
+
+        data = _erase().json()
+
+        assert data["delivery_log_redacted"] == 3
+        log = {sk: item for (pk, sk), item in world.table.items.items() if sk.startswith("WHDLV#")}
+        by_id = {item["delivery_id"]: item for item in log.values() if item["PK"] == f"PROJ#{PROJECT_ID}"}
+        assert "applicant" not in by_id["d-1"]
+        assert by_id["d-2"]["applicant"] == "Sneha Anil Kulkarni"
+        assert "applicant" not in by_id["d-3"]
+        assert by_id["d-4"]["applicant"] == "Sneha Anil Kulkarni"
+        assert "applicant" not in by_id["d-5"]
+        # The entries themselves stay (status, time); another project's log is not touched.
+        assert set(by_id) == {"d-1", "d-2", "d-3", "d-4", "d-5"}
+        assert world.table.items[("PROJ#proj_other", delivery(6)["SK"])]["applicant"] == RAHUL
+        (audit,) = world.table.erase_items()
+        assert audit["delivery_log_redacted"] == 3
+        assert RAHUL not in capsys.readouterr().out
+
+    def test_an_entry_deleted_by_ttl_meanwhile_is_not_recreated(self, world):
+        world.table.put_item(delivery(1, RAHUL))
+        real_query = world.table.query
+
+        def query_then_ttl(**kwargs):
+            page = real_query(**kwargs)
+            if kwargs.get("ProjectionExpression") == "PK, SK, applicant":  # the delivery log query
+                world.table.items.pop((f"PROJ#{PROJECT_ID}", delivery(1)["SK"]), None)
+            return page
+
+        world.table.query = query_then_ttl
+        data = _erase().json()
+
+        assert data["delivery_log_redacted"] == 0
+        assert (f"PROJ#{PROJECT_ID}", delivery(1)["SK"]) not in world.table.items
+
+    def test_a_failed_redaction_does_not_fail_the_erase_and_is_stated(self, world, capsys):
+        world.table.put_item(delivery(1, RAHUL))
+        world.table.update_item = MagicMock(
+            side_effect=ClientError({"Error": {"Code": "AccessDeniedException"}}, "UpdateItem")
+        )
+
+        response = _erase()
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["documents_deleted"]) == 7
+        assert data["delivery_log_redacted"] is None
+        assert data["not_erased"][-1] == "The applicant's name in the webhook delivery log: it expires after 7 days"
+        assert "delivery log not redacted" in capsys.readouterr().out
 
 
 # ------------------------------------------------------------------ partial failure
@@ -434,7 +613,7 @@ class TestPartialFailure:
             use_lambda(canned_lambda(payload)),
             patch("app.routers.applicants.delete_document") as shared,
         ):
-            data = _erase().json()
+            data = _erase(document_ids=["../other-project"]).json()
 
         shared.assert_not_called()
         assert data["failed"] == [{"document_id": "../other-project", "name": "x.pdf", "error": "invalid document id"}]
@@ -482,13 +661,13 @@ class TestRefusals:
         for item in project_items(namesakes):
             world.table.put_item(item)
 
-        response = _erase("Amit Patil", confirm="Amit Patil")
+        response = _erase("Amit Patil", confirm="Amit Patil", document_ids=["o-identity_details", "o-salary_slip"])
 
         assert response.status_code == 409
         assert "2 applicants match this name" in response.json()["detail"]
         _nothing_deleted(world)
         # the PAN still picks one of them
-        response = _erase("CCCPD2222R", confirm="amit s. patil")
+        response = _erase("CCCPD2222R", confirm="amit s. patil", document_ids=["t-identity_details", "t-salary_slip"])
         assert response.status_code == 200
         deleted = [d["document_id"] for d in response.json()["documents_deleted"]]
         assert deleted == ["t-identity_details", "t-salary_slip"]
@@ -501,7 +680,8 @@ class TestRefusals:
             {"applicant": "", "confirm": RAHUL},
             {"applicant": "   ", "confirm": RAHUL},
             {"applicant": RAHUL_PAN, "confirm": "  "},
-            {"applicant": RAHUL_PAN, "confirm": RAHUL, "force": True},
+            {"applicant": RAHUL_PAN, "confirm": RAHUL, "document_ids": ["r-01"], "force": True},
+            {"applicant": RAHUL_PAN, "confirm": RAHUL},  # no document_ids
             {"applicant": "x" * 201, "confirm": RAHUL},
         ],
     )
@@ -519,7 +699,9 @@ class TestRefusals:
 
     def test_invalid_project_id_is_422(self, world):
         response = client.post(
-            "/projects/proj%0Abad/applicants/erase", headers=HEADERS, json={"applicant": "x", "confirm": "x"}
+            "/projects/proj%0Abad/applicants/erase",
+            headers=HEADERS,
+            json={"applicant": "x", "confirm": "x", "document_ids": ["d"]},
         )
         assert response.status_code == 422
         _nothing_deleted(world)
@@ -556,7 +738,15 @@ def test_openapi_documents_the_contract():
     assert post["tags"] == ["applicants"]
     assert {"200", "400", "404", "409", "422", "502", "503"} <= set(post["responses"])
     schemas = spec["components"]["schemas"]
-    assert set(schemas["EraseRequest"]["properties"]) == {"applicant", "confirm"}
-    assert set(schemas["EraseResponse"]["properties"]) == {"applicant", "documents_deleted", "failed", "erased_at"}
+    assert set(schemas["EraseRequest"]["properties"]) == {"applicant", "confirm", "document_ids"}
+    assert set(schemas["EraseRequest"]["required"]) == {"applicant", "confirm", "document_ids"}
+    assert set(schemas["EraseResponse"]["properties"]) == {
+        "applicant",
+        "documents_deleted",
+        "failed",
+        "delivery_log_redacted",
+        "not_erased",
+        "erased_at",
+    }
     assert set(schemas["ErasedDocument"]["properties"]) == {"document_id", "name"}
     assert set(schemas["EraseFailedDocument"]["properties"]) == {"document_id", "name", "error"}

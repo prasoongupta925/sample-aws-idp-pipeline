@@ -2,12 +2,15 @@
 
 The router is mounted on a test app (main.py includes it in the real app).
 DynamoDB is a fake table that applies the module's SET / REMOVE updates and
-attribute_exists conditions, and the boto3 Lambda client is stubbed. One test
-runs the real delivery Lambda handler (packages/infra/src/functions/webhook)
-in-process with stubbed DNS and HTTP, so the backend <-> Lambda contract and
-the signature are checked end to end.
+attribute_exists conditions, KMS is a fake whose ciphertexts only decrypt with
+the key and encryption context they were made with, and the boto3 Lambda
+client is stubbed. One test runs the real delivery Lambda handler
+(packages/infra/src/functions/webhook) in-process with stubbed DNS and HTTP,
+so the backend <-> Lambda contract, the secret's encryption and the signature
+are checked end to end.
 """
 
+import base64
 import copy
 import importlib.util
 import io
@@ -27,7 +30,7 @@ from fastapi.testclient import TestClient
 import app.webhook_delivery as webhook_delivery
 from app.config import get_config
 from app.routers import integrations
-from app.webhook_security import verify_signature
+from app.webhook_security import secret_encryption_context, verify_signature
 
 webhook_app = FastAPI()
 webhook_app.include_router(integrations.router)
@@ -38,6 +41,7 @@ PROJECT_ID = "proj_demo"
 BASE = f"/projects/{PROJECT_ID}/integrations/webhook"
 FUNCTION_NAME = "idp-v2-webhook-delivery"
 CRM_URL = "https://crm.example.com/hooks/idp?token=abc"
+KEY_ARN = "arn:aws:kms:ap-south-1:111111111111:key/00000000-0000-4000-8000-000000000000"
 
 WEBHOOK_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "infra", "src", "functions", "webhook")
@@ -123,6 +127,46 @@ class FakeTable:
         return {"Items": copy.deepcopy(rows)}
 
 
+class FakeKms:
+    """KMS stub: a ciphertext decrypts only with the key and the encryption context it was made with."""
+
+    PREFIX = b"fake-kms:"
+
+    def __init__(self, encrypt_error=None):
+        self.encrypts = []
+        self.decrypts = []
+        self.encrypt_error = encrypt_error
+
+    def encrypt(self, KeyId, Plaintext, EncryptionContext):
+        self.encrypts.append({"KeyId": KeyId, "EncryptionContext": EncryptionContext})
+        if self.encrypt_error is not None:
+            raise self.encrypt_error
+        blob = json.dumps({"key": KeyId, "context": EncryptionContext, "pt": base64.b64encode(Plaintext).decode()})
+        return {"CiphertextBlob": self.PREFIX + blob.encode("utf-8"), "KeyId": KeyId}
+
+    def decrypt(self, CiphertextBlob, KeyId=None, EncryptionContext=None):
+        self.decrypts.append({"KeyId": KeyId, "EncryptionContext": EncryptionContext})
+        invalid = ClientError({"Error": {"Code": "InvalidCiphertextException", "Message": "x"}}, "Decrypt")
+        if not CiphertextBlob.startswith(self.PREFIX):
+            raise invalid
+        data = json.loads(CiphertextBlob[len(self.PREFIX) :])
+        if (KeyId, EncryptionContext) != (data["key"], data["context"]):
+            raise invalid
+        return {"Plaintext": base64.b64decode(data["pt"]), "KeyId": data["key"]}
+
+    def open(self, secret_enc, project_id=PROJECT_ID):
+        """The plaintext of a stored secret, as the delivery Lambda decrypts it."""
+        blob = base64.b64decode(secret_enc)
+        return self.decrypt(blob, KeyId=KEY_ARN, EncryptionContext=secret_encryption_context(project_id))[
+            "Plaintext"
+        ].decode("utf-8")
+
+
+def sealed(secret, project_id=PROJECT_ID):
+    blob = FakeKms().encrypt(KEY_ARN, secret.encode("utf-8"), secret_encryption_context(project_id))["CiphertextBlob"]
+    return base64.b64encode(blob).decode("ascii")
+
+
 META = {
     "PK": f"PROJ#{PROJECT_ID}",
     "SK": "META",
@@ -169,8 +213,16 @@ def table():
 
 
 @pytest.fixture
-def configured(monkeypatch):
+def kms():
+    fake = FakeKms()
+    with patch("app.webhook_secret.get_kms_client", return_value=fake):
+        yield fake
+
+
+@pytest.fixture
+def configured(monkeypatch, kms):
     monkeypatch.setattr(get_config(), "webhook_function_name", FUNCTION_NAME)
+    monkeypatch.setattr(get_config(), "webhook_secret_key_arn", KEY_ARN)
     monkeypatch.setattr(get_config(), "retention_days", 7)
 
 
@@ -184,6 +236,16 @@ def canned_lambda(payload=None, function_error=None, raw=None, error=None):
     if function_error:
         response["FunctionError"] = function_error
     stub.invoke.return_value = response
+    return stub
+
+
+def repeating_lambda(payload):
+    """Like canned_lambda, with a fresh response body for every invoke."""
+    stub = MagicMock()
+    stub.invoke.side_effect = lambda **kwargs: {
+        "StatusCode": 200,
+        "Payload": io.BytesIO(json.dumps(payload).encode("utf-8")),
+    }
     return stub
 
 
@@ -201,7 +263,7 @@ def put(url, enabled):
 
 def with_secret(table, secret="s" * 43, url=CRM_URL, enabled=False):
     item = meta(table)
-    item["webhook_secret"] = secret
+    item["webhook_secret_enc"] = sealed(secret)
     if url:
         item["webhook_url"] = url
     item["webhook_enabled"] = enabled
@@ -295,7 +357,7 @@ class TestSettings:
         assert response.json()["url"] is None
         assert response.json()["enabled"] is False
         assert "webhook_url" not in meta(table)
-        assert meta(table)["webhook_secret"] == "s" * 43  # the secret stays
+        assert meta(table)["webhook_secret_enc"] == sealed("s" * 43)  # the secret stays
 
     @pytest.mark.parametrize(
         ("url", "message"),
@@ -305,6 +367,8 @@ class TestSettings:
             ("https://169.254.169.254/latest/meta-data/", "private, loopback, link-local or reserved"),
             ("https://10.0.0.5/hook", "private, loopback, link-local or reserved"),
             ("https://127.0.0.1:8080/hook", "private, loopback, link-local or reserved"),
+            ("https://crm.example.com:8080/hook", "port must be 443"),
+            ("https://[::ffff:0:a9fe:a9fe]/hook", "private, loopback, link-local or reserved"),
             ("https://[::1]/hook", "private, loopback, link-local or reserved"),
             ("https://[fd00:ec2::254]/hook", "private, loopback, link-local or reserved"),
             ("https://localhost/hook", "internal name"),
@@ -334,27 +398,69 @@ class TestSettings:
 
 # ------------------------------------------------------------------ secret
 class TestSecret:
-    def test_secret_is_returned_once_and_only_flagged_later(self, table, configured):
+    def test_secret_is_returned_once_and_only_flagged_later(self, table, configured, kms):
         response = client.post(f"{BASE}/secret", headers=HEADERS)
 
         assert response.status_code == 200
         assert response.headers["cache-control"] == "no-store"
         secret = response.json()["secret"]
         assert re.fullmatch(r"[A-Za-z0-9_-]{43}", secret)
-        assert meta(table)["webhook_secret"] == secret
 
         got = client.get(BASE, headers=HEADERS)
         assert got.json()["secret_set"] is True
         assert secret not in got.text
         assert secret not in put(CRM_URL, True).text
 
-    def test_new_secret_replaces_the_old_one(self, table, configured):
+    def test_only_the_kms_ciphertext_is_stored(self, table, configured, kms):
+        secret = client.post(f"{BASE}/secret", headers=HEADERS).json()["secret"]
+
+        stored = meta(table)
+        assert "webhook_secret" not in stored
+        assert secret not in json.dumps(stored)
+        # Encrypted with the webhook key and bound to this project (the Lambda decrypts with the same context).
+        assert kms.encrypts == [
+            {"KeyId": KEY_ARN, "EncryptionContext": {"project_id": PROJECT_ID, "purpose": "webhook-signing-secret"}}
+        ]
+        assert kms.open(stored["webhook_secret_enc"]) == secret
+        with pytest.raises(ClientError):
+            kms.open(stored["webhook_secret_enc"], project_id="proj_other")
+
+    def test_new_secret_replaces_the_old_one(self, table, configured, kms):
         first = client.post(f"{BASE}/secret", headers=HEADERS).json()["secret"]
         second = client.post(f"{BASE}/secret", headers=HEADERS).json()["secret"]
 
         assert first != second
-        assert meta(table)["webhook_secret"] == second
+        assert kms.open(meta(table)["webhook_secret_enc"]) == second
         assert {k: v for k, v in meta(table).items() if not k.startswith("webhook_")} == META
+
+    def test_a_plaintext_secret_of_an_earlier_build_is_not_a_secret_and_is_removed(self, table, configured):
+        meta(table)["webhook_secret"] = "p" * 43
+
+        assert client.get(BASE, headers=HEADERS).json()["secret_set"] is False
+        assert put(CRM_URL, True).status_code == 400  # enabling still needs a (new) secret
+        assert client.post(f"{BASE}/secret", headers=HEADERS).status_code == 200
+        assert "webhook_secret" not in meta(table)
+
+    def test_key_not_configured_is_503_and_nothing_is_stored(self, table, configured, monkeypatch):
+        monkeypatch.setattr(get_config(), "webhook_secret_key_arn", "")
+
+        response = client.post(f"{BASE}/secret", headers=HEADERS)
+
+        assert response.status_code == 503
+        assert response.json() == {"detail": "Webhook secret encryption is not configured"}
+        assert not table.updates
+
+    def test_kms_failure_is_502_and_nothing_is_stored(self, table, configured, kms):
+        kms.encrypt_error = ClientError({"Error": {"Code": "AccessDeniedException", "Message": "no"}}, "Encrypt")
+
+        response = client.post(f"{BASE}/secret", headers=HEADERS)
+
+        assert response.status_code == 502
+        assert response.json() == {
+            "detail": "The signing secret could not be encrypted: encrypt failed (AccessDeniedException)"
+        }
+        assert not table.updates
+        assert "secret" not in response.json()
 
 
 # ------------------------------------------------------------------ deliveries
@@ -438,6 +544,48 @@ class TestTestEvent:
         assert response.status_code == 200
         assert response.json() == {"delivery_id": "d-2", "status": "failed", "http_status": 500, "error": "HTTP 500"}
 
+    def test_one_test_per_project_every_10_seconds(self, table, configured, monkeypatch):
+        clock = {"now": 1000.0}
+        monkeypatch.setattr(webhook_delivery, "_monotonic", lambda: clock["now"])
+        with_secret(table)
+        stub = repeating_lambda({"delivery_id": "d-1", "status": "delivered", "http_status": 204, "error": None})
+        with use_lambda(stub):
+            assert client.post(f"{BASE}/test", headers=HEADERS).status_code == 200
+            clock["now"] += 4
+            second = client.post(f"{BASE}/test", headers=HEADERS)
+            assert second.status_code == 429
+            assert second.headers["retry-after"] == "6"
+            assert second.json() == {"detail": "Wait 6 s before sending another test event"}
+            # Another project is not held back by this one.
+            other = copy.deepcopy(META)
+            other.update(PK="PROJ#proj_other", webhook_url=CRM_URL, webhook_secret_enc=sealed("o" * 43, "proj_other"))
+            table.put_item(other)
+            assert client.post("/projects/proj_other/integrations/webhook/test", headers=HEADERS).status_code == 200
+            clock["now"] += 6
+            assert client.post(f"{BASE}/test", headers=HEADERS).status_code == 200
+        assert stub.invoke.call_count == 3
+
+    def test_only_a_few_tests_run_at_a_time(self, table, configured):
+        with_secret(table)
+        for n in range(webhook_delivery.MAX_CONCURRENT_TESTS):
+            webhook_delivery._begin_test(f"proj_busy{n}")
+        stub = canned_lambda({"delivery_id": "d-1", "status": "delivered", "http_status": 204, "error": None})
+        with use_lambda(stub):
+            response = client.post(f"{BASE}/test", headers=HEADERS)
+            assert response.status_code == 429
+            assert "Too many test events" in response.json()["detail"]
+            stub.invoke.assert_not_called()
+            webhook_delivery._end_test()
+            webhook_delivery._last_test_at.pop(PROJECT_ID, None)  # the refused call did not count
+            assert client.post(f"{BASE}/test", headers=HEADERS).status_code == 200
+
+    def test_a_failed_invoke_frees_its_slot(self, table, configured):
+        with_secret(table)
+        error = ClientError({"Error": {"Code": "TooManyRequestsException", "Message": "x"}}, "Invoke")
+        with use_lambda(canned_lambda(error=error)):
+            assert client.post(f"{BASE}/test", headers=HEADERS).status_code == 502
+        assert webhook_delivery._running_tests == 0
+
     @pytest.mark.parametrize(
         ("stub", "status"),
         [
@@ -485,13 +633,15 @@ class InProcessLambda:
         return {"StatusCode": 200, "Payload": io.BytesIO(json.dumps(result).encode("utf-8"))}
 
 
-def test_end_to_end_test_event_is_signed_and_logged(table, configured, monkeypatch):
+def test_end_to_end_test_event_is_signed_and_logged(table, configured, kms, monkeypatch):
     lam = _load_webhook_lambda()
     monkeypatch.setattr(lam, "_table", table)
+    monkeypatch.setattr(lam, "_kms_client", kms)  # the backend's ciphertext, decrypted by the Lambda
+    monkeypatch.setattr(lam, "SECRET_KEY_ARN", KEY_ARN)
     monkeypatch.setattr(lam, "_resolve", lambda host, port, type=None: [(2, 1, 6, "", ("93.184.216.34", port))])
     sent = []
 
-    def fake_post(target, addresses, body, headers):
+    def fake_post(target, addresses, body, headers, timeout_s=None):
         sent.append((target, addresses, body, headers))
         return 200
 
@@ -534,4 +684,7 @@ def test_end_to_end_test_event_is_signed_and_logged(table, configured, monkeypat
     ]
     (log_item,) = [i for i in table.puts if i["SK"].startswith("WHDLV#")]
     assert secret not in json.dumps(log_item, default=str)
+    assert kms.decrypts == [
+        {"KeyId": KEY_ARN, "EncryptionContext": {"project_id": PROJECT_ID, "purpose": "webhook-signing-secret"}}
+    ]
     assert 7 * 86400 - 60 <= log_item["expires_at"] - int(datetime.now(UTC).timestamp()) <= 7 * 86400

@@ -64,6 +64,10 @@ export class ApplicationStack extends Stack {
     const backend = new Backend(this, 'Backend', { vpc });
 
     const frontend = new Frontend(this, 'Frontend');
+    // Publish a new web app only after the backend task it calls is running
+    // (on an update the ECS service must reach a steady state first), so a new
+    // bundle never goes live against an old backend.
+    frontend.bucketDeployment.node.addDependency(backend.service);
 
     new StringParameter(this, 'BackendUrlParam', {
       parameterName: SSM_KEYS.BACKEND_URL,

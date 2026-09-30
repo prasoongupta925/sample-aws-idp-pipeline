@@ -33,6 +33,7 @@ def test_lambda_copy_is_identical():
         ("HTTPS://CRM.Example.COM/Hook", "crm.example.com", 443, "/Hook"),
         ("https://crm.example.com./in", "crm.example.com", 443, "/in"),
         ("https://crm.example.com:8443/in", "crm.example.com", 8443, "/in"),
+        ("https://crm.example.com:443/in", "crm.example.com", 443, "/in"),
         ("https://api.smart-dial.co.in/v1/idp", "api.smart-dial.co.in", 443, "/v1/idp"),
         ("https://8.8.8.8/x", "8.8.8.8", 443, "/x"),
         ("https://[2606:4700:4700::1111]:8443/a", "2606:4700:4700::1111", 8443, "/a"),
@@ -62,6 +63,10 @@ def test_accepts_exactly_2048_characters():
         ("https://crm.example.com:0/", "invalid port"),
         ("https://crm.example.com:99999/", "invalid port"),
         ("https://crm.example.com:443:80/", "invalid port"),
+        ("https://crm.example.com:22/", "port must be 443"),
+        ("https://crm.example.com:80/", "port must be 443"),
+        ("https://crm.example.com:6379/", "port must be 443"),
+        ("https://8.8.8.8:8080/x", "port must be 443"),
         ("https://crm.example.com/a b", "spaces"),
         ("https://crm.example.com/\x00", "control characters"),
         ("https://crm.example.com\\@evil.com/", "backslashes"),
@@ -106,6 +111,11 @@ def test_rejects_longer_than_2048_characters():
         "[64:ff9b::a9fe:a9fe]",  # NAT64 of 169.254.169.254
         "[2002:7f00:1::]",  # 6to4 of 127.0.0.1
         "[::127.0.0.1]",  # IPv4-compatible
+        "[::ffff:0:127.0.0.1]",  # IPv4-translated (SIIT) loopback
+        "[::ffff:0:a9fe:a9fe]",  # IPv4-translated 169.254.169.254
+        "[::ffff:0:8.8.8.8]",  # IPv4-translated, even of a public address
+        "[4000::1]",  # reserved: outside global unicast 2000::/3
+        "[e000::1]",
         "[ff02::1]",  # multicast
     ],
 )
@@ -190,6 +200,9 @@ def test_resolve_returns_public_addresses_ipv4_first_without_duplicates():
         ("fd00:ec2::254",),
         ("fe80::1%2",),
         ("::ffff:10.0.0.5",),
+        ("::ffff:0:a9fe:a9fe",),  # IPv4-translated instance metadata
+        ("::ffff:0:7f00:1",),  # IPv4-translated loopback
+        ("4000::1",),  # reserved IPv6 that ipaddress calls global
         ("93.184.216.34", "10.0.0.5"),  # one private answer blocks the lot (DNS rebinding)
     ],
 )
@@ -218,8 +231,16 @@ def test_resolve_without_addresses_is_an_os_error():
         ("93.184.216.34", True),
         ("2606:4700:4700::1111", True),
         ("::ffff:93.184.216.34", True),
+        ("2001:4860:4860::8888", True),
         ("169.254.169.254", False),
         ("fd00:ec2::254", False),
+        # IPv4-translated (::ffff:0:0:0/96): ipaddress calls these global.
+        ("::ffff:0:7f00:1", False),
+        ("::ffff:0:a9fe:a9fe", False),
+        ("::ffff:0:808:808", False),
+        # Reserved IPv6 outside 2000::/3 that ipaddress also calls global.
+        ("4000::1", False),
+        ("e000::1", False),
         ("not-an-ip", False),
     ],
 )

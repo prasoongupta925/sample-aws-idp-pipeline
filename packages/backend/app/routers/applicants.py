@@ -14,22 +14,32 @@ the verdict (still being analysed, failed, without facts, spreadsheets,
 unassigned) are not touched.
 
 The caller must repeat the applicant's name, as the verdict shows it, in
-`confirm`. One audit item with counts only (no name, PAN, document ids or
-caller) is written as PROJ#{project_id} / ERASE#{timestamp}#{uuid}; DynamoDB
-TTL on expires_at removes it after the retention period (default 7 days).
+`confirm`, and list the documents it confirmed in `document_ids`: the grouping
+is done again at request time, so when documents joined or left the applicant
+since the check, nothing is deleted (409). The applicant's name is also
+removed from the project's webhook delivery log (WHDLV# items). Not erased
+here, and listed in `not_erased`: chat conversations and artifacts that
+mention the applicant (the retention sweep deletes them after the retention
+period) and verdicts the webhook already sent to the CRM.
+
+One audit item with counts only (no name, PAN, document ids or caller) is
+written as PROJ#{project_id} / ERASE#{timestamp}#{uuid}; DynamoDB TTL on
+expires_at removes it after the retention period (default 7 days).
 """
 
 import datetime as dt
 import uuid
-from typing import Any
+from typing import Annotated, Any
 
+from boto3.dynamodb.conditions import Key
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
 from app.config import get_config
 from app.ddb import get_project_item, get_table
 from app.ddb.ask_usage import TTL_ATTRIBUTE
+from app.ddb.webhooks import DELIVERY_SK_PREFIX
 from app.file_check import (
     FileCheckNotConfiguredError,
     FileCheckServiceError,
@@ -43,6 +53,9 @@ from app.safe_ids import is_safe_segment
 router = APIRouter(prefix="/projects/{project_id}/applicants", tags=["applicants"])
 
 ERASE_SK_PREFIX = "ERASE#"
+MAX_CONFIRMED_DOCUMENTS = 500
+
+DocumentId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=256)]
 
 
 class EraseRequest(BaseModel):
@@ -51,8 +64,11 @@ class EraseRequest(BaseModel):
         str_strip_whitespace=True,
         json_schema_extra={
             "examples": [
-                {"applicant": "CKRPK7314M", "confirm": "Sneha Anil Kulkarni"},
-                {"applicant": "Rahul Vijay Deshmukh", "confirm": "rahul vijay deshmukh"},
+                {
+                    "applicant": "CKRPK7314M",
+                    "confirm": "Sneha Anil Kulkarni",
+                    "document_ids": ["doc_01", "doc_02", "doc_03", "doc_04", "doc_05"],
+                },
             ]
         },
     )
@@ -68,6 +84,14 @@ class EraseRequest(BaseModel):
         description=(
             "The applicant's name exactly as the file check shows it (`applicants[].applicant`); "
             "case and spacing are ignored"
+        ),
+    )
+    document_ids: list[DocumentId] = Field(
+        min_length=1,
+        max_length=MAX_CONFIRMED_DOCUMENTS,
+        description=(
+            "The documents the user confirmed: `applicants[].documents[].document_id` of the file check. "
+            "Nothing is deleted (409) unless they are exactly the applicant's documents now."
         ),
     )
 
@@ -92,6 +116,15 @@ class EraseResponse(BaseModel):
             "cleanup failed; the erasure of these is incomplete"
         )
     )
+    delivery_log_redacted: int | None = Field(
+        description=(
+            "Webhook delivery log entries the applicant's name was removed from; null when that failed "
+            "(the entries then expire after the retention period, see not_erased)"
+        )
+    )
+    not_erased: list[str] = Field(
+        description="What this erase does not delete (data outside the documents); handle it separately"
+    )
     erased_at: dt.datetime
 
 
@@ -107,7 +140,13 @@ class _ApplicantDocuments(BaseModel):
 _ERRORS: dict[int | str, dict[str, Any]] = {
     400: {"model": ErrorResponse, "description": "`confirm` is not the applicant's name"},
     404: {"model": ErrorResponse, "description": "Project not found, or no such applicant in it"},
-    409: {"model": ErrorResponse, "description": "More than one applicant matches the name (erase by PAN)"},
+    409: {
+        "model": ErrorResponse,
+        "description": (
+            "More than one applicant matches the name (erase by PAN), or the applicant's documents are not "
+            "the ones confirmed in document_ids (run the file check again)"
+        ),
+    },
     502: {"model": ErrorResponse, "description": "The applicant lookup failed or answered unexpectedly"},
     503: {"model": ErrorResponse, "description": "The file-check service is not configured"},
 }
@@ -156,7 +195,70 @@ def _delete(project_id: str, document_id: str) -> str | None:
     return None
 
 
-def _write_audit(project_id: str, erased_at: dt.datetime, *, matched: int, deleted: int, failed: int) -> None:
+def _without_name(applicants: str, name: str) -> str | None:
+    """A delivery item's comma-separated applicant names without `name`; None when none is left."""
+    kept = [n.strip() for n in applicants.split(",") if n.strip() and _folded(n) != _folded(name)]
+    return ", ".join(kept) or None
+
+
+def _redact_delivery_log(project_id: str, name: str) -> int | None:
+    """Remove the applicant's name from the project's webhook delivery log; entries changed, None on failure."""
+    table = get_table()
+    changed = 0
+    kwargs: dict[str, Any] = {
+        "KeyConditionExpression": Key("PK").eq(f"PROJ#{project_id}") & Key("SK").begins_with(DELIVERY_SK_PREFIX),
+        "ProjectionExpression": "PK, SK, applicant",
+    }
+    try:
+        while True:
+            page = table.query(**kwargs)
+            for item in page.get("Items", []):
+                applicants = item.get("applicant")
+                if not isinstance(applicants, str):
+                    continue
+                rest = _without_name(applicants, name)
+                if rest == applicants:
+                    continue
+                update: dict[str, Any] = {
+                    "Key": {"PK": item["PK"], "SK": item["SK"]},
+                    # Never re-create an entry that TTL has just deleted.
+                    "ConditionExpression": "attribute_exists(PK)",
+                }
+                if rest is None:
+                    update["UpdateExpression"] = "REMOVE applicant"
+                else:
+                    update["UpdateExpression"] = "SET applicant = :applicant"
+                    update["ExpressionAttributeValues"] = {":applicant": rest}
+                try:
+                    table.update_item(**update)
+                except ClientError as e:
+                    if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+                        raise
+                    continue
+                changed += 1
+            if not page.get("LastEvaluatedKey"):
+                return changed
+            kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+    except (ClientError, BotoCoreError) as e:
+        print(f"applicant erase: delivery log not redacted project={project_id} ({type(e).__name__})")
+        return None
+
+
+def _not_erased(delivery_log_redacted: int | None) -> list[str]:
+    days = get_config().retention_days
+    items = [
+        "Chat conversations and artifacts that mention the applicant: delete them in the chat and artifact "
+        f"lists, or the retention sweep deletes them after {days} days",
+        "Verdicts the CRM webhook already delivered: erase them in the CRM",
+    ]
+    if delivery_log_redacted is None:
+        items.append(f"The applicant's name in the webhook delivery log: it expires after {days} days")
+    return items
+
+
+def _write_audit(
+    project_id: str, erased_at: dt.datetime, *, matched: int, deleted: int, failed: int, redacted: int
+) -> None:
     """One ERASE# item with counts only; DynamoDB TTL deletes it after the retention period."""
     item = {
         "PK": f"PROJ#{project_id}",
@@ -164,6 +266,7 @@ def _write_audit(project_id: str, erased_at: dt.datetime, *, matched: int, delet
         "documents_matched": matched,
         "documents_deleted": deleted,
         "documents_failed": failed,
+        "delivery_log_redacted": redacted,
         TTL_ATTRIBUTE: int(erased_at.timestamp()) + get_config().retention_days * 86400,
     }
     try:
@@ -185,7 +288,9 @@ def erase_applicant(project_id: ProjectId, user_id: UserId, request: EraseReques
     A document that fails is reported in `failed` and the others are still deleted.
     The applicant is resolved like the file check's applicant filter (PAN first,
     else a compatible name); `confirm` must be the applicant's name as the file
-    check shows it.
+    check shows it, and `document_ids` exactly the applicant's documents now
+    (409 otherwise: the file changed since the check). The name is removed from
+    the webhook delivery log; `not_erased` lists what this does not delete.
     """
     if not get_project_item(project_id):
         raise HTTPException(status_code=404, detail="Project not found")
@@ -201,6 +306,16 @@ def erase_applicant(project_id: ProjectId, user_id: UserId, request: EraseReques
         raise HTTPException(status_code=404, detail="Applicant not found in this project")
     if _folded(request.confirm) != _folded(found.applicant_name):
         raise HTTPException(status_code=400, detail="confirm does not match the applicant's name")
+    current = {doc.document_id for doc in found.documents}
+    confirmed = set(request.document_ids)
+    if current != confirmed:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"The applicant's documents changed since the check ({len(current)} now, {len(confirmed)} "
+                "confirmed): run the file check again and review them before erasing"
+            ),
+        )
 
     deleted: list[ErasedDocument] = []
     failed: list[EraseFailedDocument] = []
@@ -212,11 +327,26 @@ def erase_applicant(project_id: ProjectId, user_id: UserId, request: EraseReques
         else:
             deleted.append(doc)
 
+    redacted = _redact_delivery_log(project_id, found.applicant_name)
     erased_at = dt.datetime.now(dt.UTC)
-    _write_audit(project_id, erased_at, matched=len(found.documents), deleted=len(deleted), failed=len(failed))
+    _write_audit(
+        project_id,
+        erased_at,
+        matched=len(found.documents),
+        deleted=len(deleted),
+        failed=len(failed),
+        redacted=redacted or 0,
+    )
     # Counts only: never the applicant's name or PAN.
     print(
         f"applicant erase user={user_id} project={project_id} documents={len(found.documents)} "
-        f"deleted={len(deleted)} failed={len(failed)}"
+        f"deleted={len(deleted)} failed={len(failed)} delivery_log_redacted={redacted}"
     )
-    return EraseResponse(applicant=found.applicant_name, documents_deleted=deleted, failed=failed, erased_at=erased_at)
+    return EraseResponse(
+        applicant=found.applicant_name,
+        documents_deleted=deleted,
+        failed=failed,
+        delivery_log_redacted=redacted,
+        not_erased=_not_erased(redacted),
+        erased_at=erased_at,
+    )

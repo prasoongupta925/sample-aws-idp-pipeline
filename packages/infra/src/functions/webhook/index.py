@@ -5,19 +5,26 @@ Input: {"project_id": "...", "document_id": "..." (optional), "event": "file_che
   document's analysis completes and the project's webhook is enabled;
 - test: invoked synchronously by POST /projects/{id}/integrations/webhook/test.
 
-1. Load the project META item (webhook_url, webhook_enabled, webhook_secret) with a
+1. Load the project META item (webhook_url, webhook_enabled, webhook_secret_enc) with a
    strongly consistent read. file_check.completed needs the webhook enabled; test needs
    only a URL and a secret. Otherwise answer {"status": "skipped"} and call nothing.
+   The secret is stored encrypted with the webhook KMS key (WEBHOOK_SECRET_KEY_ARN,
+   encryption context webhook_security.secret_encryption_context); this function is
+   the only one allowed to decrypt it.
 2. file_check.completed: run the deterministic file check (the file-check Lambda,
    invoked like the backend does: tool name in ClientContext) and report the
-   applicant(s) the document belongs to, or every applicant when the result does not
-   tell. test: no file check and no applicant data (results = []).
+   applicant(s) the document belongs to. A document the check cannot attribute
+   (still pending, failed, without facts, unsupported, unassigned) gets one
+   project-level result without applicant data. test: no file check and no applicant
+   data (results = []).
 3. POST {event, delivery_id, project_id, document_id, at, results} as JSON with the
    X-SmartDial-Event, X-SmartDial-Delivery and X-SmartDial-Signature headers
-   (webhook_security.sign_payload): 5 s timeout, up to 3 attempts (1 s and 2 s backoff)
-   on 5xx and network errors, no retry on other answers, redirects never followed. The
-   URL is checked again, the host is resolved once and the delivery is refused when any
-   address is not public; the connection goes to those addresses only.
+   (webhook_security.sign_payload): each attempt gets 5 s in total (connect, TLS,
+   request and response headers; at most 2 addresses tried), up to 3 attempts (1 s and
+   2 s backoff) within 25 s on 5xx and network errors, no retry on other answers,
+   redirects never followed. The URL is checked again, the host is resolved once and
+   the delivery is refused when any address is not public; the connection goes to
+   those addresses only.
 4. Record one delivery item PK=PROJ#{project_id}, SK=WHDLV#{at}#{delivery_id} with
    expires_at = now + RETENTION_DAYS (DynamoDB TTL) and answer
    {delivery_id, status, http_status, error}.
@@ -35,6 +42,7 @@ import os
 import re
 import socket
 import ssl
+import threading
 import time
 import traceback
 import uuid
@@ -46,6 +54,8 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 TABLE_NAME = os.environ.get("BACKEND_TABLE_NAME", "")
 FILE_CHECK_FUNCTION_NAME = os.environ.get("FILE_CHECK_FUNCTION_NAME", "")
+# KMS key of the stored signing secrets (WebhookStack); only this function may decrypt.
+SECRET_KEY_ARN = os.environ.get("WEBHOOK_SECRET_KEY_ARN", "")
 AWS_REGION = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
 
 EVENT_FILE_CHECK = "file_check.completed"
@@ -53,7 +63,10 @@ EVENT_TEST = "test"
 EVENTS = (EVENT_FILE_CHECK, EVENT_TEST)
 
 DELIVERY_SK_PREFIX = "WHDLV#"
+# One attempt in total: connect, TLS handshake, request and response headers.
 TIMEOUT_S = 5
+# Addresses of the host tried per attempt (IPv4 first).
+MAX_ADDRESSES_PER_ATTEMPT = 2
 MAX_ATTEMPTS = 3
 BACKOFF_S = (1, 2)
 # Whole delivery, retries included: the backend's test call must answer within
@@ -91,6 +104,7 @@ _monotonic = time.monotonic
 
 _table = None
 _lambda_client = None
+_kms_client = None
 _tls_context = None
 
 
@@ -122,6 +136,20 @@ def _get_lambda_client():
     return _lambda_client
 
 
+def _get_kms_client():
+    global _kms_client
+    if _kms_client is None:
+        import boto3
+        from botocore.config import Config
+
+        _kms_client = boto3.client(
+            "kms",
+            region_name=AWS_REGION,
+            config=Config(connect_timeout=5, read_timeout=10, retries={"max_attempts": 3, "mode": "standard"}),
+        )
+    return _kms_client
+
+
 def _get_tls_context() -> ssl.SSLContext:
     global _tls_context
     if _tls_context is None:
@@ -132,21 +160,52 @@ def _get_tls_context() -> ssl.SSLContext:
 
 # ------------------------------------------------------------------ settings
 def load_webhook(project_id: str) -> dict | None:
-    """URL, enabled flag and secret from the project META item; None when the project does not exist."""
+    """URL, enabled flag and encrypted secret from the project META item; None when the project does not exist."""
     response = _get_table().get_item(
         Key={"PK": f"PROJ#{project_id}", "SK": "META"},
-        ProjectionExpression="PK, webhook_url, webhook_enabled, webhook_secret",
+        ProjectionExpression="PK, webhook_url, webhook_enabled, webhook_secret_enc",
         ConsistentRead=True,
     )
     item = response.get("Item")
     if not item:
         return None
-    url, secret = item.get("webhook_url"), item.get("webhook_secret")
+    url, secret_enc = item.get("webhook_url"), item.get("webhook_secret_enc")
     return {
         "url": url if isinstance(url, str) and url else None,
         "enabled": item.get("webhook_enabled") is True,
-        "secret": secret if isinstance(secret, str) and secret else None,
+        "secret_enc": secret_enc if isinstance(secret_enc, str) and secret_enc else None,
     }
+
+
+class SecretError(Exception):
+    """The signing secret could not be decrypted; the message says why (never key material)."""
+
+
+def decrypt_secret(project_id: str, secret_enc: str) -> str:
+    """The project's signing secret: KMS Decrypt of the stored ciphertext with the project's context."""
+    if not SECRET_KEY_ARN:
+        raise SecretError("secret key is not configured")
+    try:
+        blob = base64.b64decode(secret_enc, validate=True)
+    except ValueError:
+        raise SecretError("stored secret is malformed") from None
+    try:
+        response = _get_kms_client().decrypt(
+            CiphertextBlob=blob,
+            KeyId=SECRET_KEY_ARN,
+            EncryptionContext=ws.secret_encryption_context(project_id),
+        )
+    except ClientError as e:
+        raise SecretError(f"decrypt failed ({e.response.get('Error', {}).get('Code') or 'ClientError'})") from None
+    except BotoCoreError as e:
+        raise SecretError(f"decrypt failed ({type(e).__name__})") from None
+    try:
+        secret = response["Plaintext"].decode("utf-8")
+    except (KeyError, AttributeError, UnicodeDecodeError):
+        raise SecretError("decrypted secret is malformed") from None
+    if not secret:
+        raise SecretError("decrypted secret is empty")
+    return secret
 
 
 # ------------------------------------------------------------------ file check
@@ -226,29 +285,53 @@ def applicant_summary(applicant: dict) -> str:
     return text[:MAX_SUMMARY_CHARS]
 
 
-def build_results(check: dict, document_id: str | None) -> list[dict]:
-    """One result per applicant the document belongs to; every applicant when the check does not tell.
+# Why the check could not attribute a document, by the list it appears in.
+_UNATTRIBUTED = (
+    ("pending_documents", "it is still being analysed"),
+    ("failed_documents", "its analysis failed"),
+    ("no_facts_documents", "no facts were extracted from it"),
+    ("unsupported_documents", "the file check does not read this file type"),
+    ("unassigned_documents", "no applicant could be identified in it"),
+)
 
+
+def _unattributed_reason(check: dict, document_id: str | None) -> str:
+    for key, reason in _UNATTRIBUTED:
+        if any(isinstance(d, dict) and d.get("document_id") == document_id for d in check.get(key) or []):
+            return reason
+    return "it is not in the file check"
+
+
+def build_results(check: dict, document_id: str | None) -> list[dict]:
+    """One result per applicant the document belongs to.
+
+    Data minimisation: when the check cannot attribute the document (or there
+    is no document id), one project-level result is returned instead, with
+    applicant null, the overall verdict and a summary that names no applicant.
     With no applicant at all (nothing analysed yet, or no applicant could be
-    identified) one project-level result with applicant null and the check's
-    summary is returned.
+    identified) that result carries the check's own summary, which names none.
     """
     applicants = [a for a in check.get("applicants") or [] if isinstance(a, dict)]
     checklist_id = (check.get("checklist") or {}).get("id")
-    chosen = applicants
+    chosen = []
     if document_id:
-        mine = [
+        chosen = [
             a
             for a in applicants
             if any(isinstance(d, dict) and d.get("document_id") == document_id for d in a.get("documents") or [])
         ]
-        chosen = mine or applicants
     if not chosen:
+        if applicants:
+            reason = _unattributed_reason(check, document_id) if document_id else "no document was named"
+            count = _plural(len(applicants), "applicant")
+            summary = f"Document not attributed to an applicant: {reason} ({count} in the file)"
+        else:
+            summary = str(check.get("summary") or "")
         return [
             {
                 "applicant": None,
                 "verdict": check.get("overall_verdict") or "NOT READY",
-                "summary": str(check.get("summary") or "")[:MAX_SUMMARY_CHARS],
+                "summary": summary[:MAX_SUMMARY_CHARS],
                 "missing": [],
                 "checklist_id": checklist_id,
             }
@@ -272,20 +355,65 @@ class PinnedHTTPSConnection(http.client.HTTPSConnection):
     http.client would resolve the host again when connecting; connecting to the
     addresses that resolve_public_addresses returned closes the window in which
     a second DNS answer could point the request at an internal address.
+
+    At most MAX_ADDRESSES_PER_ATTEMPT addresses are tried, each connect gets only
+    the time left before `deadline` (a _monotonic() time), and abort() ends a
+    connect, TLS handshake, send or read that is still blocked: socket timeouts
+    apply per operation, so a server that answers byte by byte would otherwise
+    hold the attempt far longer.
     """
 
-    def __init__(self, host: str, port: int, addresses: list[str], timeout: float, context: ssl.SSLContext):
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        addresses: list[str],
+        timeout: float,
+        context: ssl.SSLContext,
+        deadline: float | None = None,
+    ):
         super().__init__(host, port=port, timeout=timeout, context=context)
-        self._addresses = list(addresses)
+        self._addresses = list(addresses)[:MAX_ADDRESSES_PER_ATTEMPT]
         self._tls = context
+        self._deadline = _monotonic() + timeout if deadline is None else deadline
+        self._lock = threading.Lock()
+        self._active = None
+        self.aborted = False
+
+    def _time_left(self) -> float:
+        left = min(self.timeout, self._deadline - _monotonic())
+        if left <= 0 or self.aborted:
+            raise TimeoutError("attempt deadline passed")
+        return left
+
+    def _track(self, sock) -> None:
+        """Make `sock` the one abort() shuts down; raises when abort() already ran."""
+        with self._lock:
+            self._active = sock
+            aborted = self.aborted
+        if aborted:
+            raise TimeoutError("attempt aborted")
+
+    def abort(self) -> None:
+        """End the attempt now (the attempt's timer calls it); a blocked socket call returns."""
+        with self._lock:
+            self.aborted = True
+            sock = self._active
+        if sock is not None:
+            with contextlib.suppress(OSError, ValueError):
+                # The plain socket's shutdown: SSLSocket.shutdown would also drop the
+                # SSL state that the blocked thread is using.
+                socket.socket.shutdown(sock, socket.SHUT_RDWR)
 
     def connect(self) -> None:
         sock = None
         last_error: OSError | None = None
         for address in self._addresses:
             try:
-                sock = socket.create_connection((address, self.port), self.timeout)
+                sock = socket.create_connection((address, self.port), self._time_left())
                 break
+            except TimeoutError:
+                raise
             except OSError as e:
                 last_error = e
         if sock is None:
@@ -293,19 +421,49 @@ class PinnedHTTPSConnection(http.client.HTTPSConnection):
         with contextlib.suppress(OSError):
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         try:
-            self.sock = self._tls.wrap_socket(sock, server_hostname=self.host)
+            self._track(sock)
+            sock.settimeout(self._time_left())
+            tls = self._tls.wrap_socket(sock, server_hostname=self.host, do_handshake_on_connect=False)
         except BaseException:
             sock.close()
             raise
+        # From here on close() closes it.
+        self.sock = tls
+        self._track(tls)
+        tls.do_handshake()
 
 
-def _post_once(target: ws.WebhookTarget, addresses: list[str], body: bytes, headers: dict[str, str]) -> int:
-    """One POST; returns the HTTP status (redirects are not followed). Raises OSError / HTTPException."""
-    connection = PinnedHTTPSConnection(target.host, target.port, addresses, TIMEOUT_S, _get_tls_context())
+def _post_once(
+    target: ws.WebhookTarget,
+    addresses: list[str],
+    body: bytes,
+    headers: dict[str, str],
+    timeout_s: float = TIMEOUT_S,
+) -> int:
+    """One POST; returns the HTTP status (redirects are not followed).
+
+    The whole attempt gets timeout_s: a timer aborts the connection when it runs
+    out. Raises TimeoutError then, else OSError / HTTPException.
+    """
+    connection = PinnedHTTPSConnection(
+        target.host, target.port, addresses, timeout_s, _get_tls_context(), deadline=_monotonic() + timeout_s
+    )
+    timer = threading.Timer(timeout_s, connection.abort)
+    timer.daemon = True
+    timer.start()
     try:
         connection.request("POST", target.target, body=body, headers=headers)
-        return connection.getresponse().status
+        status = connection.getresponse().status
+        # After an abort http.client may still parse a cut-off answer as complete.
+        if connection.aborted:
+            raise TimeoutError
+        return status
+    except (OSError, http.client.HTTPException):
+        if connection.aborted:
+            raise TimeoutError(f"no answer within {timeout_s:g} s") from None
+        raise
     finally:
+        timer.cancel()
         connection.close()
 
 
@@ -339,6 +497,11 @@ def deliver(url: str, secret: str, event: str, delivery_id: str, body: bytes) ->
         except (OSError, UnicodeError):
             error = "DNS lookup failed"
         else:
+            # The attempt never runs past the delivery budget (a slow DNS answer counts).
+            timeout_s = min(TIMEOUT_S, deadline - _monotonic())
+            if timeout_s < 1:
+                error = "delivery time budget used up"
+                break
             headers = {
                 "Content-Type": "application/json",
                 "User-Agent": USER_AGENT,
@@ -347,7 +510,7 @@ def deliver(url: str, secret: str, event: str, delivery_id: str, body: bytes) ->
                 ws.SIGNATURE_HEADER: ws.sign_payload(secret, body, int(_time())),
             }
             try:
-                http_status = _post_once(target, addresses, body, headers)
+                http_status = _post_once(target, addresses, body, headers, timeout_s)
             except ssl.SSLCertVerificationError:
                 return _outcome("failed", None, "TLS certificate verification failed", attempt)
             except TimeoutError:
@@ -424,14 +587,19 @@ def _handle(event: dict) -> dict:
         return _skipped("project not found")
     if kind == EVENT_FILE_CHECK and not webhook["enabled"]:
         return _skipped("webhook disabled")
-    if not webhook["url"] or not webhook["secret"]:
+    if not webhook["url"] or not webhook["secret_enc"]:
         return _skipped("webhook URL or secret not set")
 
     delivery_id = str(uuid.uuid4())
     at = _utcnow()
     results: list[dict] = []
     outcome = None
-    if kind == EVENT_FILE_CHECK:
+    secret = ""
+    try:
+        secret = decrypt_secret(project_id, webhook["secret_enc"])
+    except SecretError as e:
+        outcome = _outcome("failed", None, f"signing secret unavailable: {e}", 0)
+    if outcome is None and kind == EVENT_FILE_CHECK:
         try:
             results = build_results(file_check_for_document(project_id, document_id), document_id)
         except FileCheckError as e:
@@ -446,7 +614,7 @@ def _handle(event: dict) -> dict:
             "results": results,
         }
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-        outcome = deliver(webhook["url"], webhook["secret"], kind, delivery_id, body)
+        outcome = deliver(webhook["url"], secret, kind, delivery_id, body)
     names = ", ".join(str(r["applicant"]) for r in results if r.get("applicant"))
     applicant = names[:MAX_APPLICANT_CHARS] or None
 

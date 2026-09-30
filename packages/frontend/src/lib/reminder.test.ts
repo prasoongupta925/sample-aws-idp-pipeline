@@ -142,10 +142,10 @@ describe('buildReminder', () => {
       'Hi Sneha, a gentle reminder from {{dsa_name}}. Your personal loan application (Ref {{ref}}) is still waiting for: June 2026 salary slip, bank statement for March to May 2026, Form-16 or ITR (latest FY). You can upload here: {{upload_link}} (link valid till {{link_expiry}}). Reply HELP for a call back.',
     );
     expect(text('hi')).toBe(
-      'नमस्ते Sneha, {{dsa_name}} की ओर से एक याद दिलाना। आपके personal loan आवेदन (Ref {{ref}}) के लिए ये documents अभी बाकी हैं: जून 2026 की salary slip, मार्च से मई 2026 तक का bank statement, Form-16 या ITR (latest FY)। यहाँ upload करें: {{upload_link}} (link {{link_expiry}} तक वैध)। Call back के लिए HELP लिखें।',
+      'नमस्ते Sneha, {{dsa_name}} की ओर से एक याद दिलाना। आपके personal loan आवेदन (Ref {{ref}}) के लिए ये documents अभी बाकी हैं: जून 2026 की salary slip, मार्च से मई 2026 तक का bank statement, Form-16 या ITR। यहाँ upload करें: {{upload_link}} (link {{link_expiry}} तक वैध)। Call back के लिए HELP लिखें।',
     );
     expect(text('mr')).toBe(
-      'नमस्कार Sneha, {{dsa_name}} कडून एक आठवण. तुमच्या personal loan अर्जासाठी (Ref {{ref}}) ही कागदपत्रे अजून बाकी आहेत: जून 2026 ची salary slip, मार्च ते मे 2026 चे bank statement, Form-16 किंवा ITR (latest FY). इथे अपलोड करा: {{upload_link}} (लिंक {{link_expiry}} पर्यंत वैध). कॉल बॅकसाठी HELP लिहा.',
+      'नमस्कार Sneha, {{dsa_name}} कडून एक आठवण. तुमच्या personal loan अर्जासाठी (Ref {{ref}}) ही कागदपत्रे अजून बाकी आहेत: जून 2026 ची salary slip, मार्च ते मे 2026 चे bank statement, Form-16 किंवा ITR. इथे अपलोड करा: {{upload_link}} (लिंक {{link_expiry}} पर्यंत वैध). कॉल बॅकसाठी HELP लिहा.',
     );
     for (const language of LANGUAGES) expectNoIdsOrAmounts(text(language));
   });

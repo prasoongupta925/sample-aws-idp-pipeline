@@ -8,6 +8,8 @@ import {
   csvUsd,
   documentUsage,
   eraseConfirmMatches,
+  eraseMayBeIncomplete,
+  eraseRequestBody,
   maskPan,
   parseEraseResponse,
   fileCheckCsvFileName,
@@ -28,6 +30,8 @@ import {
   READY_WITH_REVIEW_RESULT,
   USAGE_RESULT,
 } from '../components/FileCheckPanel/fixtures';
+import { ApiError } from './apiError';
+import type { FileCheckApplicant } from '../types/fileCheck';
 
 describe('normalizeChecklists', () => {
   it('accepts the engine list_checklists object', () => {
@@ -337,11 +341,12 @@ describe('CSV obligations rows', () => {
 
 describe('CSV usage columns', () => {
   it('adds model, tokens and cost per document read and a total row', () => {
+    // Only the facts extraction step is recorded: the headers say so.
     expect(CSV_HEADERS.slice(-4)).toEqual([
-      'Model',
-      'Input tokens',
-      'Output tokens',
-      'Cost (USD)',
+      'Facts extraction model',
+      'Facts extraction input tokens',
+      'Facts extraction output tokens',
+      'Facts extraction cost (USD)',
     ]);
     const lines = buildFileCheckCsv(USAGE_RESULT).slice(1).split('\r\n');
     expect(lines[0].split(',')).toHaveLength(12);
@@ -349,7 +354,7 @@ describe('CSV usage columns', () => {
     expect(docs).toEqual([
       'Amit Suresh Patil,NOT READY,Personal Loan - Salaried,Documents,application.pdf,READ,loan application,application.pdf,global.amazon.nova-2-lite-v1:0,12345,678,0.006321',
       'Amit Suresh Patil,NOT READY,Personal Loan - Salaried,Documents,slip_aug.pdf,READ,salary slip; unverified: net_salary; usage not recorded,slip_aug.pdf,,,,',
-      'Amit Suresh Patil,NOT READY,Personal Loan - Salaried,Documents,Reading cost (total),INFO,1 of 2 documents with recorded usage,,,12345,678,0.006321',
+      'Amit Suresh Patil,NOT READY,Personal Loan - Salaried,Documents,Facts extraction cost (total),INFO,"file-check facts step only, other analysis steps not included; 1 of 2 documents with recorded usage",,,12345,678,0.006321',
     ]);
     // Documents come after the applicant's findings, before "Not checked".
     const sections = lines.map((l) => l.split(',')[3]);
@@ -358,6 +363,35 @@ describe('CSV usage columns', () => {
     );
     expect(sections.lastIndexOf('Documents')).toBeLessThan(
       sections.indexOf('Not checked'),
+    );
+  });
+
+  it('writes no $0 total when no document has recorded usage', () => {
+    // Documents analysed before costs were recorded (every document of 591d5a7).
+    const csv = buildFileCheckCsv({
+      ...USAGE_RESULT,
+      applicants: [
+        {
+          ...USAGE_RESULT.applicants[0],
+          documents: USAGE_RESULT.applicants[0].documents.map((d) => ({
+            ...d,
+            usage: null,
+          })),
+          usage_total: {
+            input_tokens: 0,
+            output_tokens: 0,
+            cost_usd: 0,
+            documents_with_usage: 0,
+            documents_total: 2,
+          },
+        },
+      ],
+    });
+    const total = csv
+      .split('\r\n')
+      .find((l) => l.includes('Facts extraction cost (total)'));
+    expect(total).toBe(
+      'Amit Suresh Patil,NOT READY,Personal Loan - Salaried,Documents,Facts extraction cost (total),INFO,not recorded (analysed before costs were recorded); 0 of 2 documents with recorded usage,,,,,',
     );
   });
 
@@ -403,6 +437,8 @@ describe('erase helpers', () => {
           applicant: 'Amit Suresh Patil',
           documents_deleted: [{ document_id: 'd1', name: 'application.pdf' }],
           failed: [{ document_id: 'd2', name: 'slip_aug.pdf', error: 'x' }],
+          delivery_log_redacted: 2,
+          not_erased: ['Verdicts the CRM webhook already delivered', 7],
           erased_at: '2026-09-30T10:00:00+00:00',
         },
         'Amit',
@@ -411,10 +447,69 @@ describe('erase helpers', () => {
       applicant: 'Amit Suresh Patil',
       documents_deleted: [{ document_id: 'd1', name: 'application.pdf' }],
       failed: [{ document_id: 'd2', name: 'slip_aug.pdf', error: 'x' }],
+      delivery_log_redacted: 2,
+      not_erased: ['Verdicts the CRM webhook already delivered'],
       erased_at: '2026-09-30T10:00:00+00:00',
     });
+    // null: the name could not be removed from the delivery log.
+    expect(
+      parseEraseResponse(
+        { documents_deleted: [], failed: [], delivery_log_redacted: null },
+        'Amit',
+      ).delivery_log_redacted,
+    ).toBeNull();
     expect(() => parseEraseResponse({ detail: 'x' }, 'Amit')).toThrow();
     expect(maskPan('ckrpk7314m')).toBe('XXXXXX314M');
     expect(maskPan(null)).toBeNull();
+  });
+
+  it('builds the erase request from the verdict’s applicant', () => {
+    const applicant = {
+      applicant: 'Amit Suresh Patil',
+      pan: ' ABCPP1234K ',
+      documents: [
+        { document_id: 'd1', document_name: 'application.pdf' },
+        { document_id: 'd2', document_name: 'slip_aug.pdf' },
+        { document_id: 'd1', document_name: 'application.pdf' },
+        { document_id: null, document_name: 'old-engine.pdf' },
+      ],
+    } as FileCheckApplicant;
+    expect(eraseRequestBody(applicant, 'Amit Suresh Patil')).toEqual({
+      applicant: 'ABCPP1234K',
+      confirm: 'Amit Suresh Patil',
+      document_ids: ['d1', 'd2'],
+    });
+    expect(
+      eraseRequestBody({ ...applicant, pan: null }, 'Amit Suresh Patil')
+        .applicant,
+    ).toBe('Amit Suresh Patil');
+  });
+
+  it('tells a refused erase from one that may have run', () => {
+    // Nothing deleted: every 4xx, and the API's own errors before deleting.
+    for (const error of [
+      new ApiError(400),
+      new ApiError(404, 'Applicant not found in this project'),
+      new ApiError(409, "The applicant's documents changed since the check"),
+      new ApiError(422, [{ msg: 'List should have at least 1 item' }]),
+      new ApiError(503, 'File check is not configured'),
+      new ApiError(502, 'Applicant lookup failed: Unknown tool'),
+      new ApiError(502, 'Applicant lookup returned an unexpected response'),
+    ]) {
+      expect([error.status, eraseMayBeIncomplete(error)]).toEqual([
+        error.status,
+        false,
+      ]);
+    }
+    // No answer, or a failure that may come after deleting started.
+    for (const error of [
+      new TypeError('Failed to fetch'),
+      new Error('unexpected response from the erase service'),
+      new ApiError(500, 'Internal Server Error'),
+      new ApiError(503, { message: 'Service Unavailable' }),
+      new ApiError(504),
+    ]) {
+      expect(eraseMayBeIncomplete(error)).toBe(true);
+    }
   });
 });

@@ -153,6 +153,11 @@ export class Backend extends Construct {
       this,
       SSM_KEYS.WEBHOOK_FUNCTION_ARN,
     );
+    // KMS key of the webhook signing secrets (WebhookStack): Encrypt only.
+    const webhookSecretKeyArn = StringParameter.valueForStringParameter(
+      this,
+      SSM_KEYS.WEBHOOK_SECRET_KEY_ARN,
+    );
 
     this.service = new ApplicationLoadBalancedFargateService(this, 'Service', {
       cluster,
@@ -185,6 +190,7 @@ export class Backend extends Construct {
           FILE_CHECK_ASK_MODEL_ID: fileCheckAskModelId,
           RETENTION_DAYS: String(getRetentionDays(this)),
           WEBHOOK_FUNCTION_NAME: webhookFunctionArn,
+          WEBHOOK_SECRET_KEY_ARN: webhookSecretKeyArn,
         },
       },
       runtimePlatform: {
@@ -325,6 +331,21 @@ export class Backend extends Construct {
         sid: 'InvokeWebhookDelivery',
         actions: ['lambda:InvokeFunction'],
         resources: [webhookFunctionArn],
+      }),
+    );
+    // New webhook signing secrets are stored encrypted. Encrypt only: the
+    // backend never reads a stored secret back (only the webhook Lambda may
+    // decrypt it).
+    taskRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'EncryptWebhookSecrets',
+        actions: ['kms:Encrypt'],
+        resources: [webhookSecretKeyArn],
+        conditions: {
+          StringEquals: {
+            'kms:EncryptionContext:purpose': 'webhook-signing-secret',
+          },
+        },
       }),
     );
 

@@ -847,6 +847,8 @@
       "open": "Draft reminder",
       "close": "Close reminder",
       "title": "Reminder for {{name}}",
+      "pending": "{{count}} documents are still being analysed ({{names}}): the missing items may change when they finish. Run the check again before sending.",
+      "pending_one": "{{count}} document is still being analysed ({{names}}): the missing items may change when it finishes. Run the check again before sending.",
       "language": "Language",
       "channel": "Channel",
       "whatsapp": "WhatsApp",
@@ -877,6 +879,8 @@
       "encodingUnicode": "Unicode: {{single}} characters per SMS, {{part}} per segment when split",
       "copyManual": "Copying is blocked here: the text is selected, press Ctrl+C.",
       "placeholders": "Fill in before sending: {{names}}. The count includes them.",
+      "smsCountOnly": "The English SMS says \"{{count}} documents\": the list is too long for one SMS, and the upload page lists them.",
+      "smsCountOnly_one": "The English SMS says \"{{count}} document\": its name is too long for one SMS, and the upload page shows it.",
       "draftNote": "Draft templates filled from the verdict (no AI), not yet approved by Meta or registered on DLT. Only the first name and document names go in – never PAN, Aadhaar, account numbers or amounts. Have the Hindi and Marathi reviewed by a native speaker.",
       "nothingToRequest": "Nothing to ask the applicant for: no required document is missing and no document mismatch was found. The verdict is NOT READY for the reasons listed below."
     },
@@ -884,9 +888,12 @@
       "action": "Erase applicant data",
       "title": "Erase {{name}}'s data?",
       "pan": "PAN {{pan}}",
-      "body": "This permanently deletes every document of this applicant in this project and the data derived from them: the stored files, extracted facts and page text, search-index entries, knowledge-graph data and analysis records.",
+      "body": "This permanently deletes the documents listed below and the data derived from them: the stored files, extracted facts and page text, search-index entries, knowledge-graph data and analysis records. The applicant's name is also removed from the webhook delivery log.",
+      "documents": "{{count}} documents will be erased:",
+      "documents_one": "{{count}} document will be erased:",
       "cannotUndo": "This cannot be undone.",
       "scope": "Documents still being analysed, failed, or not matched to an applicant are not touched. Use this for an applicant's erasure request.",
+      "notErased": "Not erased here: chat conversations and artifacts that mention the applicant (delete them yourself, or they are deleted automatically after the retention period) and verdicts already sent to your CRM.",
       "typeLabel": "To confirm, type the applicant's name:",
       "exactHint": "Type the name exactly as shown, including capital letters.",
       "mismatchHint": "The name does not match yet.",
@@ -895,14 +902,19 @@
       "errors": {
         "mismatch": "The name typed does not match the applicant's name (HTTP 400).",
         "notFound": "No such applicant in this project – it may have been erased already (HTTP 404).",
-        "ambiguous": "More than one applicant has this name (HTTP 409).",
+        "conflict": "The erase was refused (HTTP 409): the applicant's documents changed since the check, or more than one applicant matches. Run the check again and review the documents before erasing.",
         "notConfigured": "The file-check service is not configured (HTTP 503).",
-        "failed": "The erase failed (HTTP {{status}}). Try again in a moment."
+        "failed": "The erase failed before anything was deleted (HTTP {{status}}). Try again in a moment.",
+        "uncertain": "The erase may be incomplete ({{reason}}). The verdict was cleared and the documents list reloaded: run the check again to see what is left, and erase again if needed.",
+        "noAnswer": "no answer from the server"
       },
       "result": {
         "title": "{{name}}'s data was erased",
         "deleted": "{{count}} documents deleted",
         "deleted_one": "{{count}} document deleted",
+        "deliveryLog": "Name removed from {{count}} webhook delivery log entries",
+        "deliveryLog_one": "Name removed from {{count}} webhook delivery log entry",
+        "deliveryLogFailed": "The name could not be removed from the webhook delivery log; those entries are deleted after the retention period.",
         "failed": "{{count}} documents could not be fully deleted:",
         "failed_one": "{{count}} document could not be fully deleted:",
         "failedHint": "Delete them from the documents list, or run the check and erase again.",
@@ -911,14 +923,14 @@
       }
     },
     "usage": {
-      "perDocument": "{{input}} in / {{output}} out tokens · {{cost}}",
+      "perDocument": "facts extraction: {{input}} in / {{output}} out tokens · {{cost}}",
       "notRecorded": "usage not recorded",
-      "model": "Model: {{model}}",
-      "total": "Reading this file cost {{cost}} for {{count}} documents ({{input}} in / {{output}} out tokens).",
-      "total_one": "Reading this file cost {{cost}} for {{count}} document ({{input}} in / {{output}} out tokens).",
+      "model": "Facts extraction model: {{model}}",
+      "total": "Facts extraction (the file-check step only) cost {{cost}} for {{count}} documents ({{input}} in / {{output}} out tokens); the other analysis steps are not included.",
+      "total_one": "Facts extraction (the file-check step only) cost {{cost}} for {{count}} document ({{input}} in / {{output}} out tokens); the other analysis steps are not included.",
       "partial": "Usage was not recorded for {{count}} more documents.",
       "partial_one": "Usage was not recorded for {{count}} more document.",
-      "none": "Reading cost was not recorded for these documents (analysed before costs were recorded)."
+      "none": "The facts extraction cost was not recorded for these documents (analysed before costs were recorded)."
     }
   },
   "painPoints": {
@@ -945,7 +957,7 @@
       "intro": "While on, every document that finishes analysis sends its applicant's file-check verdict to your CRM as a signed HTTPS POST (event file_check.completed).",
       "loading": "Loading the webhook settings…",
       "url": "Endpoint URL",
-      "urlHint": "HTTPS only, a public host, no user:password@. Leave empty to remove the webhook.",
+      "urlHint": "HTTPS only, port 443 (default) or 8443, a public host, no user:password@. Leave empty to remove the webhook.",
       "urlNotHttps": "The URL must start with https:// – the server refuses it otherwise.",
       "enabled": "Send deliveries",
       "enabledHint": "Off: nothing is sent. On needs a URL and a signing secret.",
@@ -998,10 +1010,12 @@
       },
       "errors": {
         "load": "Could not load the webhook settings: {{message}}",
+        "reload": "Could not refresh the deliveries, so the list may be out of date: {{message}}",
         "save": "Not saved: {{message}}",
         "secret": "No secret generated: {{message}}",
         "notFound": "The project was not found (HTTP 404).",
         "notConfigured": "Webhook delivery is not configured for this deployment (HTTP 503).",
+        "tooMany": "Too many test events (HTTP 429): wait a few seconds and try again.",
         "status": "The request was rejected (HTTP {{status}})."
       }
     }

@@ -9,8 +9,11 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { Check, Copy, MessageCircle, X } from 'lucide-react';
-import type { FileCheckApplicant } from '../../types/fileCheck';
+import { AlertTriangle, Check, Copy, MessageCircle, X } from 'lucide-react';
+import type {
+  FileCheckApplicant,
+  PendingDocument,
+} from '../../types/fileCheck';
 import {
   REMINDER_LANGUAGES,
   type ReminderChannel,
@@ -107,6 +110,13 @@ interface ReminderDraftProps {
   checklistId?: string | null;
   /** The checklist's product id: fills {{product}}. */
   product?: string | null;
+  /** The verdict's as_of date (YYYY-MM-DD): the Form-16 / ITR year. */
+  asOf?: string | null;
+  /**
+   * Documents of the project still being analysed (the verdict's
+   * pending_documents): the missing list may change when they finish.
+   */
+  pendingDocuments?: PendingDocument[];
   /** id of the region (the toggle button's aria-controls). */
   id?: string;
   onClose: () => void;
@@ -124,6 +134,8 @@ export default function ReminderDraft({
   applicant,
   checklistId,
   product,
+  asOf,
+  pendingDocuments = [],
   id,
   onClose,
   initialLanguage = 'en',
@@ -157,9 +169,10 @@ export default function ReminderDraft({
             channel,
             checklistId,
             product,
+            asOf,
           })
         : null,
-    [applicant, template, language, channel, checklistId, product],
+    [applicant, template, language, channel, checklistId, product, asOf],
   );
   const text = draft?.text ?? '';
 
@@ -234,6 +247,27 @@ export default function ReminderDraft({
         </button>
       </div>
 
+      {pendingDocuments.length > 0 && (
+        <p
+          role="note"
+          data-testid="reminder-pending"
+          className="flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-[11px] font-medium leading-snug text-amber-900 dark:border-amber-700/60 dark:bg-amber-900/20 dark:text-amber-200"
+        >
+          <AlertTriangle
+            className="mt-0.5 h-3.5 w-3.5 flex-shrink-0"
+            aria-hidden="true"
+          />
+          <span>
+            {t('fileCheck.reminder.pending', {
+              count: pendingDocuments.length,
+              names: pendingDocuments
+                .map((d) => d.document_name || d.document_id || '')
+                .filter(Boolean)
+                .join(', '),
+            })}
+          </span>
+        </p>
+      )}
       {!draft ? (
         <p
           role="note"
@@ -334,6 +368,16 @@ export default function ReminderDraft({
             </p>
           </div>
 
+          {draft.countOnly && (
+            <p
+              data-testid="reminder-count-only"
+              className="text-[10px] leading-snug text-slate-600 dark:text-slate-300"
+            >
+              {t('fileCheck.reminder.smsCountOnly', {
+                count: draft.documents.length,
+              })}
+            </p>
+          )}
           {placeholders.length > 0 && (
             <p className="text-[10px] leading-snug text-slate-600 dark:text-slate-300">
               {t('fileCheck.reminder.placeholders', {

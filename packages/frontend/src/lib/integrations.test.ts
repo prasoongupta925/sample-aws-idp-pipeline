@@ -1,5 +1,5 @@
 // @vitest-environment node
-import i18next from 'i18next';
+import i18next, { type TFunction } from 'i18next';
 import en from '../i18n/locales/en.json';
 import { ApiError, apiErrorDetail, errorDetailFromBody } from './apiError';
 import { apiErrorStatus } from './fileCheck';
@@ -53,20 +53,57 @@ describe('API error details', () => {
     expect(apiErrorStatus(new Error('API error: 503'))).toBe(503);
   });
 
-  it('shows the reason a webhook request was refused', () => {
+  it('shows a localized message, then the reason a request was refused', () => {
     const t = i18n.getFixedT('en');
     expect(
       describeWebhookError(
         t,
         new ApiError(400, 'Webhook URL host is an internal name'),
       ),
-    ).toBe('Webhook URL host is an internal name');
+    ).toBe(
+      'The request was rejected (HTTP 400). (Webhook URL host is an internal name)',
+    );
     expect(
       describeWebhookError(t, new ApiError(404, 'Project not found')),
     ).toBe('The project was not found (HTTP 404).');
     expect(describeWebhookError(t, new ApiError(502))).toBe(
       'The request was rejected (HTTP 502).',
     );
+    expect(
+      describeWebhookError(
+        t,
+        new ApiError(429, 'Wait 6 s before sending another test event'),
+      ),
+    ).toBe(
+      'Too many test events (HTTP 429): wait a few seconds and try again. (Wait 6 s before sending another test event)',
+    );
+  });
+
+  it('says "not configured" only when the API says so', () => {
+    const t = i18n.getFixedT('en');
+    for (const detail of [
+      'Webhook delivery is not configured',
+      'Webhook secret encryption is not configured',
+    ]) {
+      expect(describeWebhookError(t, new ApiError(503, detail))).toBe(
+        'Webhook delivery is not configured for this deployment (HTTP 503).',
+      );
+    }
+    // A gateway 503 while the backend restarts is not a missing setting.
+    expect(
+      describeWebhookError(
+        t,
+        new ApiError(503, { message: 'Service Unavailable' }),
+      ),
+    ).toBe('The request was rejected (HTTP 503). (Service Unavailable)');
+    // The locale's message is used (Korean, Japanese), not the API's English.
+    const keyOnly = ((key: string) => key) as unknown as TFunction;
+    expect(
+      describeWebhookError(
+        keyOnly,
+        new ApiError(503, 'Webhook delivery is not configured'),
+      ),
+    ).toBe('integrations.webhook.errors.notConfigured');
   });
 });
 

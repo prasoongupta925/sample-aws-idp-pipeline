@@ -5,8 +5,9 @@ Every test runs isolated from AWS and from the other tests:
   config/credentials files, so a client a test forgets to stub can never reach
   a real account (this machine has real credentials in ~/.aws);
 - the module-level AWS clients the app caches (S3 and its presign client,
-  DynamoDB, the Lambda and Bedrock clients) are reset before and after each
-  test, so a client created or stubbed in one test never leaks into the next.
+  DynamoDB, the Lambda, Bedrock and KMS clients) are reset before and after
+  each test, so a client created or stubbed in one test never leaks into the
+  next; so are the webhook test-event rate limits.
 """
 
 import os
@@ -18,6 +19,8 @@ import app.file_check as file_check
 import app.file_check_ask as file_check_ask
 import app.lancedb as lancedb
 import app.routers.graph as graph_router
+import app.webhook_delivery as webhook_delivery
+import app.webhook_secret as webhook_secret
 from app.s3 import get_s3_client, get_s3_presign_client
 
 _FAKE_AWS_ENV = {
@@ -39,6 +42,9 @@ def _reset_cached_clients() -> None:
     file_check_ask._bedrock_client = None
     lancedb._lambda_client = None
     graph_router._lambda_client = None
+    webhook_delivery._lambda_client = None
+    webhook_secret._kms_client = None
+    webhook_delivery.reset_test_limits()
 
 
 @pytest.fixture(autouse=True)

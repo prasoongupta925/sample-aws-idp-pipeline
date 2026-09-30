@@ -154,14 +154,15 @@ describe('VerdictCard actions and usage', () => {
   it('shows tokens and $ per document and the applicant total', () => {
     const html = render(<VerdictCard result={USAGE_RESULT} />);
     expect(textOf(html, 'document-usage', 'span')).toBe(
-      ' · 12,345 in / 678 out tokens · $0.0063',
+      ' · facts extraction: 12,345 in / 678 out tokens · $0.0063',
     );
     expect(tagOf(html, 'document-usage')).toContain(
-      'title="Model: global.amazon.nova-2-lite-v1:0"',
+      'title="Facts extraction model: global.amazon.nova-2-lite-v1:0"',
     );
     expect(html).toContain('usage not recorded');
+    // Only the facts extraction step is recorded, and the line says so.
     expect(textOf(html, 'usage-total')).toBe(
-      'Reading this file cost $0.0063 for 1 document (12,345 in / 678 out tokens). Usage was not recorded for 1 more document.',
+      'Facts extraction (the file-check step only) cost $0.0063 for 1 document (12,345 in / 678 out tokens); the other analysis steps are not included. Usage was not recorded for 1 more document.',
     );
     // Older backends: no usage, no usage line.
     const old = render(<VerdictCard result={NOT_READY_RESULT} />);
@@ -190,7 +191,7 @@ describe('VerdictCard actions and usage', () => {
       />,
     );
     expect(textOf(html, 'usage-total')).toBe(
-      'Reading cost was not recorded for these documents (analysed before costs were recorded).',
+      'The facts extraction cost was not recorded for these documents (analysed before costs were recorded).',
     );
   });
 });
@@ -201,6 +202,7 @@ describe('EraseApplicantDialog', () => {
       <EraseApplicantDialog
         applicant="Amit Suresh Patil"
         pan="XXXXXX234K"
+        documents={['application.pdf', 'slip_aug.pdf']}
         erasing={false}
         error={error}
         onCancel={noop}
@@ -214,9 +216,21 @@ describe('EraseApplicantDialog', () => {
     expect(html).toContain('role="alertdialog"');
     expect(html).toContain('aria-modal="true"');
     expect(html).toContain('Erase Amit Suresh Patil&#x27;s data?');
-    expect(html).toContain('permanently deletes every document');
+    expect(html).toContain('permanently deletes the documents listed below');
+    expect(html).toContain('removed from the webhook delivery log');
     expect(html).toContain('This cannot be undone.');
     expect(html).toContain('PAN XXXXXX234K');
+  });
+
+  it('lists the documents that will be erased and what is not erased', () => {
+    const html = dialog('');
+    const list = html.slice(html.indexOf('data-testid="erase-documents"'));
+    expect(list).toContain('2 documents will be erased:');
+    expect(list).toContain('>application.pdf</li>');
+    expect(list).toContain('>slip_aug.pdf</li>');
+    expect(textOf(html, 'erase-not-erased')).toBe(
+      'Not erased here: chat conversations and artifacts that mention the applicant (delete them yourself, or they are deleted automatically after the retention period) and verdicts already sent to your CRM.',
+    );
   });
 
   it('enables the button only for the exact name', () => {
@@ -243,13 +257,52 @@ describe('EraseApplicantDialog', () => {
     expect(
       describeEraseError(
         t,
-        new ApiError(409, '2 applicants match this name: erase by PAN instead'),
+        new ApiError(
+          409,
+          "The applicant's documents changed since the check (8 now, 7 confirmed): run the file check again and review them before erasing",
+        ),
       ),
     ).toBe(
-      'More than one applicant has this name (HTTP 409). (2 applicants match this name: erase by PAN instead)',
+      "The erase was refused (HTTP 409): the applicant's documents changed since the check, or more than one applicant matches. Run the check again and review the documents before erasing. (The applicant's documents changed since the check (8 now, 7 confirmed): run the file check again and review them before erasing)",
     );
     expect(describeEraseError(t, new ApiError(404))).toContain(
       'it may have been erased already',
+    );
+  });
+
+  it('says "not configured" only when the API says so', () => {
+    const t = i18n.getFixedT('en');
+    expect(
+      describeEraseError(t, new ApiError(503, 'File check is not configured')),
+    ).toBe(
+      'The file-check service is not configured (HTTP 503). (File check is not configured)',
+    );
+    expect(
+      describeEraseError(
+        t,
+        new ApiError(502, 'Applicant lookup failed: Unknown tool'),
+      ),
+    ).toBe(
+      'The erase failed before anything was deleted (HTTP 502). Try again in a moment. (Applicant lookup failed: Unknown tool)',
+    );
+  });
+
+  it('warns that the erase may be incomplete when the answer is lost', () => {
+    const t = i18n.getFixedT('en');
+    const incomplete =
+      'The verdict was cleared and the documents list reloaded: run the check again to see what is left, and erase again if needed.';
+    // A gateway 503 / 504 or a server error after deleting started.
+    for (const error of [
+      new ApiError(503, { message: 'Service Unavailable' }),
+      new ApiError(504, { message: 'Endpoint request timed out' }),
+      new ApiError(500, 'Internal Server Error'),
+    ]) {
+      expect(describeEraseError(t, error)).toBe(
+        `The erase may be incomplete (HTTP ${error.status}). ${incomplete}`,
+      );
+    }
+    expect(describeEraseError(t, new TypeError('Failed to fetch'))).toBe(
+      `The erase may be incomplete (no answer from the server). ${incomplete}`,
     );
   });
 });
@@ -272,6 +325,8 @@ describe('EraseResultCard', () => {
                 'document deleted, but its search-index (LanceDB) entries were not deleted',
             },
           ],
+          delivery_log_redacted: 1,
+          not_erased: [],
           erased_at: '2026-09-30T10:00:00+00:00',
         }}
         onDismiss={noop}
@@ -285,6 +340,28 @@ describe('EraseResultCard', () => {
     expect(html).toContain(
       'form16.pdf – document deleted, but its search-index (LanceDB) entries were not deleted',
     );
+    expect(html).toContain('Name removed from 1 webhook delivery log entry');
+    expect(html).toContain('Not erased here: chat conversations');
     expect(html).toContain('Run the check again');
+  });
+
+  it('says when the name stayed in the webhook delivery log', () => {
+    const html = render(
+      <EraseResultCard
+        result={{
+          applicant: 'Amit Suresh Patil',
+          documents_deleted: [{ document_id: 'd1', name: 'application.pdf' }],
+          failed: [],
+          delivery_log_redacted: null,
+          not_erased: [],
+          erased_at: '2026-09-30T10:00:00+00:00',
+        }}
+        onDismiss={noop}
+      />,
+    );
+    expect(html).toContain(
+      'The name could not be removed from the webhook delivery log; those entries are deleted after the retention period.',
+    );
+    expect(html).not.toContain('Name removed from');
   });
 });

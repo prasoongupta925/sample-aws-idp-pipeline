@@ -35,6 +35,9 @@ class Config(BaseSettings):
     # CRM webhook delivery Lambda (WebhookStack, idp-v2-webhook-delivery): name or
     # ARN. POST /projects/{id}/integrations/webhook/test invokes it.
     webhook_function_name: str = ""
+    # KMS key (WebhookStack) that encrypts the webhook signing secrets; the
+    # backend may only Encrypt with it (app/webhook_secret.py).
+    webhook_secret_key_arn: str = ""
 
 
 @lru_cache

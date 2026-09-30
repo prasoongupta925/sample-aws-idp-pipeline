@@ -22,6 +22,9 @@ export const SSM_KEYS = {
   // CRM webhook delivery Lambda (WebhookStack); the workflow finalizer and the
   // backend invoke it
   WEBHOOK_FUNCTION_ARN: '/idp-v2/webhook/function-arn',
+  // KMS key of the webhook signing secrets (WebhookStack); the backend
+  // encrypts with it, only the webhook Lambda decrypts
+  WEBHOOK_SECRET_KEY_ARN: '/idp-v2/webhook/secret-key-arn',
   ELASTICACHE_ENDPOINT: '/idp-v2/elasticache/endpoint',
   STEP_FUNCTION_ARN: '/idp-v2/stepfunction/arn',
   WEBSOCKET_API_ID: '/idp-v2/websocket/api-id',

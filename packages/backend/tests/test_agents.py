@@ -687,7 +687,9 @@ class TestShippedBuiltinAgents:
     def test_reminder_lists_only_the_tools_missing_items(self):
         content = shipped("builtin-document-reminder")["content"]
         assert "filecheck___run_file_check" in content
-        assert "Never invent or rename a document" in content
+        # Same wording rules as the web app's "Draft reminder"; never adds, drops or invents a document.
+        assert "never add, drop or invent" in content
+        assert 'the same rules as the web app\'s "Draft reminder"' in content
         for template in ("T1", "T2", "T3", "T5", "T6", "T7"):
             for lang in ("EN", "HI", "MR"):
                 assert f"- {template}-{lang}: " in content  # SMS version

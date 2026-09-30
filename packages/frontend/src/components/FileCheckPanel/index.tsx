@@ -222,13 +222,12 @@ export default function FileCheckPanel({
 
   const confirmErase = async (typed: string) => {
     if (!eraseTarget) return;
-    const response = await eraseApplicant(
-      { applicant: eraseTarget.applicant, pan: eraseTarget.pan },
-      typed,
-    );
-    if (!response) return;
+    const outcome = await eraseApplicant(eraseTarget, typed);
+    if (outcome.kind === 'failed' || outcome.kind === 'ignored') return;
     // Answers in the Ask thread may quote the erased applicant's data.
     askState.clear();
+    // Uncertain: the dialog stays open and says the erase may be incomplete.
+    if (outcome.kind === 'uncertain') return;
     setEraseTarget(null);
     setTimeout(() => eraseResultRef.current?.focus(), 0);
   };
@@ -499,6 +498,9 @@ export default function FileCheckPanel({
         <EraseApplicantDialog
           applicant={eraseTarget.applicant}
           pan={maskPan(eraseTarget.pan)}
+          documents={(eraseTarget.documents ?? []).map(
+            (d) => d.document_name || d.document_id || '',
+          )}
           erasing={erasing}
           error={eraseError}
           onCancel={cancelErase}

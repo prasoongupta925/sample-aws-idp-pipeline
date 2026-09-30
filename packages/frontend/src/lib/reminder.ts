@@ -42,7 +42,13 @@ const DEFAULT_CHECKLIST_DOCS: Record<string, ReminderDocCode[]> = {
 };
 /** The default checklist's "Form-16 / ITR (latest FY)" keeps its year hint. */
 const LATEST_FY_ITEMS = new Set(['form16_itr']);
-const LATEST_FY = ' (latest FY)';
+
+/**
+ * The source's rule for English SMS lists (T1–T3): longer than about 36
+ * characters, send "3 documents" instead; the upload page lists them. Its
+ * own sample list, "Jun slip, Mar-May bank stmt, Form-16", is 36.
+ */
+export const SMS_EN_LIST_MAX = 36;
 
 /** Document type named by a MISMATCH, by the engine's check id. */
 const MISMATCH_DOCS: Record<string, ReminderDocCode> = {
@@ -132,6 +138,31 @@ export function reminderFirstName(
     return null;
   }
   return first;
+}
+
+/**
+ * 'FY 2025-26': the latest financial year (April to March) whose Form-16 is
+ * out on `asOf` (employers issue it by 15 June), written as the glossary
+ * writes it; null without a valid YYYY-MM-DD date.
+ */
+export function latestForm16Fy(asOf: string | null | undefined): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(asOf ?? ''));
+  if (!m) return null;
+  const [year, month, day] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  // FY (end-1)-(end) closes on 31 March of `end`; its Form-16 comes by 15 June.
+  const end = month > 6 || (month === 6 && day >= 15) ? year : year - 1;
+  return `FY ${end - 1}-${String(end % 100).padStart(2, '0')}`;
+}
+
+/** " (FY 2025-26)" after Form-16 or ITR; English only says "latest FY" without a date. */
+function form16YearHint(
+  language: ReminderLanguage,
+  asOf: string | null | undefined,
+): string {
+  const fy = latestForm16Fy(asOf);
+  if (fy) return ` (${fy})`;
+  return language === 'en' ? ' (latest FY)' : '';
 }
 
 /** 'personal_loan' -> 'personal loan'; null when the product is unknown. */
@@ -381,12 +412,16 @@ function docName(
   return channel === 'whatsapp' ? name.whatsapp[language] : name.sms;
 }
 
-/** The names a reminder lists for the missing items, in order. */
+/**
+ * The names a reminder lists for the missing items, in order. `asOf` (the
+ * verdict's date) gives the Form-16 / ITR year on WhatsApp.
+ */
 export function reminderDocumentPhrases(
   items: ReminderItem[],
   language: ReminderLanguage,
   channel: ReminderChannel,
   single = false,
+  asOf?: string | null,
 ): string[] {
   return items.flatMap((item) => {
     if (item.months.length > 0) {
@@ -395,7 +430,7 @@ export function reminderDocumentPhrases(
     if (item.docs.length > 0) {
       const fy =
         channel === 'whatsapp' && LATEST_FY_ITEMS.has(item.itemId)
-          ? LATEST_FY
+          ? form16YearHint(language, asOf)
           : '';
       return item.docs.map(
         (code) => `${docName(code, language, channel)}${fy}`,
@@ -451,6 +486,8 @@ export interface ReminderOptions {
   checklistId?: string | null;
   /** The checklist's product id (e.g. personal_loan): fills {{product}}. */
   product?: string | null;
+  /** The verdict's as_of date (YYYY-MM-DD): the Form-16 / ITR year. */
+  asOf?: string | null;
 }
 
 export interface ReminderDraft {
@@ -458,8 +495,10 @@ export interface ReminderDraft {
   language: ReminderLanguage;
   channel: ReminderChannel;
   text: string;
-  /** What {{documents}} / {{document}} were filled with. */
+  /** The document names behind {{documents}} / {{document}}. */
   documents: string[];
+  /** An English SMS lists only how many (the list was over SMS_EN_LIST_MAX). */
+  countOnly: boolean;
   /** Placeholders left in the text for the user to fill, in order. */
   placeholders: string[];
 }
@@ -487,6 +526,7 @@ export function buildReminder(
   if (product) values.product = product;
 
   let documents: string[] = [];
+  let countOnly = false;
   if (tpl.purpose === 'mismatch') {
     // T5 SMS keeps the English name, like the source's sample ("PAN card copy").
     documents = reminderMismatchDocs(applicant).map((code) =>
@@ -502,8 +542,20 @@ export function buildReminder(
       language,
       channel,
       template === 'T6',
+      options.asOf,
     );
-    if (documents.length > 0) values.documents = documents.join(', ');
+    const list = documents.join(', ');
+    countOnly =
+      channel === 'sms' &&
+      language === 'en' &&
+      template !== 'T6' &&
+      list.length > SMS_EN_LIST_MAX;
+    if (countOnly) {
+      values.documents =
+        documents.length === 1 ? '1 document' : `${documents.length} documents`;
+    } else if (documents.length > 0) {
+      values.documents = list;
+    }
   }
 
   const body =
@@ -520,6 +572,7 @@ export function buildReminder(
     channel,
     text,
     documents,
+    countOnly,
     placeholders: reminderPlaceholders(text),
   };
 }

@@ -3,6 +3,7 @@ import { Construct } from 'constructs';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as kms from 'aws-cdk-lib/aws-kms';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as path from 'path';
@@ -32,9 +33,15 @@ const ASSET_EXCLUDE = ['test_*.py', '__pycache__', '.pytest_cache', '*.pyc'];
  * It runs outside the VPC on purpose: the target URL is chosen by a user, so
  * the function must have no network path to private resources. The URL is
  * checked again at send time and every resolved address must be public.
+ *
+ * The signing secrets are stored encrypted with this stack's KMS key: the
+ * backend may only Encrypt with it and this function is the only role allowed
+ * to Decrypt, both only with the encryption context purpose
+ * webhook-signing-secret (webhook_security.secret_encryption_context).
  */
 export class WebhookStack extends Stack {
   public readonly deliveryFunction: lambda.Function;
+  public readonly secretKey: kms.Key;
 
   constructor(scope: Construct, id: string, props?: StackProps) {
     super(scope, id, props);
@@ -57,6 +64,16 @@ export class WebhookStack extends Stack {
       SSM_KEYS.FILE_CHECK_MCP_FUNCTION_ARN,
     );
 
+    // Encrypts each project's webhook signing secret (the stored ciphertext is
+    // useless to every other role that can read the table).
+    this.secretKey = new kms.Key(this, 'WebhookSecretKey', {
+      description:
+        'CRM webhook signing secrets: the backend encrypts, only the delivery Lambda decrypts',
+      enableKeyRotation: true,
+      removalPolicy: RemovalPolicy.DESTROY,
+      pendingWindow: Duration.days(7),
+    });
+
     this.deliveryFunction = new lambda.Function(this, 'WebhookDelivery', {
       functionName: 'idp-v2-webhook-delivery',
       description: 'Pushes the signed loan-file verdict to the project webhook',
@@ -76,6 +93,7 @@ export class WebhookStack extends Stack {
       environment: {
         BACKEND_TABLE_NAME: backendTableName,
         FILE_CHECK_FUNCTION_NAME: fileCheckFunctionArn,
+        WEBHOOK_SECRET_KEY_ARN: this.secretKey.keyArn,
         // Delivery log items: expires_at = now + retentionDays (DynamoDB TTL)
         RETENTION_DAYS: String(days),
       },
@@ -89,12 +107,17 @@ export class WebhookStack extends Stack {
     });
 
     // Read: the project META item (webhook settings), by key only (no Query
-    // or Scan). Write: the delivery log items (PROJ#/WHDLV#).
+    // or Scan). Write: the delivery log items (PROJ#/WHDLV#). Both only in
+    // project partitions (partition key PROJ#...).
+    const projectPartitionsOnly = {
+      'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PROJ#*'] },
+    };
     this.deliveryFunction.addToRolePolicy(
       new iam.PolicyStatement({
         sid: 'ReadProjectWebhookSettings',
         actions: ['dynamodb:GetItem'],
         resources: [backendTable.tableArn],
+        conditions: projectPartitionsOnly,
       }),
     );
     this.deliveryFunction.addToRolePolicy(
@@ -102,6 +125,21 @@ export class WebhookStack extends Stack {
         sid: 'WriteWebhookDeliveryLog',
         actions: ['dynamodb:PutItem'],
         resources: [backendTable.tableArn],
+        conditions: projectPartitionsOnly,
+      }),
+    );
+
+    // The only role that can read a signing secret
+    this.deliveryFunction.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'DecryptWebhookSecrets',
+        actions: ['kms:Decrypt'],
+        resources: [this.secretKey.keyArn],
+        conditions: {
+          StringEquals: {
+            'kms:EncryptionContext:purpose': 'webhook-signing-secret',
+          },
+        },
       }),
     );
 
@@ -120,6 +158,13 @@ export class WebhookStack extends Stack {
       parameterName: SSM_KEYS.WEBHOOK_FUNCTION_ARN,
       stringValue: this.deliveryFunction.functionArn,
       description: 'ARN of the CRM webhook delivery Lambda function',
+    });
+    // The backend (ApplicationStack) encrypts new signing secrets with it
+    new ssm.StringParameter(this, 'WebhookSecretKeyArnParam', {
+      parameterName: SSM_KEYS.WEBHOOK_SECRET_KEY_ARN,
+      stringValue: this.secretKey.keyArn,
+      description:
+        'ARN of the KMS key that encrypts the CRM webhook signing secrets',
     });
   }
 }

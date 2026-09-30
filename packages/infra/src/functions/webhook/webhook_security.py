@@ -11,13 +11,15 @@ and the Lambda test suites both compare them):
 The backend image and the Lambda asset are packaged from different folders, so
 the module is copied instead of imported across packages.
 
-URL rules (validate_webhook_url): https only, at most 2048 characters, ASCII
-only, no credentials, no fragment. The host is a public DNS name (two labels or
-more, not localhost / *.local / *.internal) or a public IP literal: loopback,
-private, link-local (169.254.0.0/16, with the instance metadata address
-169.254.169.254), unique-local (fd00:ec2::254), shared (100.64.0.0/10),
-multicast, reserved and IPv4-in-IPv6 transition addresses are refused, and so
-are non-canonical IPv4 spellings such as 2130706433 or 0x7f.1.
+URL rules (validate_webhook_url): https only, port 443 (the default) or 8443,
+at most 2048 characters, ASCII only, no credentials, no fragment. The host is a
+public DNS name (two labels or more, not localhost / *.local / *.internal) or a
+public IP literal: loopback, private, link-local (169.254.0.0/16, with the
+instance metadata address 169.254.169.254), unique-local (fd00:ec2::254),
+shared (100.64.0.0/10), multicast, reserved and IPv4-in-IPv6 transition
+addresses (IPv4-compatible, IPv4-translated, NAT64, 6to4, Teredo) are refused,
+IPv6 must be global unicast (2000::/3), and non-canonical IPv4 spellings such as
+2130706433 or 0x7f.1 are refused too.
 
 At send time resolve_public_addresses resolves the host once and refuses the
 delivery when any address is not public; the sender then connects to those
@@ -28,6 +30,11 @@ Signature header: t=<unix seconds>,v1=<hex HMAC-SHA256(key=secret as UTF-8,
 message=f"{t}." + raw request body)>. A receiver recomputes it over the raw body
 bytes, compares in constant time and rejects timestamps more than 5 minutes
 away from its clock (verify_signature).
+
+Secrets at rest: the backend encrypts a new secret with the webhook KMS key
+(WebhookStack) and stores only the ciphertext; the delivery Lambda is the only
+role that may decrypt it. Both use secret_encryption_context(project_id), so a
+ciphertext only decrypts for its own project.
 """
 
 import hashlib
@@ -43,8 +50,15 @@ from dataclasses import dataclass
 from typing import Any
 
 MAX_URL_LENGTH = 2048
+# https on its default port, or the common alternative; any other port would
+# let a URL probe arbitrary services of a public host.
+ALLOWED_PORTS = (443, 8443)
 SECRET_BYTES = 32
 SIGNATURE_TOLERANCE_S = 300
+
+# KMS encryption context "purpose" of a stored signing secret (the key policy
+# grants Encrypt and Decrypt only with it).
+SECRET_ENCRYPTION_PURPOSE = "webhook-signing-secret"
 
 EVENT_HEADER = "X-SmartDial-Event"
 DELIVERY_HEADER = "X-SmartDial-Delivery"
@@ -71,6 +85,7 @@ _BLOCKED_NETWORKS = tuple(
         "224.0.0.0/4",  # multicast
         "240.0.0.0/4",  # reserved, with 255.255.255.255
         "::/96",  # unspecified, loopback and IPv4-compatible (deprecated)
+        "::ffff:0:0:0/96",  # IPv4-translated (SIIT, RFC 2765 / 6052)
         "64:ff9b::/96",  # NAT64
         "64:ff9b:1::/48",  # local-use NAT64
         "100::/64",  # discard-only
@@ -83,6 +98,10 @@ _BLOCKED_NETWORKS = tuple(
         "ff00::/8",  # multicast
     )
 )
+
+# IANA global unicast: every other IPv6 range is special-purpose or reserved,
+# even where ipaddress still calls it global (e.g. 4000::/3).
+_GLOBAL_UNICAST_V6 = ipaddress.ip_network("2000::/3")
 
 _INTERNAL_NAMES = frozenset({"localhost"})
 _INTERNAL_SUFFIXES = (".localhost", ".local", ".internal", ".localdomain", ".home.arpa")
@@ -118,6 +137,8 @@ def is_public_address(address: Any) -> bool:
         return False
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
         ip = ip.ipv4_mapped
+    if isinstance(ip, ipaddress.IPv6Address) and ip not in _GLOBAL_UNICAST_V6:
+        return False
     if any(ip in network for network in _BLOCKED_NETWORKS if network.version == ip.version):
         return False
     return ip.is_global and not ip.is_multicast
@@ -187,6 +208,8 @@ def validate_webhook_url(url: Any) -> WebhookTarget:
     if not 1 <= port <= 65535:
         raise WebhookUrlError("Webhook URL has an invalid port")
     host = _check_host(parts.hostname)
+    if port not in ALLOWED_PORTS:
+        raise WebhookUrlError("Webhook URL port must be 443 (the https default) or 8443")
     target = parts.path or "/"
     if parts.query:
         target = f"{target}?{parts.query}"
@@ -214,6 +237,11 @@ def resolve_public_addresses(host: str, port: int, resolver: Resolver | None = N
 def generate_secret() -> str:
     """A new signing secret: 32 random bytes, URL-safe base64 without padding (43 characters)."""
     return secrets.token_urlsafe(SECRET_BYTES)
+
+
+def secret_encryption_context(project_id: str) -> dict[str, str]:
+    """KMS encryption context of a project's stored signing secret (Encrypt and Decrypt must match)."""
+    return {"project_id": str(project_id), "purpose": SECRET_ENCRYPTION_PURPOSE}
 
 
 def sign_payload(secret: str, body: bytes, timestamp: int) -> str:

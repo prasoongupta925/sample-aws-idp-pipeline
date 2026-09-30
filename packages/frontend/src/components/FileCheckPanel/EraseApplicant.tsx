@@ -13,24 +13,37 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { Loader2, ShieldAlert, Trash2, X } from 'lucide-react';
 import type { ApplicantEraseResponse } from '../../types/fileCheck';
-import { apiErrorStatus, eraseConfirmMatches } from '../../lib/fileCheck';
+import {
+  apiErrorStatus,
+  eraseConfirmMatches,
+  eraseMayBeIncomplete,
+} from '../../lib/fileCheck';
 import { apiErrorDetail } from '../../lib/apiError';
 
-// Status codes of packages/backend/app/routers/applicants.py.
+// Status codes of packages/backend/app/routers/applicants.py. A 5xx or a
+// lost answer that is not one of the API's own errors from before deleting
+// may have left the erase half done (eraseMayBeIncomplete): it says so
+// instead of blaming the configuration.
 export function describeEraseError(t: TFunction, error: unknown): string {
   const status = apiErrorStatus(error);
   const detail = apiErrorDetail(error);
+  if (eraseMayBeIncomplete(error)) {
+    return t('fileCheck.erase.errors.uncertain', {
+      reason:
+        status !== null
+          ? `HTTP ${status}`
+          : t('fileCheck.erase.errors.noAnswer'),
+    });
+  }
   let message: string;
   if (status === 400) message = t('fileCheck.erase.errors.mismatch');
   else if (status === 404) message = t('fileCheck.erase.errors.notFound');
-  else if (status === 409) message = t('fileCheck.erase.errors.ambiguous');
+  else if (status === 409) message = t('fileCheck.erase.errors.conflict');
   else if (status === 503) message = t('fileCheck.erase.errors.notConfigured');
   else if (status !== null && status >= 500) {
     message = t('fileCheck.erase.errors.failed', { status });
-  } else if (status !== null) {
-    message = t('fileCheck.errors.rejected', { status });
   } else {
-    return error instanceof Error ? error.message : String(error);
+    message = t('fileCheck.errors.rejected', { status });
   }
   return detail ? `${message} (${detail})` : message;
 }
@@ -43,6 +56,8 @@ interface EraseApplicantDialogProps {
   applicant: string;
   /** Masked PAN, shown to tell same-name applicants apart. */
   pan?: string | null;
+  /** Names of the documents the verdict lists under the applicant: what is erased. */
+  documents?: string[];
   erasing: boolean;
   error: unknown;
   onCancel: () => void;
@@ -61,6 +76,7 @@ interface EraseApplicantDialogProps {
 export default function EraseApplicantDialog({
   applicant,
   pan,
+  documents = [],
   erasing,
   error,
   onCancel,
@@ -172,11 +188,31 @@ export default function EraseApplicantDialog({
           className="mt-3 space-y-2 text-xs leading-relaxed text-slate-600 dark:text-slate-300"
         >
           <p>{t('fileCheck.erase.body')}</p>
+          {documents.length > 0 && (
+            <div data-testid="erase-documents">
+              <p className="font-semibold text-slate-700 dark:text-slate-200">
+                {t('fileCheck.erase.documents', { count: documents.length })}
+              </p>
+              <ul className="mt-0.5 max-h-28 list-disc space-y-0.5 overflow-y-auto pl-4 text-[11px]">
+                {documents.map((name, i) => (
+                  <li key={`${name}-${i}`} className="break-words">
+                    {name}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           <p className="font-semibold text-red-700 dark:text-red-400">
             {t('fileCheck.erase.cannotUndo')}
           </p>
           <p className="text-[11px] text-slate-500 dark:text-slate-400">
             {t('fileCheck.erase.scope')}
+          </p>
+          <p
+            className="text-[11px] text-slate-500 dark:text-slate-400"
+            data-testid="erase-not-erased"
+          >
+            {t('fileCheck.erase.notErased')}
           </p>
         </div>
 
@@ -318,6 +354,19 @@ export const EraseResultCard = forwardRef<HTMLElement, EraseResultCardProps>(
           {t('fileCheck.erase.result.deleted', { count: deleted.length })}
           {time && ` · ${time}`}
         </p>
+        {result.delivery_log_redacted === null ? (
+          <p className="text-[11px] font-semibold text-red-700 dark:text-red-300">
+            {t('fileCheck.erase.result.deliveryLogFailed')}
+          </p>
+        ) : (
+          result.delivery_log_redacted > 0 && (
+            <p className="text-[11px]">
+              {t('fileCheck.erase.result.deliveryLog', {
+                count: result.delivery_log_redacted,
+              })}
+            </p>
+          )
+        )}
         {deleted.length > 0 && (
           <ul className="list-disc space-y-0.5 pl-4 text-[11px]">
             {deleted.map((d, i) => (
@@ -345,6 +394,9 @@ export const EraseResultCard = forwardRef<HTMLElement, EraseResultCardProps>(
             </p>
           </div>
         )}
+        <p className="text-[11px] opacity-90">
+          {t('fileCheck.erase.notErased')}
+        </p>
         <p className="text-[11px] opacity-90">
           {t('fileCheck.erase.result.rerun')}
         </p>
