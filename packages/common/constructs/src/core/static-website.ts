@@ -33,9 +33,11 @@ export interface StaticWebsiteProps {
 /**
  * Deploys a Static Website using by default a private S3 bucket as an origin and Cloudfront as the entrypoint.
  *
- * This construct configures a webAcl containing rules that are generally applicable to web applications. This
- * provides protection against exploitation of a wide range of vulnerabilities, including some of the high risk
- * and commonly occurring vulnerabilities described in OWASP publications such as OWASP Top 10.
+ * With the CDK context flag `enableWaf` (`-c enableWaf=true`; off by default) this construct also configures a
+ * webAcl containing rules that are generally applicable to web applications. This provides protection against
+ * exploitation of a wide range of vulnerabilities, including some of the high risk and commonly occurring
+ * vulnerabilities described in OWASP publications such as OWASP Top 10. The webAcl is a separate us-east-1 stack
+ * (CloudFront requires it there), so without the flag nothing is deployed to us-east-1.
  *
  */
 export class StaticWebsite extends Construct {
@@ -114,8 +116,12 @@ export class StaticWebsite extends Construct {
         },
       ],
     });
-    // Web ACL
-    const wafStack = new CloudfrontWebAcl(this, 'waf');
+    // Web ACL: optional, off by default (it bills per month even when idle).
+    // Turn it on with -c enableWaf=true.
+    const enableWaf = [true, 'true'].includes(
+      this.node.tryGetContext('enableWaf'),
+    );
+    const wafStack = enableWaf ? new CloudfrontWebAcl(this, 'waf') : undefined;
 
     // Cloudfront Distribution
     const logBucket = new Bucket(this, 'DistributionLogBucket', {
@@ -149,7 +155,7 @@ export class StaticWebsite extends Construct {
       this,
       'CloudfrontDistribution',
       {
-        webAclId: wafStack.wafArn,
+        webAclId: wafStack?.wafArn,
         enableLogging: true,
         logBucket: logBucket,
         defaultBehavior: {
@@ -176,6 +182,13 @@ export class StaticWebsite extends Construct {
       ['CKV_AWS_174'],
       'Cloudfront default certificate does not use TLS 1.2',
     );
+    if (!wafStack) {
+      suppressRules(
+        this.cloudFrontDistribution,
+        ['CKV_AWS_68'],
+        'CloudFront WAF is optional (off by default, -c enableWaf=true)',
+      );
+    }
 
     // Deploy Website
     this.bucketDeployment = new BucketDeployment(this, 'WebsiteDeployment', {
