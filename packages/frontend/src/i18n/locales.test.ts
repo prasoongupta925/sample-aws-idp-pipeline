@@ -16,7 +16,8 @@ function keys(tree: Tree, prefix = ''): Set<string> {
   return out;
 }
 
-// Sections added with built-in agents, reminders, erase, usage and webhooks.
+// Sections added with built-in agents, reminders, erase, usage, webhooks
+// and eligibility.
 const SECTIONS = [
   'agent',
   'projectSettings',
@@ -24,6 +25,7 @@ const SECTIONS = [
   'fileCheck.reminder',
   'fileCheck.erase',
   'fileCheck.usage',
+  'eligibility',
 ];
 
 describe('locales', () => {
@@ -52,6 +54,7 @@ describe('locales', () => {
       'fileCheck.reminder',
       'fileCheck.erase',
       'fileCheck.usage',
+      'eligibility',
     ]) {
       for (const path of keys(en as Tree)) {
         if (!path.startsWith(`${section}.`)) continue;

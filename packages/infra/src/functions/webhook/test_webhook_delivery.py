@@ -1147,3 +1147,119 @@ def test_post_once_sends_one_post_and_returns_the_status(monkeypatch):
             "closed": True,
         }
     ]
+
+
+# ------------------------------------------------------------------ file_login.requested
+LOGIN = {
+    "applicant": "Rahul Vijay Deshmukh",
+    "lender": "ICICI Bank",
+    "eligible_amount": 2058000.0,
+    "emi": 39172.13,
+    "tenure_months": 72,
+    "roi": 11.0,
+    "note": "indicative — the lender decides; sample policy — replace with your lender grid",
+}
+
+
+def login_event(login=None):
+    return {"project_id": PROJECT_ID, "event": "file_login.requested", "login": copy.deepcopy(login or LOGIN)}
+
+
+def test_login_event_is_signed_and_carries_the_login(env, capsys):
+    result = wh.handler(login_event(), None)
+
+    assert (result["status"], result["http_status"], result["error"]) == ("delivered", 200, None)
+    (call,) = env["post"].calls
+    headers, body = call["headers"], call["body"]
+    assert headers["X-SmartDial-Event"] == "file_login.requested"
+    assert headers["X-SmartDial-Delivery"] == result["delivery_id"]
+    assert ws.verify_signature(SECRET, headers["X-SmartDial-Signature"], body, now=1_790_000_000)
+    assert json.loads(body) == {
+        "event": "file_login.requested",
+        "delivery_id": result["delivery_id"],
+        "project_id": PROJECT_ID,
+        "document_id": None,
+        "at": "2026-09-30T10:00:00.000000+00:00",
+        "results": [LOGIN],
+    }
+    assert env["lambda"].calls == []  # no file check for a login
+    (item,) = env["table"].puts
+    assert (item["event"], item["applicant"], item["status"]) == (
+        "file_login.requested",
+        "Rahul Vijay Deshmukh",
+        "delivered",
+    )
+    assert "document_id" not in item
+    assert item["expires_at"] == int(NOW.timestamp()) + 7 * 86400
+    logs = capsys.readouterr().out
+    assert "Rahul" not in logs and "2058000" not in logs
+    assert "event=file_login.requested" in logs
+
+
+def test_login_event_needs_the_webhook_enabled(env, monkeypatch):
+    use(monkeypatch, env, table=FakeTable([meta(enabled=False)]))
+
+    assert wh.handler(login_event(), None) == {"status": "skipped", "reason": "webhook disabled"}
+    assert env["post"].calls == [] and env["kms"].decrypts == [] and env["table"].puts == []
+
+
+def test_login_event_without_url_or_secret_is_skipped(env, monkeypatch):
+    use(monkeypatch, env, table=FakeTable([meta(enabled=True, secret=None)]))
+
+    assert wh.handler(login_event(), None) == {"status": "skipped", "reason": "webhook URL or secret not set"}
+
+
+@pytest.mark.parametrize(
+    "login",
+    [
+        None,
+        "not a dict",
+        {**LOGIN, "lender": ""},
+        {k: v for k, v in LOGIN.items() if k != "lender"},
+        {**LOGIN, "applicant": "x" * 201},
+        {**LOGIN, "eligible_amount": -1},
+        {**LOGIN, "eligible_amount": float("nan")},
+        {**LOGIN, "emi": "39172.13"},
+        {**LOGIN, "tenure_months": True},
+        {**LOGIN, "tenure_months": 72.5},
+        {**LOGIN, "tenure_months": 0},
+        {**LOGIN, "roi": 101},
+        {**LOGIN, "note": 5},
+    ],
+)
+def test_malformed_login_is_skipped_before_anything_is_read(env, login):
+    event = {"project_id": PROJECT_ID, "event": "file_login.requested"}
+    if login is not None:
+        event["login"] = login
+
+    assert wh.handler(event, None) == {"status": "skipped", "reason": "invalid login"}
+    assert env["table"].gets == [] and env["post"].calls == [] and env["table"].puts == []
+
+
+def test_only_the_known_login_fields_are_sent(env):
+    extra = {**LOGIN, "pan": "ABCDE1234F", "mobile": "9800000000", "note": None}
+
+    wh.handler(login_event(extra), None)
+
+    (result,) = json.loads(env["post"].calls[0]["body"])["results"]
+    assert result == {k: v for k, v in LOGIN.items() if k != "note"}
+
+
+def test_login_delivery_failure_is_recorded(env, monkeypatch):
+    use(monkeypatch, env, post=Poster(503))
+
+    result = wh.handler(login_event(), None)
+
+    assert (result["status"], result["http_status"], result["error"]) == ("failed", 503, "HTTP 503")
+    assert len(env["post"].calls) == 3
+    item = env["table"].puts[0]
+    assert (item["event"], item["status"], item["attempts"]) == ("file_login.requested", "failed", 3)
+
+
+def test_the_other_events_ignore_a_login(env):
+    event = {**doc_event("s-01"), "login": LOGIN}
+
+    wh.handler(event, None)
+
+    (result,) = json.loads(env["post"].calls[0]["body"])["results"]
+    assert result["applicant"] == "Sneha Anil Kulkarni" and "lender" not in result

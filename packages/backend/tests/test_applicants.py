@@ -23,6 +23,7 @@ import app.ddb.client as ddb_client
 import app.routers.applicants as applicants
 import app.routers.documents as documents
 from app.config import get_config
+from app.routers.eligibility import INPUTS_SK_PREFIX, applicant_key
 from tests.test_file_check import (
     FUNCTION_NAME,
     HEADERS,
@@ -45,6 +46,7 @@ BUCKET = "doc-bucket"
 QUEUE_URL = "https://sqs.ap-south-1.amazonaws.com/000000000000/graph-delete"
 NOW = "2026-09-28T00:00:00+00:00"
 RAHUL, RAHUL_PAN = "Rahul Vijay Deshmukh", "BQXPD4821K"
+SNEHA_NAME = "Sneha Anil Kulkarni"
 
 
 # ------------------------------------------------------------------ fakes
@@ -321,6 +323,7 @@ class TestErase:
             "documents_deleted",
             "failed",
             "delivery_log_redacted",
+            "eligibility_inputs_deleted",
             "not_erased",
             "erased_at",
         }
@@ -361,8 +364,46 @@ class TestErase:
         assert data["not_erased"] == [
             "Chat conversations and artifacts that mention the applicant: delete them in the chat and artifact "
             "lists, or the retention sweep deletes them after 7 days",
-            "Verdicts the CRM webhook already delivered: erase them in the CRM",
+            "Verdicts and login requests the CRM webhook already delivered: erase them in the CRM",
         ]
+
+    def test_saved_eligibility_inputs_are_erased_too(self, world):
+        """The CIBIL page's inputs (PAN, mobile, DOB, income, loans) go with the documents, by PAN or name."""
+
+        def saved(identifier, name, pan=None):
+            return {
+                "PK": f"PROJ#{PROJECT_ID}",
+                "SK": f"{INPUTS_SK_PREFIX}{applicant_key(identifier)}",
+                "applicant": identifier,
+                "inputs": {"profile": {"name": name, "pan": pan, "mobile": "9820012345"}},
+                "expires_at": 2_000_000_000,
+            }
+
+        for item in (saved(RAHUL_PAN, RAHUL, RAHUL_PAN), saved(RAHUL, RAHUL), saved(SNEHA_NAME, SNEHA_NAME)):
+            world.table.put_item(Item=item)
+
+        data = _erase().json()
+
+        assert data["eligibility_inputs_deleted"] == 2
+        left = [i["applicant"] for (_, sk), i in world.table.items.items() if sk.startswith(INPUTS_SK_PREFIX)]
+        assert left == [SNEHA_NAME]
+        assert not any("eligibility" in line for line in data["not_erased"])
+        (audit,) = world.table.erase_items()
+        assert audit["eligibility_inputs_deleted"] == 2
+
+    def test_a_failed_eligibility_erase_is_stated(self, world):
+        failure = ClientError({"Error": {"Code": "ProvisionedThroughputExceededException"}}, "Query")
+        with patch("app.routers.applicants.erase_applicant_eligibility", side_effect=failure):
+            response = _erase()
+
+        assert response.status_code == 200  # the documents are still erased
+        data = response.json()
+        assert data["eligibility_inputs_deleted"] is None
+        assert data["not_erased"][-1] == (
+            "The applicant's saved eligibility inputs (CIBIL page): they are deleted automatically "
+            "7 days after they were first saved"
+        )
+        assert len(data["documents_deleted"]) == 7
 
     def test_erase_by_name_and_the_second_erase_finds_nobody(self, world):
         first = _erase("Rahul V. Deshmukh", confirm=RAHUL)
@@ -394,6 +435,7 @@ class TestErase:
             "documents_deleted",
             "documents_failed",
             "delivery_log_redacted",
+            "eligibility_inputs_deleted",
             "expires_at",
         }
         assert item["PK"] == f"PROJ#{PROJECT_ID}"
@@ -745,6 +787,7 @@ def test_openapi_documents_the_contract():
         "documents_deleted",
         "failed",
         "delivery_log_redacted",
+        "eligibility_inputs_deleted",
         "not_erased",
         "erased_at",
     }

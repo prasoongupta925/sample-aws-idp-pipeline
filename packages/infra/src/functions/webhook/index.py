@@ -1,13 +1,18 @@
 """Webhook delivery Lambda (idp-v2-webhook-delivery): push the loan-file verdict to the project's CRM.
 
-Input: {"project_id": "...", "document_id": "..." (optional), "event": "file_check.completed" | "test"}
+Input: {"project_id": "...", "document_id": "..." (optional), "login": {...} (file_login.requested),
+        "event": "file_check.completed" | "test" | "file_login.requested"}
 - file_check.completed: queued (asynchronous invoke) by the workflow finalizer when a
   document's analysis completes and the project's webhook is enabled;
-- test: invoked synchronously by POST /projects/{id}/integrations/webhook/test.
+- test: invoked synchronously by POST /projects/{id}/integrations/webhook/test;
+- file_login.requested: invoked synchronously by POST /projects/{id}/eligibility/login when
+  the file is logged in with a lender; "login" carries {applicant, lender, eligible_amount,
+  emi, tenure_months, roi, note} (the backend's indicative figures), sent as the one result.
 
 1. Load the project META item (webhook_url, webhook_enabled, webhook_secret_enc) with a
-   strongly consistent read. file_check.completed needs the webhook enabled; test needs
-   only a URL and a secret. Otherwise answer {"status": "skipped"} and call nothing.
+   strongly consistent read. file_check.completed and file_login.requested need the webhook
+   enabled; test needs only a URL and a secret. Otherwise (or for a malformed login) answer
+   {"status": "skipped"} and call nothing.
    The secret is stored encrypted with the webhook KMS key (WEBHOOK_SECRET_KEY_ARN,
    encryption context webhook_security.secret_encryption_context); this function is
    the only one allowed to decrypt it.
@@ -16,7 +21,7 @@ Input: {"project_id": "...", "document_id": "..." (optional), "event": "file_che
    applicant(s) the document belongs to. A document the check cannot attribute
    (still pending, failed, without facts, unsupported, unassigned) gets one
    project-level result without applicant data. test: no file check and no applicant
-   data (results = []).
+   data (results = []). file_login.requested: no file check; results = [the login].
 3. POST {event, delivery_id, project_id, document_id, at, results} as JSON with the
    X-SmartDial-Event, X-SmartDial-Delivery and X-SmartDial-Signature headers
    (webhook_security.sign_payload): each attempt gets 5 s in total (connect, TLS,
@@ -38,6 +43,7 @@ import base64
 import contextlib
 import http.client
 import json
+import math
 import os
 import re
 import socket
@@ -60,7 +66,10 @@ AWS_REGION = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION"
 
 EVENT_FILE_CHECK = "file_check.completed"
 EVENT_TEST = "test"
-EVENTS = (EVENT_FILE_CHECK, EVENT_TEST)
+EVENT_LOGIN = "file_login.requested"
+EVENTS = (EVENT_FILE_CHECK, EVENT_TEST, EVENT_LOGIN)
+# Events sent only while the project's webhook is enabled (test is sent regardless).
+EVENTS_NEEDING_ENABLED = (EVENT_FILE_CHECK, EVENT_LOGIN)
 
 DELIVERY_SK_PREFIX = "WHDLV#"
 # One attempt in total: connect, TLS handshake, request and response headers.
@@ -348,6 +357,44 @@ def build_results(check: dict, document_id: str | None) -> list[dict]:
     ]
 
 
+# (field, kind, limit): text up to `limit` characters, or a finite number from 0 to `limit`.
+_LOGIN_FIELDS = (
+    ("applicant", "text", 200),
+    ("lender", "text", 100),
+    ("eligible_amount", "number", 1e10),
+    ("emi", "number", 1e10),
+    ("tenure_months", "int", 600),
+    ("roi", "number", 100),
+    ("note", "optional_text", 300),
+)
+
+
+def login_result(login) -> dict | None:
+    """The file_login.requested result: exactly the known login fields, checked; None when malformed."""
+    if not isinstance(login, dict):
+        return None
+    result: dict[str, Any] = {}
+    for name, kind, limit in _LOGIN_FIELDS:
+        value = login.get(name)
+        if kind in ("text", "optional_text"):
+            if value is None and kind == "optional_text":
+                continue
+            if not isinstance(value, str) or not value.strip() or len(value) > limit:
+                return None
+            result[name] = value.strip()
+        elif kind == "int":
+            if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= limit:
+                return None
+            result[name] = value
+        else:
+            if not isinstance(value, int | float) or isinstance(value, bool) or not math.isfinite(value):
+                return None
+            if not 0 <= value <= limit:
+                return None
+            result[name] = value
+    return result
+
+
 # ------------------------------------------------------------------ HTTP
 class PinnedHTTPSConnection(http.client.HTTPSConnection):
     """HTTPS to `host` (SNI, certificate check and Host header) over TCP to pre-checked addresses only.
@@ -581,11 +628,14 @@ def _handle(event: dict) -> dict:
     document_id = event.get("document_id") if kind == EVENT_FILE_CHECK else None
     if not isinstance(document_id, str) or not _ID_RE.match(document_id):
         document_id = None
+    login = login_result(event.get("login")) if kind == EVENT_LOGIN else None
+    if kind == EVENT_LOGIN and login is None:
+        return _skipped("invalid login")
 
     webhook = load_webhook(project_id)
     if webhook is None:
         return _skipped("project not found")
-    if kind == EVENT_FILE_CHECK and not webhook["enabled"]:
+    if kind in EVENTS_NEEDING_ENABLED and not webhook["enabled"]:
         return _skipped("webhook disabled")
     if not webhook["url"] or not webhook["secret_enc"]:
         return _skipped("webhook URL or secret not set")
@@ -604,6 +654,8 @@ def _handle(event: dict) -> dict:
             results = build_results(file_check_for_document(project_id, document_id), document_id)
         except FileCheckError as e:
             outcome = _outcome("failed", None, f"file check failed: {e}", 0)
+    if outcome is None and login is not None:
+        results = [login]
     if outcome is None:
         payload = {
             "event": kind,
