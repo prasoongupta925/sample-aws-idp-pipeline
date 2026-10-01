@@ -1,6 +1,6 @@
 ---
 name: searching
-description: 'Search for information across unstructured documents (hybrid search, knowledge graph) AND structured datasets (Text2SQL over spreadsheet tables). Use when the user asks questions, requests information lookup, needs explanations, summaries, comparisons, or exact numbers/aggregations/rankings from uploaded documents or datasets. Any user question requiring information lookup. When in doubt, use this skill.'
+description: 'Search for information across unstructured documents (hybrid search) AND structured datasets (Text2SQL over spreadsheet tables). Use when the user asks questions, requests information lookup, needs explanations, summaries, comparisons, or exact numbers/aggregations/rankings from uploaded documents or datasets. Any user question requiring information lookup. When in doubt, use this skill.'
 ---
 
 # Search Skill
@@ -15,12 +15,6 @@ You have these search methods. Use your judgment to pick the right combination f
 
 **`search___summarize`**
 Hybrid search (vector + keyword) on uploaded documents. Returns matching content with sources.
-
-**`search___graph_traverse`**
-Follows entity connections from search results to discover additional related pages. Requires `qa_ids` from `search___summarize` results.
-
-**`search___graph_keyword`**
-Finds pages by keyword similarity in the knowledge graph. Useful when a specific concept or term is the focus.
 
 **`WebSearch`**
 Managed web search (AgentCore). Returns ranked results with source URLs, titles, and publication dates. Use only when the documents and datasets are insufficient. Always cite source URLs.
@@ -48,10 +42,7 @@ Workflow: `search_datasets` → `describe_dataset` (for each relevant dataset) �
 ## Combinations
 
 - `search___summarize` alone — quick answer from documents
-- `search___summarize` → `search___graph_traverse` — deeper search with related pages
-- `search___graph_keyword` alone — explore a concept across documents
-- `search___summarize` + `search___graph_keyword` — comprehensive search
-- `search___summarize` → `search___graph_traverse` + `search___graph_keyword` — maximum coverage
+- `search___summarize` with two or three differently worded queries — wider coverage
 - `data___search_datasets` → `data___describe_dataset` → `data___run_sql` — exact answers from structured data
 - Cross question (spans both): document search to identify the entity → `data___run_sql` with the name/keywords found → synthesize both
 - Any of the above + `WebSearch` — when documents and datasets are not enough

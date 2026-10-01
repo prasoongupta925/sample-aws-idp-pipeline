@@ -188,7 +188,7 @@ def test_cross_page_entity_overlap(require_model):
     only_p1 = names_p1 - names_p2
     only_p2 = names_p2 - names_p1
 
-    print(f'\n--- Cross-page entity overlap ---')
+    print('\n--- Cross-page entity overlap ---')
     print(f'Page 1: {len(names_p1)} entities')
     print(f'Page 2: {len(names_p2)} entities')
     print(f'Shared:  {len(shared)} entities → {shared or "none"}')

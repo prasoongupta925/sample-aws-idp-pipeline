@@ -7,7 +7,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from shared.ddb_client import (
     record_step_start,
     record_step_error,
-    record_step_skipped,
     get_project_language,
     get_document,
     StepName,
@@ -20,6 +19,12 @@ GRAPH_SERVICE_FUNCTION_NAME = os.environ.get('GRAPH_SERVICE_FUNCTION_NAME', '')
 LANCEDB_FUNCTION_NAME = os.environ.get('LANCEDB_FUNCTION_NAME', '')
 
 lambda_client = None
+
+
+def graph_disabled() -> bool:
+    """True when there is no graph: GRAPH_DISABLED is set, or no GraphService."""
+    flag = os.environ.get('GRAPH_DISABLED', '').strip().lower()
+    return flag in ('1', 'true', 'yes', 'on') or not GRAPH_SERVICE_FUNCTION_NAME
 
 
 def get_lambda_client():
@@ -166,12 +171,11 @@ def handler(event, _context):
     file_type = event.get('file_type', '')
     segment_count = event.get('segment_count', 0)
 
-    # If GraphService is not configured, skip this step
-    if not GRAPH_SERVICE_FUNCTION_NAME:
-        print('GraphService not configured, skipping graph builder')
-        record_step_skipped(
-            workflow_id, StepName.GRAPH_BUILDER, reason='GraphService not configured'
-        )
+    # No graph: skip all Bedrock, LanceDB, S3 and GraphService work. The empty
+    # graph_batches runs SendGraphBatches zero times and FinalizeGraph records
+    # the step completed (a skip reason written here would show as a warning).
+    if graph_disabled():
+        print('Graph disabled, skipping graph builder')
         return {
             'workflow_id': workflow_id,
             'document_id': document_id,
@@ -179,6 +183,10 @@ def handler(event, _context):
             'file_uri': file_uri,
             'file_type': file_type,
             'segment_count': segment_count,
+            's3_bucket': '',
+            'graph_batches': [],
+            'entity_count': 0,
+            'relationship_count': 0,
         }
 
     _language = event.get('language') or get_project_language(project_id)

@@ -6,14 +6,25 @@ Runs in parallel with page-description-generator and analysis-finalizer in the D
 Modes:
   - default: Extract entities and save to S3 segment data (graph_entities)
   - test: Extract entities and return them in the output (for prompt tuning)
+
+With GRAPH_DISABLED=true (lean build, no graph database) the default mode
+returns status 'skipped' without reading S3 or calling the model: only the
+graph builder reads graph_entities.
 """
 import json
+import os
 
 from extractor import extract_entities
 from shared.s3_analysis import (
     get_segment_analysis,
     update_segment_analysis,
 )
+
+
+def graph_disabled() -> bool:
+    """True when GRAPH_DISABLED is set: no graph database uses the entities."""
+    flag = os.environ.get('GRAPH_DISABLED', '').strip().lower()
+    return flag in ('1', 'true', 'yes', 'on')
 
 
 def handler(event, _context):
@@ -27,6 +38,15 @@ def handler(event, _context):
 
     if isinstance(segment_index, dict):
         segment_index = segment_index.get('segment_index', 0)
+
+    if mode != 'test' and graph_disabled():
+        print(f'Graph disabled, skipped entity extraction for segment {segment_index}')
+        return {
+            'workflow_id': workflow_id,
+            'segment_index': segment_index,
+            'status': 'skipped',
+            'entity_count': 0,
+        }
 
     segment_data = get_segment_analysis(file_uri, segment_index)
     if not segment_data:

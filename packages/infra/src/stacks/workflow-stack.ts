@@ -752,7 +752,8 @@ export class WorkflowStack extends Stack {
       },
     );
 
-    // Entity Extractor
+    // Entity Extractor (GRAPH_DISABLED: returns 'skipped' without a model
+    // call, since only the graph builder reads the extracted entities)
     const entityExtractor = new lambda.Function(this, 'EntityExtractor', {
       ...commonLambdaProps,
       functionName: 'idp-v2-entity-extractor',
@@ -761,11 +762,13 @@ export class WorkflowStack extends Stack {
       memorySize: 1024,
       code: lambda.Code.fromAsset(
         path.join(__dirname, '../functions/step-functions/entity-extractor'),
+        { exclude: ['test_*.py', '__pycache__', '.pytest_cache'] },
       ),
       layers: [strandsLayer, sharedLayer],
       environment: {
         ...commonLambdaProps.environment,
         ENTITY_EXTRACTION_MODEL_ID: models.extractor,
+        GRAPH_DISABLED: 'true',
       },
     });
 
@@ -805,7 +808,8 @@ export class WorkflowStack extends Stack {
       },
     });
 
-    // GraphBuilder Lambda (builds knowledge graph after segment analysis)
+    // GraphBuilder Lambda (builds knowledge graph after segment analysis;
+    // GRAPH_DISABLED: returns empty graph_batches without Bedrock or LanceDB)
     const graphBuilder = new lambda.Function(this, 'GraphBuilder', {
       ...commonLambdaProps,
       functionName: 'idp-v2-graph-builder',
@@ -814,6 +818,7 @@ export class WorkflowStack extends Stack {
       memorySize: 512,
       code: lambda.Code.fromAsset(
         path.join(__dirname, '../functions/step-functions/graph-builder'),
+        { exclude: ['test_*.py', '__pycache__', '.pytest_cache'] },
       ),
       layers: [coreLayer, strandsLayer, sharedLayer],
       environment: {
@@ -821,6 +826,7 @@ export class WorkflowStack extends Stack {
         GRAPH_SERVICE_FUNCTION_NAME: graphService.functionName,
         ENTITY_NORMALIZATION_MODEL_ID: models.entityNormalizer,
         LANCEDB_FUNCTION_NAME: lancedbService.functionName,
+        GRAPH_DISABLED: 'true',
       },
     });
 
