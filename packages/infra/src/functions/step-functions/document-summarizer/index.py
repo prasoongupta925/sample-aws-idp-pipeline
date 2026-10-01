@@ -100,7 +100,7 @@ def generate_document_summary(model_id, region, language, page_descriptions, tot
         print(f'Document summary: Single call')
 
         try:
-            agent = Agent(model=bedrock_model, system_prompt=system_prompt)
+            agent = Agent(model=bedrock_model, system_prompt=system_prompt, callback_handler=None)
             result = agent(user_text)
             return str(result).strip()
         except Exception as e:
@@ -121,7 +121,7 @@ def generate_document_summary(model_id, region, language, page_descriptions, tot
 
         try:
             batch_model = BedrockModel(model_id=model_id, region_name=region)
-            agent = Agent(model=batch_model, system_prompt=system_prompt)
+            agent = Agent(model=batch_model, system_prompt=system_prompt, callback_handler=None)
             partial = str(agent(user_text)).strip()
             if partial:
                 return batch_idx, f'[Pages {batch_page_nums[0]}-{batch_page_nums[-1]}]\n{partial}'
@@ -159,7 +159,7 @@ def generate_document_summary(model_id, region, language, page_descriptions, tot
     print(f'Document summary: Merging {len(partial_summaries)} partial summaries')
 
     try:
-        agent = Agent(model=bedrock_model, system_prompt=system_prompt)
+        agent = Agent(model=bedrock_model, system_prompt=system_prompt, callback_handler=None)
         return str(agent(merge_user)).strip()
     except Exception as e:
         print(f'Document summary merge failed: {e}')

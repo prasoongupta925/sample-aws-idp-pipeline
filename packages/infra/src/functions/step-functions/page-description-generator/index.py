@@ -75,7 +75,7 @@ def generate_page_description(segment_data: dict, page_number: int, language: st
     try:
         region = os.environ.get('AWS_REGION', 'us-east-1')
         model = BedrockModel(model_id=PAGE_DESCRIPTION_MODEL_ID, region_name=region)
-        agent = Agent(model=model, system_prompt=system_text)
+        agent = Agent(model=model, system_prompt=system_text, callback_handler=None)
         result = agent(user_text)
         description = str(result).strip()
         print(f'Page {page_number}: generated description ({len(description)} chars)')
