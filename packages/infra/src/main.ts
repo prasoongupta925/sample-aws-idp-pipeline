@@ -68,6 +68,8 @@ const lanceServiceStack = new LanceServiceStack(app, 'IDP-V2-LanceService', {
   env,
 });
 lanceServiceStack.addDependency(storageStack);
+// Mcp reads the LanceDB service ARN from SSM at deploy time.
+mcpStack.addDependency(lanceServiceStack);
 
 // CRM webhook delivery (signed loan-file verdict push). Reads the backend table
 // (Storage) and invokes the file-check Lambda (Mcp); the workflow finalizer and
