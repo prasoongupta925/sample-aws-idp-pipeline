@@ -84,6 +84,7 @@ def handler(event, _context):
     pdf_text = segment_data.get('format_parser', '')
     ocr_text = segment_data.get('paddleocr', '')
     webcrawler_content = segment_data.get('webcrawler_content', '')
+    transcript = segment_data.get('transcribe', '')
     transcribe_segments = segment_data.get('transcribe_segments', [])
     segment_type = segment_data.get('segment_type', 'PAGE')
     video_uri = segment_data.get('file_uri', file_uri)
@@ -102,6 +103,9 @@ def handler(event, _context):
         context_parts.append(f'## PaddleOCR:\n{ocr_text}')
     if webcrawler_content:
         context_parts.append(f'## Web Crawler:\n{webcrawler_content}')
+    if transcript:
+        # Calls and other recordings: the model works from the Transcribe text.
+        context_parts.append(f'## Transcript:\n{transcript}')
 
     context = '\n\n'.join(context_parts) if context_parts else 'No prior analysis available.'
 

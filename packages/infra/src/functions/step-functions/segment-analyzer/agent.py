@@ -147,7 +147,8 @@ class VisionReactAgent:
         self.previous_context = context
 
         is_video = segment_type in ('VIDEO', 'CHAPTER')
-        is_text = segment_type in ('TEXT', 'WEB')
+        # AUDIO has no page image: read it like text (from the transcript in the context).
+        is_text = segment_type in ('TEXT', 'WEB', 'AUDIO')
 
         if is_video:
             self.current_video_uri = video_uri
@@ -342,6 +343,7 @@ Output as: ## Original Text, ## Document Overview, ## Key Information, ## Analys
 IMPORTANT: Provide all output in {language_name}."""
 
         agent = Agent(
+            callback_handler=None,  # do not print document content to CloudWatch
             model=model,
             system_prompt=system_prompt,
             tools=tools
