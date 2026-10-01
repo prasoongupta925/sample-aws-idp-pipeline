@@ -5,6 +5,11 @@
 #   deploy/lean/deploy.sh --hotswap           # code-only update (Lambda/Step Functions/ECR) in a few minutes
 #   deploy/lean/deploy.sh --stacks "IDP-V2-Application IDP-V2-Workflow"
 #   deploy/lean/deploy.sh --branch main --waf # other branch, with the optional CloudFront WAF
+#   deploy/lean/deploy.sh --no-cache          # compile the Rust Lambdas from scratch and replace their build cache
+#
+# Build cache: the compiled Rust Lambdas are kept in s3://sample-aws-idp-pipeline-build-cache-<account>-<region>
+# (created here the first time: private, encrypted, every object deleted 7 days after it was written), so later
+# builds skip most of the ~18 min of Rust compiling. CACHE_BUCKET= deploy/lean/deploy.sh runs without it.
 #
 # This account stops every CodeBuild build after 45 minutes. When the cap stops a build, the next one starts
 # with the same settings as soon as no stack is mid-operation (stacks already deployed are no-ops), up to
@@ -17,7 +22,7 @@ export AWS_REGION="${AWS_REGION:-ap-south-1}" AWS_DEFAULT_REGION="${AWS_REGION:-
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 
-BRANCH=lean; STACKS=""; HOTSWAP=false; CONTEXT=""
+BRANCH=lean; STACKS=""; HOTSWAP=false; CONTEXT=""; CACHE_RESTORE=true
 MAX_BUILDS="${MAX_BUILDS:-4}"
 REPO_URL="${REPO_URL:-https://github.com/prasoongupta925/sample-aws-idp-pipeline.git}"
 ADMIN_USER_EMAIL="${ADMIN_USER_EMAIL:-prasoongupta925@gmail.com}"
@@ -29,6 +34,7 @@ while [ $# -gt 0 ]; do
     --waf) CONTEXT="$CONTEXT -c enableWaf=true"; shift;;
     --context) CONTEXT="$CONTEXT -c $2"; shift 2;;
     --repo) REPO_URL="$2"; shift 2;;
+    --no-cache) CACHE_RESTORE=false; shift;;
     -h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0;;
     *) echo "unknown option $1"; exit 2;;
   esac
@@ -90,10 +96,38 @@ if [ -n "$RECENT" ] && [ "$RECENT" != "None" ]; then
   fi
 fi
 
-ENV=$(python3 - "$ADMIN_USER_EMAIL" "$REPO_URL" "$BRANCH" "$AWS_REGION" "$ACCOUNT" "$STACKS" "$CONTEXT" "$HOTSWAP" <<'PY'
+# Build cache bucket (README "Build cache"). Not idp-v2-*, so destroy.sh keeps it like the CDK bootstrap.
+CACHE_BUCKET="${CACHE_BUCKET-sample-aws-idp-pipeline-build-cache-$ACCOUNT-$AWS_REGION}"
+cache_bucket_ready() {  # creates the bucket the first time; true once it exists with its 7-day expiry rule
+  local b=$CACHE_BUCKET err n policy
+  if ! err=$(aws s3api head-bucket --bucket "$b" 2>&1 >/dev/null); then
+    case "$err" in *404*|*"Not Found"*) ;; *) echo "s3://$b is not usable: ${err##*: }"; return 1;; esac
+    echo "Creating the build cache bucket s3://$b (one time)"
+    if [ "$AWS_REGION" = us-east-1 ]; then aws s3api create-bucket --bucket "$b" >/dev/null || return 1
+    else aws s3api create-bucket --bucket "$b" --create-bucket-configuration "LocationConstraint=$AWS_REGION" >/dev/null || return 1; fi
+  fi
+  n=$(aws s3api get-bucket-lifecycle-configuration --bucket "$b" --output text \
+    --query 'length(Rules[?Status==`Enabled` && Expiration.Days==`7`])' 2>/dev/null) || n=0
+  [ "$n" = 1 ] && return 0
+  echo "Setting up s3://$b: public access blocked, SSE-S3 encryption, HTTPS only, every object deleted 7 days after it was written"
+  policy=$(printf '{"Version":"2012-10-17","Statement":[{"Sid":"HttpsOnly","Effect":"Deny","Principal":"*","Action":"s3:*","Resource":["arn:aws:s3:::%s","arn:aws:s3:::%s/*"],"Condition":{"Bool":{"aws:SecureTransport":"false"}}}]}' "$b" "$b")
+  aws s3api put-public-access-block --bucket "$b" --public-access-block-configuration \
+      BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true &&
+    aws s3api put-bucket-encryption --bucket "$b" --server-side-encryption-configuration \
+      '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}' &&
+    aws s3api put-bucket-policy --bucket "$b" --policy "$policy" &&
+    aws s3api put-bucket-lifecycle-configuration --bucket "$b" --lifecycle-configuration \
+      '{"Rules":[{"ID":"expire-after-7-days","Status":"Enabled","Filter":{"Prefix":""},"Expiration":{"Days":7},"NoncurrentVersionExpiration":{"NoncurrentDays":1},"AbortIncompleteMultipartUpload":{"DaysAfterInitiation":1}}]}'
+}
+if [ -n "$CACHE_BUCKET" ] && ! cache_bucket_ready; then
+  echo "Build cache off for this deploy: the build compiles everything, as it did before the cache"; CACHE_BUCKET=""
+fi
+
+ENV=$(python3 - "$ADMIN_USER_EMAIL" "$REPO_URL" "$BRANCH" "$AWS_REGION" "$ACCOUNT" "$STACKS" "$CONTEXT" "$HOTSWAP" \
+  "$CACHE_BUCKET" "$CACHE_RESTORE" <<'PY'
 import json, sys
 names = ["ADMIN_USER_EMAIL", "REPO_URL", "VERSION", "AWS_DEFAULT_REGION", "AWS_ACCOUNT_ID",
-         "DEPLOY_STACKS", "CDK_CONTEXT_ARGS", "HOTSWAP"]
+         "DEPLOY_STACKS", "CDK_CONTEXT_ARGS", "HOTSWAP", "CACHE_BUCKET", "CACHE_RESTORE"]
 env = [{"name": n, "value": v.strip(), "type": "PLAINTEXT"} for n, v in zip(names, sys.argv[1:])]
 # Same as the full edition's deploy.sh: a 6 GB Node heap (the frontend bundle runs out of memory on the
 # default one) and no reserved Lambda concurrency.
@@ -105,6 +139,7 @@ PY
 ARGS=(--project-name "$PROJECT" --buildspec-override "$(cat "$HERE/buildspec.yml")" --environment-variables-override "$ENV")
 DESC="branch $BRANCH${STACKS:+, stacks: $STACKS}${CONTEXT:+, context:$CONTEXT}"
 [ "$HOTSWAP" = true ] && DESC="$DESC, hotswap"
+if [ -z "$CACHE_BUCKET" ]; then DESC="$DESC, no build cache"; elif [ "$CACHE_RESTORE" = false ]; then DESC="$DESC, build cache replaced"; fi
 
 BID=""; N=0; RESULT=""; BUILDS=""
 trap 'echo; echo "deploy.sh stopped; build ${BID:-?} keeps running in CodeBuild (stop it with: aws codebuild stop-build --id ${BID:-?})"; exit 130' INT
@@ -137,7 +172,7 @@ while :; do
   say "build $N/$MAX_BUILDS ended: $RESULT after $MIN min$WHERE"
   if [ -n "$GROUP" ] && [ "$GROUP" != "None" ]; then
     aws_retry logs get-log-events --log-group-name "$GROUP" --log-stream-name "$STREAM" --limit 200 --query 'events[].message' --output text \
-      | tr '\t' '\n' | grep -E "took [0-9]+s|FRONTEND_URL|Admin user|_FAILED|failed:|Error:|error occurred|❌|out of memory|COMMAND_EXECUTION_ERROR" \
+      | tr '\t' '\n' | grep -E "took [0-9]+s|rust cache:|FRONTEND_URL|Admin user|_FAILED|failed:|Error:|error occurred|❌|out of memory|COMMAND_EXECUTION_ERROR" \
       | tail -25 | sed 's/^/        /' || true
   fi
   say "stacks: $(stack_summary)"

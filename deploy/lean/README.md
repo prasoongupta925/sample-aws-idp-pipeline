@@ -40,6 +40,32 @@ the idp-v2 tables, buckets and parameters. It also will not start while another 
 A deploy without `--waf` detaches the WAF from CloudFront, but its us-east-1 stack stays (and bills) until
 `destroy.sh` removes it.
 
+## Build cache
+
+About 18 of the 19 minutes of CDK bundling in a build go to cargo compiling the three Rust Lambdas (paddle-ocr,
+toka, lancedb-service) in the cargo-lambda Docker image. The build keeps cargo's `target/` folders in S3 and puts
+them back before `cdk synth`, so cargo compiles only what changed. cargo decides what is stale, as on a laptop.
+
+- Bucket `sample-aws-idp-pipeline-build-cache-<account>-<region>`. `deploy.sh` creates it the first time (public
+  access blocked, SSE-S3, HTTPS only) and checks its rule on every run: each object is deleted 7 days after it was
+  last written. It holds compiled code, no app data: an estimated 1-2 GB (the first build prints the real sizes),
+  a few cents a month. `destroy.sh`, `--all` included, leaves it; without builds it is empty within 7 days, and
+  `aws s3 rb s3://<bucket> --force` removes it.
+- There is one object per crate. A change to the crate's `Cargo.toml`/`Cargo.lock`, the cargo-lambda image or the
+  CPU type gives a new key, so that crate starts clean. When the crate folder is the same git tree as in the cached
+  build, its compiled code is reused too; otherwise only that crate is compiled again.
+- The build saves the cache right after `cdk synth`, then deploys that synthesized assembly (`cdk deploy --app`), so
+  a build the 45-minute cap stops still leaves the cache for the next one.
+- Expected: synth ~18 min down to ~2 min, plus ~1 min to restore and save, so a full update takes ~27 min instead
+  of ~42. Only the first build after the cache is set up (or after a change above) is cold; in a fresh deploy the
+  later builds get ~15 more minutes for CloudFormation. `deploy.sh` prints each build's `rust cache:` and `took` lines.
+- `deploy.sh --no-cache` compiles the Rust Lambdas from scratch and replaces the cache. `CACHE_BUCKET= deploy/lean/deploy.sh`
+  runs without any cache.
+- Not cached, on purpose: `cdk.out` (CDK bundles the Rust and Node.js assets again on every synth because they use
+  output hashes; the Python layers it would reuse take ~30 s and would freeze their unpinned pip packages), the pnpm
+  store and the uv cache (~30 s together). The CodeBuild project cache stays LOCAL: a build stopped by the cap never
+  uploads an S3-mode project cache, and S3 mode would drop the local Docker layer cache.
+
 ## Converting a running full edition
 
 `deploy/lean/migrate-from-full.sh` is only for an account that still runs the FULL edition and has to keep its
