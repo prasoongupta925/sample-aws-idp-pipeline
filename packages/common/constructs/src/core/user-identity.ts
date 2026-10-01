@@ -89,6 +89,16 @@ export class UserIdentity extends Construct {
       signInAliases: { username: true, email: true },
       accountRecovery: AccountRecovery.EMAIL_ONLY,
       selfSignUpEnabled: false,
+      // The default text ends the sentence right after the password, and users
+      // typed the full stop as part of it. Put each value on its own line.
+      userInvitation: {
+        emailSubject: 'Your Smart Dial Document AI login',
+        emailBody:
+          'Your login is ready.<br><br>' +
+          'Username: {username}<br>' +
+          'Temporary password: {####}<br><br>' +
+          'Enter the password exactly as shown on its line. You will choose your own password at the first sign-in.',
+      },
       standardAttributes: {
         email: { required: true },
         givenName: { required: true },
