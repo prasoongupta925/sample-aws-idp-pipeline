@@ -1,5 +1,5 @@
 """
-Bidirectional Voice Agent - Multi-Model Voice Chat Server
+Bidirectional Voice Agent - Nova Sonic Voice Chat Server
 
 This module provides a FastAPI WebSocket server for real-time bidirectional
 voice conversations through AWS Bedrock AgentCore.
@@ -12,21 +12,7 @@ AWS Bedrock AgentCore (WebSocket Proxy)
     | WebSocket (ws://container:8080/ws)
 This Container (bidi-agent)
     | Strands SDK BidiModel
-Voice Model (Nova Sonic / Gemini Live / OpenAI Realtime)
-
-=== Supported Models ===
-
-1. Amazon Nova Sonic (nova_sonic)
-   - AWS Bedrock native, no API key required
-   - Most stable, lowest latency
-
-2. Google Gemini Live (gemini)
-   - Requires Google AI API key
-   - Model ID: gemini-2.5-flash-native-audio-preview-12-2025
-
-3. OpenAI Realtime (openai)
-   - Requires OpenAI API key
-   - Model ID: gpt-4o-realtime-preview
+Voice Model (Amazon Nova 2 Sonic on Bedrock, IAM role, no API key)
 
 === AgentCore WebSocket Constraints ===
 
@@ -44,10 +30,8 @@ AWS Bedrock AgentCore WebSocket proxy has important limitations:
 
 === Audio Chunking Strategy ===
 
-OpenAI/Gemini can send larger audio chunks than Nova Sonic.
-Example: OpenAI sends 40KB+ audio chunk -> Exceeds AgentCore 32KB limit -> Connection drops
-
-Solution: Split into 24KB chunks
+Nova Sonic sends small audio chunks. As a safety net, any chunk over 24KB is
+split, since a frame over the AgentCore 32KB limit drops the connection:
 - 24KB audio + JSON overhead (~52 bytes) = ~24KB < 32KB limit
 - Base64-encoded audio is already a string, no additional encoding needed
 
@@ -59,6 +43,7 @@ import json
 import logging
 import os
 import sys
+import time
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 
@@ -85,7 +70,7 @@ from websockets.exceptions import ConnectionClosedError
 
 from agents import get_mcp_client, get_tools
 from agents.bidi_agent import execute_builtin_tool
-from config import create_bidi_model, get_config
+from config import NOVA_SONIC_VOICES, BidiModelType, create_bidi_model, get_config, resolve_voice
 
 # Configure logging to stdout for CloudWatch
 logging.basicConfig(
@@ -207,7 +192,7 @@ class TranscriptSaver:
         self.message_index = 0
         self.enabled = bool(bucket and user_id and project_id and session_id)
         # Store agent_id with model type for distinguishing voice sessions
-        # e.g., "voice_nova_sonic", "voice_gemini", "voice_openai"
+        # e.g., "voice_nova_sonic"
         self.agent_id = f"voice_{model_type}"
 
         if self.enabled:
@@ -281,10 +266,9 @@ class TranscriptSaver:
             logger.error(f"Failed to save tool_result: {e}")
 
 
+# Default language by browser time zone, limited to languages Nova 2 Sonic speaks
+# (English, French, Italian, German, Spanish, Portuguese, Hindi).
 TIMEZONE_TO_LANGUAGE: dict[str, str] = {
-    "Asia/Seoul": "Korean",
-    "Asia/Tokyo": "Japanese",
-    "Asia/Shanghai": "Chinese",
     "Asia/Kolkata": "Hindi",
     "Asia/Calcutta": "Hindi",
     "Europe/Paris": "French",
@@ -295,7 +279,7 @@ TIMEZONE_TO_LANGUAGE: dict[str, str] = {
     "America/Mexico_City": "Spanish",
 }
 
-BASE_SYSTEM_PROMPT = """You are a warm, professional, and helpful female AI voice assistant. \
+BASE_SYSTEM_PROMPT = """You are a warm, professional, and helpful AI voice assistant. \
 Your primary purpose is to have natural, conversational voice interactions with users in their preferred language.
 
 Core Principles:
@@ -306,20 +290,22 @@ Core Principles:
 Response Style:
 - Start by directly answering the user's question in 1-2 sentences
 - Use conversational language appropriate for spoken dialogue
-- Short sentences work better for voice
+- Short sentences work better for voice"""
 
-Korean Language Understanding:
-- When the user speaks Korean, expect Korean phonemes, grammar patterns, and sentence structures
-- Korean speakers often use English loanwords - recognize these patterns
-- Use conversation context to improve understanding
-- If you hear syllables that could be Korean, interpret them as Korean first"""
-
+# Appended after the base prompt (which may come from S3), so it overrides older
+# "do not mix languages" rules there: Hinglish is welcome.
 LANGUAGE_MIRROR_PROMPT = """
-CRITICAL LANGUAGE MIRRORING RULES:
-- Always reply in the language spoken. DO NOT mix with English. However, if the user talks in English, reply in English.
-- Please respond in the language the user is talking to you in, If you have a question or suggestion, \
-ask it in the language the user is talking in. \
-I want to ensure that our communication remains in the same language as the user."""
+LANGUAGE RULES (these replace any earlier language instructions):
+- Reply in the language the user speaks. If the user talks in English, reply in English.
+- Mixing languages is fine. If the user mixes Hindi and English (Hinglish), reply in the same natural mix \
+and keep the English words they use, such as loan, EMI, PAN or KYC.
+- Ask any question or suggestion in the language the user is talking in."""
+
+# Hindi verbs carry the speaker's gender, so match the selected voice.
+VOICE_GENDER_PROMPT = {
+    "female": '\nYour voice is female. In Hindi, use feminine forms for yourself, e.g. "main batati hoon".',
+    "male": '\nYour voice is male. In Hindi, use masculine forms for yourself, e.g. "main batata hoon".',
+}
 
 MCP_TOOL_PROMPT = """
 ## Tool Parameter Notice
@@ -356,7 +342,9 @@ def fetch_voice_system_prompt() -> str | None:
         return None
 
 
-def build_system_prompt(timezone: str, has_mcp_tools: bool = False, has_web_search: bool = False) -> str:
+def build_system_prompt(
+    timezone: str, has_mcp_tools: bool = False, has_web_search: bool = False, voice: str | None = None
+) -> str:
     base_prompt = fetch_voice_system_prompt() or BASE_SYSTEM_PROMPT
 
     language = TIMEZONE_TO_LANGUAGE.get(timezone)
@@ -370,6 +358,9 @@ def build_system_prompt(timezone: str, has_mcp_tools: bool = False, has_web_sear
     else:
         prompt = f"{base_prompt}\n{LANGUAGE_MIRROR_PROMPT}"
 
+    if voice in NOVA_SONIC_VOICES:
+        prompt += VOICE_GENDER_PROMPT[NOVA_SONIC_VOICES[voice]]
+
     if has_mcp_tools:
         prompt += f"\n{MCP_TOOL_PROMPT}"
 
@@ -380,12 +371,26 @@ def build_system_prompt(timezone: str, has_mcp_tools: bool = False, has_web_sear
 
 
 async def execute_tool(tool_use: dict, context: dict) -> dict:
-    """Execute a tool (builtin or MCP) and return the result."""
+    """Execute a tool (builtin or MCP) and return the result.
+
+    Tool inputs and results can hold customer data (PAN, account numbers), so
+    only the tool name, status and duration are logged.
+    """
+    tool_name = tool_use.get("name", "")
+    started = time.monotonic()
+    status = "error"
+    try:
+        result = await _run_tool(tool_use, context)
+        status = result.get("status", "success")
+        return result
+    finally:
+        logger.info(f"Tool {tool_name}: status={status}, duration_ms={(time.monotonic() - started) * 1000:.0f}")
+
+
+async def _run_tool(tool_use: dict, context: dict) -> dict:
     tool_name = tool_use.get("name", "")
     tool_input = tool_use.get("input", {}) or {}
     tool_use_id = tool_use.get("toolUseId", "")
-
-    logger.info(f"Executing tool: {tool_name} with input: {tool_input}")
 
     # Try builtin tool first
     builtin_result = await execute_builtin_tool(tool_name, tool_input, context)
@@ -406,15 +411,8 @@ async def execute_tool(tool_use: dict, context: dict) -> dict:
             if context.get("project_id"):
                 tool_input["project_id"] = context["project_id"]
 
-        logger.info(
-            f"Calling MCP tool: {tool_name} with injected params: "
-            f"user_id={context.get('user_id')}, project_id={context.get('project_id')}"
-        )
-        logger.info(f"Full tool_input: {tool_input}")
-
         try:
             result = mcp_client.call_tool_sync(name=tool_name, arguments=tool_input, tool_use_id=tool_use_id)
-            logger.info(f"MCP result type: {type(result)}, result: {result}")
 
             # If result is already a dict with expected format, return it directly
             if isinstance(result, dict) and "toolUseId" in result:
@@ -437,7 +435,8 @@ async def execute_tool(tool_use: dict, context: dict) -> dict:
                 "content": content,
             }
         except Exception as e:
-            logger.exception(f"MCP tool execution failed: {tool_name}")
+            # Type only: the message or traceback can echo the tool input.
+            logger.error(f"MCP tool execution failed: {tool_name} ({type(e).__name__})")
             return {
                 "toolUseId": tool_use_id,
                 "status": "error",
@@ -477,8 +476,18 @@ async def ws_endpoint(websocket: WebSocket):
         logger.warning(f"Failed to receive config: {e}")
         return
 
-    # Create model based on user selection
-    model_type = config_msg.get("model_type", "nova_sonic")
+    # Nova Sonic is the only voice model; create_bidi_model rejects any other type
+    model_type = config_msg.get("model_type") or BidiModelType.NOVA_SONIC.value
+    user_timezone = config_msg.get("browser_time_zone", "UTC")
+    voice = resolve_voice(config_msg.get("voice"), TIMEZONE_TO_LANGUAGE.get(user_timezone))
+
+    try:
+        model = create_bidi_model(model_type=model_type, voice=voice)
+        logger.info(f"Created {model_type} model")
+    except ValueError as e:
+        logger.error(f"Failed to create model: {e}")
+        await websocket.close(code=1011, reason=str(e))
+        return
 
     # Create transcript saver for persisting voice messages
     # Includes model_type in agent_id to distinguish sessions (e.g., voice_nova_sonic)
@@ -493,22 +502,6 @@ async def ws_endpoint(websocket: WebSocket):
         logger.info(
             f"Transcript saving enabled for session {config_msg.get('session_id')} ({transcript_saver.agent_id})"
         )
-    api_key = config_msg.get("api_key")
-    voice = config_msg.get("voice", "tiffany")
-
-    try:
-        model = create_bidi_model(
-            model_type=model_type,
-            api_key=api_key,
-            voice=voice,
-        )
-        logger.info(f"Created {model_type} model")
-    except ValueError as e:
-        logger.error(f"Failed to create model: {e}")
-        await websocket.close(code=1011, reason=str(e))
-        return
-
-    user_timezone = config_msg.get("browser_time_zone", "UTC")
 
     # Combine builtin tools with gateway MCP tools (search, qa, WebSearch)
     all_tools = get_tools() + mcp_tools
@@ -518,7 +511,7 @@ async def ws_endpoint(websocket: WebSocket):
         custom_prompt = config_msg.get("system_prompt")
         has_web_search = any(t["name"] == "WebSearch" for t in mcp_tools)
         system_prompt = custom_prompt or build_system_prompt(
-            user_timezone, has_mcp_tools=has_mcp, has_web_search=has_web_search
+            user_timezone, has_mcp_tools=has_mcp, has_web_search=has_web_search, voice=voice
         )
         logger.info(f"Starting model with {len(all_tools)} tools: {[t['name'] for t in all_tools]}")
         await model.start(system_prompt=system_prompt, tools=all_tools)
@@ -587,12 +580,10 @@ async def ws_endpoint(websocket: WebSocket):
                     #
                     # Problem:
                     # AWS Bedrock AgentCore WebSocket proxy has a 32KB message frame limit.
-                    # OpenAI/Gemini Realtime APIs send variable-size audio chunks,
-                    # sometimes exceeding 40KB per chunk.
                     # Exceeding the 32KB limit causes AgentCore to immediately terminate
                     # the WebSocket connection.
                     #
-                    # Solution:
+                    # Solution (safety net, Nova Sonic chunks are normally small):
                     # Split large audio data into smaller chunks under 24KB.
                     #
                     # Why 24KB?
@@ -604,7 +595,6 @@ async def ws_endpoint(websocket: WebSocket):
                     #
                     # Notes:
                     # - Nova Sonic is Bedrock-native and optimized for small chunks
-                    # - OpenAI/Gemini are external APIs with irregular chunk sizes
                     # - Browser-side AudioPlayback automatically queues and plays
                     #   sequential chunks seamlessly
                     # =============================================================
@@ -630,8 +620,10 @@ async def ws_endpoint(websocket: WebSocket):
                                 "sample_rate": sample_rate,
                             })
                 elif isinstance(event, BidiTranscriptStreamEvent):
-                    transcript_text = event.text[:50] if event.text else "(empty)"
-                    logger.info(f"Transcript: role={event.role}, is_final={event.is_final}, text={transcript_text}...")
+                    # Length only: speech can contain PAN or account numbers
+                    logger.info(
+                        f"Transcript: role={event.role}, is_final={event.is_final}, chars={len(event.text or '')}"
+                    )
                     await websocket.send_json(
                         {
                             "type": "transcript",
@@ -640,15 +632,8 @@ async def ws_endpoint(websocket: WebSocket):
                             "is_final": event.is_final,
                         }
                     )
-                    # Model-specific save logic (mirrors frontend display logic):
-                    # - OpenAI: is_final=true only
-                    # - Gemini: is_final=false only (is_final=true is empty/duplicate)
-                    # - Nova Sonic: is_final=false only
-                    should_save = event.text.strip() and (
-                        (model_type == "openai" and event.is_final)
-                        or (model_type != "openai" and not event.is_final)
-                    )
-                    if should_save:
+                    # Nova Sonic: save is_final=false only (mirrors frontend display logic)
+                    if event.text.strip() and not event.is_final:
                         transcript_saver.save_transcript(event.role, event.text)
                 elif isinstance(event, ToolUseStreamEvent):
                     # Handle tool use requests from the model
@@ -679,7 +664,6 @@ async def ws_endpoint(websocket: WebSocket):
 
                             try:
                                 tool_result = await execute_tool(tool_use, tool_context)
-                                logger.info(f"Tool result: {tool_name} -> {tool_result.get('status')}")
                                 await model.send(ToolResultEvent(tool_result))
 
                                 await websocket.send_json(
@@ -694,7 +678,8 @@ async def ws_endpoint(websocket: WebSocket):
                                     tool_name, tool_use_id, tool_result.get("status", "success"),
                                 )
                             except Exception as e:
-                                logger.exception(f"Tool execution error: {tool_name}")
+                                # Type only: the message or traceback can echo tool data.
+                                logger.error(f"Tool execution error: {tool_name} ({type(e).__name__})")
                                 error_result = {
                                     "toolUseId": tool_use_id,
                                     "status": "error",

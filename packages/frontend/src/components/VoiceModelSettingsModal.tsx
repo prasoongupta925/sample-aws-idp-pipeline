@@ -1,196 +1,92 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Mic, X, Eye, EyeOff } from 'lucide-react';
+import { Mic, X } from 'lucide-react';
 import type { BidiModelType, VoiceModelConfig } from '../hooks/useVoiceChat';
 import { useModal } from '../hooks/useModal';
 
 const VOICE_MODEL_STORAGE_KEY = 'voice_model_config';
 
-function obfuscate(value: string): string {
-  return btoa(
-    Array.from(new TextEncoder().encode(value), (b) =>
-      String.fromCharCode(b),
-    ).join(''),
-  );
-}
-
-function deobfuscate(encoded: string): string {
-  try {
-    const binary = atob(encoded);
-    return new TextDecoder().decode(
-      Uint8Array.from(binary, (c) => c.charCodeAt(0)),
-    );
-  } catch {
-    return encoded;
-  }
-}
-
 export interface VoiceModelSettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSave: (config: VoiceModelConfig) => void;
-  selectedModel?: BidiModelType; // If provided, only show settings for this model
+  selectedModel?: BidiModelType; // Unused: Nova Sonic is the only voice model
 }
 
-const MODEL_OPTIONS: {
-  value: BidiModelType;
-  label: string;
-  requiresApiKey: boolean;
-}[] = [
-  { value: 'nova_sonic', label: 'Amazon Nova Sonic', requiresApiKey: false },
-  { value: 'gemini', label: 'Google Gemini Live', requiresApiKey: true },
-  { value: 'openai', label: 'OpenAI Realtime', requiresApiKey: true },
+// The only voice model: AWS-sold on Bedrock, signed with IAM, no API key.
+const MODEL_LABEL = 'Amazon Nova 2 Sonic';
+
+// Nova 2 Sonic voice ids. Tiffany and Matthew speak every Nova 2 Sonic
+// language; Kiara and Arjun are the Indian English and Hindi voices.
+const VOICE_OPTIONS: { value: string; label: string }[] = [
+  { value: 'tiffany', label: 'Tiffany (Female)' },
+  { value: 'matthew', label: 'Matthew (Male)' },
+  { value: 'kiara', label: 'Kiara (Female, Hindi / Indian English)' },
+  { value: 'arjun', label: 'Arjun (Male, Hindi / Indian English)' },
 ];
 
-const VOICE_OPTIONS: Record<BidiModelType, { value: string; label: string }[]> =
-  {
-    nova_sonic: [
-      { value: 'tiffany', label: 'Tiffany (Female)' },
-      { value: 'matthew', label: 'Matthew (Male)' },
-    ],
-    gemini: [
-      { value: 'Kore', label: 'Kore (Female)' },
-      { value: 'Puck', label: 'Puck (Male)' },
-      { value: 'Charon', label: 'Charon (Male)' },
-      { value: 'Fenrir', label: 'Fenrir (Male)' },
-      { value: 'Aoede', label: 'Aoede (Female)' },
-    ],
-    openai: [
-      { value: 'alloy', label: 'Alloy' },
-      { value: 'ash', label: 'Ash' },
-      { value: 'ballad', label: 'Ballad' },
-      { value: 'coral', label: 'Coral' },
-      { value: 'echo', label: 'Echo' },
-      { value: 'sage', label: 'Sage' },
-      { value: 'shimmer', label: 'Shimmer' },
-      { value: 'verse', label: 'Verse' },
-    ],
-  };
+// The voice agent defaults to Hindi in India, where Kiara is the default voice.
+const INDIA_TIME_ZONES = ['Asia/Kolkata', 'Asia/Calcutta'];
 
-export function getStoredVoiceModelConfig(): VoiceModelConfig {
+export function getDefaultVoice(
+  timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone,
+): string {
+  return INDIA_TIME_ZONES.includes(timeZone) ? 'kiara' : 'tiffany';
+}
+
+function isVoice(value: unknown): value is string {
+  return VOICE_OPTIONS.some((option) => option.value === value);
+}
+
+/** The saved Nova Sonic voice, else the default one. */
+function getStoredVoice(): string {
   try {
     const stored = localStorage.getItem(VOICE_MODEL_STORAGE_KEY);
-    if (stored) {
-      const config = JSON.parse(stored) as VoiceModelConfig;
-      // Decode obfuscated API keys
-      const decoded: Record<string, string> = {};
-      if (config.apiKeys) {
-        for (const [k, v] of Object.entries(config.apiKeys)) {
-          decoded[k] = v ? deobfuscate(v) : '';
-        }
-      }
-      config.apiKeys = decoded as VoiceModelConfig['apiKeys'];
-      config.apiKey =
-        decoded[config.modelType as 'gemini' | 'openai'] || undefined;
-      return config;
-    }
+    const voice: unknown = stored
+      ? (JSON.parse(stored) as { voice?: unknown }).voice
+      : undefined;
+    if (isVoice(voice)) return voice;
   } catch {
     // ignore
   }
-  return { modelType: 'nova_sonic', voice: 'tiffany', apiKeys: {} };
+  return getDefaultVoice();
+}
+
+export function getStoredVoiceModelConfig(): VoiceModelConfig {
+  // Configs saved by older builds may name another model, its voice or an
+  // API key: only a Nova Sonic voice is kept.
+  return { modelType: 'nova_sonic', voice: getStoredVoice() };
 }
 
 export function saveVoiceModelConfig(config: VoiceModelConfig): void {
-  // Obfuscate API keys before persisting
-  const encoded: Record<string, string> = {};
-  if (config.apiKeys) {
-    for (const [k, v] of Object.entries(config.apiKeys)) {
-      encoded[k] = v ? obfuscate(v) : '';
-    }
-  }
-  const toStore = {
-    ...config,
-    apiKey: undefined,
-    apiKeys: encoded,
-  };
-  localStorage.setItem(VOICE_MODEL_STORAGE_KEY, JSON.stringify(toStore));
-}
-
-function getApiKeyForModel(
-  config: VoiceModelConfig,
-  modelType: BidiModelType,
-): string {
-  if (modelType === 'nova_sonic') return '';
-  return config.apiKeys?.[modelType] || '';
+  // Stored whole, which also drops API keys saved by older builds
+  const voice = isVoice(config.voice) ? config.voice : getDefaultVoice();
+  localStorage.setItem(
+    VOICE_MODEL_STORAGE_KEY,
+    JSON.stringify({ modelType: 'nova_sonic', voice }),
+  );
 }
 
 export default function VoiceModelSettingsModal({
   isOpen,
   onClose,
   onSave,
-  selectedModel,
 }: VoiceModelSettingsModalProps) {
   const { t } = useTranslation();
-  const [modelType, setModelType] = useState<BidiModelType>('nova_sonic');
-  const [apiKey, setApiKey] = useState('');
-  const [voice, setVoice] = useState('tiffany');
-  const [showApiKey, setShowApiKey] = useState(false);
-  const [storedApiKeys, setStoredApiKeys] = useState<{
-    gemini?: string;
-    openai?: string;
-  }>({});
-  const [modelUnlocked, setModelUnlocked] = useState(false);
-  const tapCountRef = useRef(0);
-  const tapTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-
-  // If selectedModel is provided, lock to that model (unless unlocked via hidden tap)
-  const isModelLocked = selectedModel !== undefined && !modelUnlocked;
-  const effectiveModelType = isModelLocked ? selectedModel : modelType;
+  const [voice, setVoice] = useState(getStoredVoice);
 
   useEffect(() => {
-    if (isOpen) {
-      setModelUnlocked(false);
-      tapCountRef.current = 0;
-      const config = getStoredVoiceModelConfig();
-      const targetModel = selectedModel ?? config.modelType;
-      setModelType(targetModel);
-      setStoredApiKeys(config.apiKeys || {});
-      setApiKey(getApiKeyForModel(config, targetModel));
-      const storedVoice =
-        config.modelType === targetModel ? config.voice : undefined;
-      setVoice(storedVoice || VOICE_OPTIONS[targetModel][0]?.value || '');
-    }
-  }, [isOpen, selectedModel]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    // Reset voice when model changes - check if current voice is valid for new model
-    const voices = VOICE_OPTIONS[effectiveModelType];
-    const isVoiceValidForModel = voices?.some((v) => v.value === voice);
-    if (!isVoiceValidForModel && voices && voices.length > 0) {
-      setVoice(voices[0].value);
-    }
-    // Load stored API key for this model
-    setApiKey(storedApiKeys[effectiveModelType as 'gemini' | 'openai'] || '');
-  }, [effectiveModelType, storedApiKeys, isOpen, voice]);
+    if (isOpen) setVoice(getStoredVoice());
+  }, [isOpen]);
 
   useModal({ isOpen, onClose });
 
   const handleSave = () => {
-    // Update stored API keys with current key
-    const updatedApiKeys = { ...storedApiKeys };
-    if (effectiveModelType === 'gemini' || effectiveModelType === 'openai') {
-      if (apiKey.trim()) {
-        updatedApiKeys[effectiveModelType] = apiKey.trim();
-      } else {
-        delete updatedApiKeys[effectiveModelType];
-      }
-    }
-
-    const config: VoiceModelConfig = {
-      modelType: effectiveModelType,
-      voice,
-      apiKey: apiKey.trim() || undefined,
-      apiKeys: updatedApiKeys,
-    };
-
+    const config: VoiceModelConfig = { modelType: 'nova_sonic', voice };
     saveVoiceModelConfig(config);
     onSave(config);
     onClose();
   };
-
-  const modelOption = MODEL_OPTIONS.find((m) => m.value === effectiveModelType);
-  const requiresApiKey = modelOption?.requiresApiKey ?? false;
 
   if (!isOpen) return null;
 
@@ -236,80 +132,15 @@ export default function VoiceModelSettingsModal({
 
         {/* Content */}
         <div className="relative p-4 space-y-4">
-          {/* Model Selection */}
+          {/* Model (Nova Sonic only) */}
           <div className="space-y-1.5">
             <label className="text-sm font-medium text-[#334155] dark:text-[#cbd5e1]">
               {t('voiceModel.model', 'Model')}
             </label>
-            {isModelLocked ? (
-              <div
-                className="w-full px-3 py-2 text-sm bg-transparent dark:bg-[#0d1117] border border-black/10 dark:border-[#3b4264] rounded-lg text-[#475569] dark:text-[#cbd5e1] select-none cursor-default"
-                onClick={() => {
-                  tapCountRef.current += 1;
-                  clearTimeout(tapTimerRef.current);
-                  if (tapCountRef.current >= 5) {
-                    tapCountRef.current = 0;
-                    setModelUnlocked(true);
-                  } else {
-                    tapTimerRef.current = setTimeout(() => {
-                      tapCountRef.current = 0;
-                    }, 1500);
-                  }
-                }}
-              >
-                {modelOption?.label || effectiveModelType}
-              </div>
-            ) : (
-              <select
-                data-modal-input
-                value={modelType}
-                onChange={(e) => setModelType(e.target.value as BidiModelType)}
-                className="w-full px-3 py-2 text-sm border border-black/10 dark:border-[#3b4264] rounded-lg bg-transparent dark:bg-[#0d1117] text-[#0f172a] dark:text-[#f1f5f9] focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all"
-              >
-                {MODEL_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            )}
-          </div>
-
-          {/* API Key (conditional) */}
-          {requiresApiKey && (
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium text-[#334155] dark:text-[#cbd5e1]">
-                {t('voiceModel.apiKey', 'API Key')}
-              </label>
-              <div className="relative">
-                <input
-                  data-modal-input
-                  type={showApiKey ? 'text' : 'password'}
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder={modelType === 'gemini' ? 'AIza...' : 'sk-...'}
-                  className="w-full px-3 py-2 pr-10 text-sm border border-black/10 dark:border-[#3b4264] rounded-lg bg-transparent dark:bg-[#0d1117] text-[#0f172a] dark:text-[#f1f5f9] placeholder-[#94a3b8] focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowApiKey(!showApiKey)}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-[#94a3b8] hover:text-[#475569] dark:hover:text-[#cbd5e1] transition-colors"
-                >
-                  {showApiKey ? (
-                    <EyeOff className="w-4 h-4" />
-                  ) : (
-                    <Eye className="w-4 h-4" />
-                  )}
-                </button>
-              </div>
-              <p className="text-xs text-[#64748b]">
-                {t(
-                  'voiceModel.apiKeyHint',
-                  'Stored locally in your browser only',
-                )}
-              </p>
+            <div className="w-full px-3 py-2 text-sm bg-transparent dark:bg-[#0d1117] border border-black/10 dark:border-[#3b4264] rounded-lg text-[#475569] dark:text-[#cbd5e1] select-none cursor-default">
+              {MODEL_LABEL}
             </div>
-          )}
+          </div>
 
           {/* Voice Selection */}
           <div className="space-y-1.5">
@@ -322,7 +153,7 @@ export default function VoiceModelSettingsModal({
               onChange={(e) => setVoice(e.target.value)}
               className="w-full px-3 py-2 text-sm border border-black/10 dark:border-[#3b4264] rounded-lg bg-transparent dark:bg-[#0d1117] text-[#0f172a] dark:text-[#f1f5f9] focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all"
             >
-              {VOICE_OPTIONS[effectiveModelType]?.map((option) => (
+              {VOICE_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
                 </option>
