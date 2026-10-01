@@ -5,6 +5,8 @@ from typing import Callable
 import boto3
 from strands import tool
 
+from bedrock_tier import converse_fields
+
 _s3_client = boto3.client('s3')
 _prompt_cache = {}
 
@@ -100,6 +102,7 @@ Provide detailed, professional analysis in {language}."""
                     ],
                 }],
                 inferenceConfig={'maxTokens': 4096, 'temperature': 0.1},
+                **converse_fields(),
             )
             answer = ''.join(
                 block.get('text', '')

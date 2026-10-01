@@ -19,7 +19,8 @@ import pytest  # noqa: E402
 
 import extractor  # noqa: E402
 from extractor import (  # noqa: E402
-    NoStructuredOutputError, build_texts, build_user_prompt, call_nova, cost_usd, load_prompts, usage_record)
+    PRICES_PER_MILLION_USD, NoStructuredOutputError, build_texts, build_user_prompt, call_model, cost_usd,
+    load_prompts, service_tier, usage_record)
 from tool_schema import (  # noqa: E402
     DEBIT_CATEGORIES, DEBIT_CHANNELS, DOC_TYPES, FIELD_NAMES, LIST_FIELDS, NUMERIC_FIELDS, TOOL_NAME, TOOL_SCHEMA)
 
@@ -42,6 +43,16 @@ PDF_TEXT = ('Salary Slip for the month of August 2026 - Konkan Softworks Pvt Ltd
             'Employee Rahul Vijay Deshmukh PAN BQXPD4821K Gross 95,000 Net 82,500')
 OCR_TEXT = 'OCR READING OF THE SAME PAGE: Salary S1ip August 2026 Konkan Softw0rks Gross 95,000'
 VISION_TEXT = 'VISION TRANSCRIPTION: identity sheet of Sneha Anil Kulkarni, PAN CKRPK7314M'
+
+FACTS_MODEL = 'openai.gpt-oss-120b-1:0'
+NOVA_2_LITE = 'global.amazon.nova-2-lite-v1:0'
+MODELS_JSON = os.path.abspath(os.path.join(HERE, '..', '..', '..', 'models.json'))
+
+
+@pytest.fixture(autouse=True)
+def _standard_tier(monkeypatch):
+    # Tests opt in to a service tier explicitly.
+    monkeypatch.delenv('BEDROCK_SERVICE_TIER', raising=False)
 
 
 def _page(index, **kw):
@@ -212,36 +223,44 @@ def test_user_prompt_uses_replace_not_format():
 
 
 # --------------------------------------------------------------------------- #
-# call_nova with a fake Bedrock client
+# call_model with a fake Bedrock client
 # --------------------------------------------------------------------------- #
 class FakeBedrock:
-    def __init__(self, content, usage=None):
+    def __init__(self, content, usage=None, served_tier=None):
         self.content = content
         self.usage = usage if usage is not None else {'inputTokens': 1200, 'outputTokens': 150}
+        self.served_tier = served_tier
         self.calls = []
 
     def converse(self, **kwargs):
         self.calls.append(kwargs)
-        return {'output': {'message': {'role': 'assistant', 'content': self.content}},
+        resp = {'output': {'message': {'role': 'assistant', 'content': self.content}},
                 'usage': self.usage, 'stopReason': 'tool_use'}
+        if self.served_tier:
+            resp['serviceTier'] = {'type': self.served_tier}
+        return resp
 
 
 RAW = {'doc_type': 'salary_slip', 'applicant_name': 'Rahul Vijay Deshmukh', 'pan': 'BQXP4821K',
        'gross_salary': 95000, 'net_salary': 82500}
+# gpt-oss answers with its reasoning first, then the tool call.
+REASONING = {'reasoningContent': {'reasoningText': {
+    'text': 'We need to call record_loan_document. Draft: {"doc_type": "other", "pan": "AAAAA0000A"}'}}}
 
 
-def test_call_nova_request_and_tool_use_response():
-    fake = FakeBedrock([{'text': 'thinking...'}, {'toolUse': {'toolUseId': 't1', 'name': TOOL_NAME, 'input': RAW}}])
-    fields, usage = call_nova('--- Page 1 ---\nhello', 'global.amazon.nova-2-lite-v1:0', client=fake)
+def test_call_model_request_and_tool_use_response():
+    fake = FakeBedrock([REASONING, {'toolUse': {'toolUseId': 't1', 'name': TOOL_NAME, 'input': RAW}}])
+    fields, usage = call_model('--- Page 1 ---\nhello', FACTS_MODEL, client=fake)
     assert fields == RAW
-    # 1,200 x $0.35/M + 150 x $2.95/M = $0.00042 + $0.0004425
-    assert usage == {'model_id': 'global.amazon.nova-2-lite-v1:0', 'input_tokens': 1200,
-                     'output_tokens': 150, 'cost_usd': 0.0008625}
+    # 1,200 x $0.18/M + 150 x $0.71/M = $0.000216 + $0.0001065 (standard tier)
+    assert usage == {'model_id': FACTS_MODEL, 'service_tier': 'default', 'input_tokens': 1200,
+                     'output_tokens': 150, 'cost_usd': 0.0003225}
 
     (req,) = fake.calls
-    assert req['modelId'] == 'global.amazon.nova-2-lite-v1:0'
+    assert req['modelId'] == FACTS_MODEL
+    assert 'serviceTier' not in req  # BEDROCK_SERVICE_TIER unset: standard tier
     assert req['system'] == [{'text': load_prompts()['system_prompt']}]
-    assert req['inferenceConfig'] == {'maxTokens': 8000, 'temperature': 0}
+    assert req['inferenceConfig'] == {'maxTokens': 16000, 'temperature': 0}
     tool_config = req['toolConfig']
     assert tool_config['toolChoice'] == {'tool': {'name': 'record_loan_document'}}
     (tool,) = tool_config['tools']
@@ -257,33 +276,79 @@ def test_call_nova_request_and_tool_use_response():
     assert all('document' not in block for block in message['content'])  # text only, no file bytes
 
 
-def test_call_nova_falls_back_to_json_in_text():
+def test_call_model_requests_the_flex_tier_and_prices_it(monkeypatch):
+    monkeypatch.setenv('BEDROCK_SERVICE_TIER', 'flex')
+    fake = FakeBedrock([REASONING, {'toolUse': {'input': RAW}}], served_tier='flex')
+    fields, usage = call_model('text', FACTS_MODEL, client=fake)
+    assert fields == RAW
+    assert fake.calls[0]['serviceTier'] == {'type': 'flex'}
+    # 1,200 x $0.09/M + 150 x $0.355/M: half the standard price
+    assert usage == usage_record(FACTS_MODEL, 1200, 150, 'flex')
+    assert usage['service_tier'] == 'flex' and usage['cost_usd'] == 0.00016125
+
+
+def test_call_model_prices_the_tier_that_served_the_call(monkeypatch):
+    monkeypatch.setenv('BEDROCK_SERVICE_TIER', 'flex')
+    fake = FakeBedrock([{'toolUse': {'input': RAW}}], served_tier='default')
+    _, usage = call_model('text', FACTS_MODEL, client=fake)
+    assert usage['service_tier'] == 'default' and usage['cost_usd'] == 0.0003225
+    # no serviceTier in the response: the requested tier is billed
+    _, usage = call_model('text', FACTS_MODEL, client=FakeBedrock([{'toolUse': {'input': RAW}}]))
+    assert usage['service_tier'] == 'flex'
+
+
+@pytest.mark.parametrize('env_value, expected', [
+    (None, None), ('', None), ('flex', 'flex'), (' Flex ', 'flex'), ('default', 'default'),
+    ('priority', 'priority'), ('turbo', None), ('reserved', None)])
+def test_service_tier_env(monkeypatch, env_value, expected):
+    if env_value is not None:
+        monkeypatch.setenv('BEDROCK_SERVICE_TIER', env_value)
+    assert service_tier() == expected
+    fake = FakeBedrock([{'toolUse': {'input': RAW}}])
+    call_model('text', FACTS_MODEL, client=fake)
+    assert fake.calls[0].get('serviceTier') == ({'type': expected} if expected else None)
+
+
+def test_call_model_falls_back_to_json_in_text():
     fake = FakeBedrock([{'text': 'Here you go:\n```json\n{"doc_type": "bank_statement", "applicant_name": "X"}\n```'}],
                        usage={})
-    fields, usage = call_nova('text', 'm', client=fake)
+    fields, usage = call_model('text', 'm', client=fake)
     assert fields == {'doc_type': 'bank_statement', 'applicant_name': 'X'}
-    assert usage == {'model_id': 'm', 'input_tokens': 0, 'output_tokens': 0, 'cost_usd': 0.0}
+    assert usage == {'model_id': 'm', 'service_tier': 'default', 'input_tokens': 0, 'output_tokens': 0,
+                     'cost_usd': 0.0}
 
 
-def test_call_nova_tool_use_wins_over_earlier_text_json():
+def test_call_model_falls_back_to_json_in_text_after_reasoning():
+    fake = FakeBedrock([REASONING, {'text': '{"doc_type": "bank_statement", "applicant_name": "X"}'}])
+    fields, _ = call_model('text', FACTS_MODEL, client=fake)
+    assert fields == {'doc_type': 'bank_statement', 'applicant_name': 'X'}
+
+
+def test_call_model_tool_use_wins_over_earlier_text_json():
     fake = FakeBedrock([{'text': '{"doc_type": "other"}'}, {'toolUse': {'input': RAW}}])
-    fields, _ = call_nova('text', 'm', client=fake)
+    fields, _ = call_model('text', 'm', client=fake)
     assert fields == RAW
 
 
-def test_call_nova_raises_without_structured_output():
+def test_call_model_raises_without_structured_output():
     with pytest.raises(ValueError, match='model returned no structured output'):
-        call_nova('text', 'm', client=FakeBedrock([{'text': 'I cannot help with that.'}]))
+        call_model('text', 'm', client=FakeBedrock([{'text': 'I cannot help with that.'}]))
     with pytest.raises(ValueError, match='model returned no structured output'):
-        call_nova('text', 'm', client=FakeBedrock([]))
+        call_model('text', 'm', client=FakeBedrock([]))
+
+
+def test_reasoning_is_never_read_as_fields():
+    # Output cut during the reasoning: the JSON drafted there is not a result.
+    with pytest.raises(NoStructuredOutputError):
+        call_model('text', FACTS_MODEL, client=FakeBedrock([REASONING]))
 
 
 def test_answer_without_fields_carries_the_billed_usage():
     fake = FakeBedrock([{'text': 'I cannot help with that.'}], usage={'inputTokens': 800, 'outputTokens': 12})
     with pytest.raises(NoStructuredOutputError) as err:
-        call_nova('text', 'global.amazon.nova-2-lite-v1:0', client=fake)
-    assert err.value.usage == usage_record('global.amazon.nova-2-lite-v1:0', 800, 12)
-    assert err.value.usage['cost_usd'] == 0.0003154  # 800 x 0.35/M + 12 x 2.95/M
+        call_model('text', FACTS_MODEL, client=fake)
+    assert err.value.usage == usage_record(FACTS_MODEL, 800, 12, 'default')
+    assert err.value.usage['cost_usd'] == 0.00015252  # 800 x 0.18/M + 12 x 0.71/M
 
 
 def test_default_client_is_lazy_and_uses_region_and_retries(monkeypatch):
@@ -297,7 +362,7 @@ def test_default_client_is_lazy_and_uses_region_and_retries(monkeypatch):
 
     monkeypatch.setitem(sys.modules, 'boto3', FakeBoto3)
     monkeypatch.setattr(extractor, '_bedrock_client', None)
-    fields, _ = call_nova('text', 'm')
+    fields, _ = call_model('text', 'm')
     assert fields == RAW
     assert created['name'] == 'bedrock-runtime'
     assert created['region_name'] == 'ap-south-1'
@@ -306,14 +371,14 @@ def test_default_client_is_lazy_and_uses_region_and_retries(monkeypatch):
 
 
 @pytest.mark.parametrize('env_value, expected', [
-    (None, 8000), ('12000', 12000), ('0', 8000), ('-5', 8000), ('lots', 8000)])
+    (None, 16000), ('12000', 12000), ('0', 16000), ('-5', 16000), ('lots', 16000)])
 def test_max_output_tokens_env_override(monkeypatch, env_value, expected):
     if env_value is None:
         monkeypatch.delenv('FACTS_MAX_OUTPUT_TOKENS', raising=False)
     else:
         monkeypatch.setenv('FACTS_MAX_OUTPUT_TOKENS', env_value)
     fake = FakeBedrock([{'toolUse': {'input': RAW}}])
-    call_nova('text', 'm', client=fake)
+    call_model('text', 'm', client=fake)
     assert fake.calls[0]['inferenceConfig']['maxTokens'] == expected
 
 
@@ -324,41 +389,62 @@ class TruncatingBedrock(FakeBedrock):
         return resp
 
 
-def test_call_nova_flags_output_cut_at_max_tokens():
+def test_call_model_flags_output_cut_at_max_tokens():
     fake = TruncatingBedrock([{'toolUse': {'toolUseId': 't1', 'name': TOOL_NAME, 'input': RAW}}])
-    fields, usage = call_nova('text', 'm', client=fake)
+    fields, usage = call_model('text', FACTS_MODEL, client=fake)
     assert fields == RAW
-    assert usage == {**usage_record('m', 1200, 150), 'output_truncated': True}
+    assert usage == {**usage_record(FACTS_MODEL, 1200, 150, 'default'), 'output_truncated': True}
 
 
 # --------------------------------------------------------------------------- #
-# cost per document: the Ask feature's Nova 2 Lite price list
+# cost per document: the model's price for the tier that served the call
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize('tokens_in, tokens_out, expected', [
-    (0, 0, 0.0),
-    (1_000_000, 0, 0.35),
-    (0, 1_000_000, 2.95),
-    (10_000, 500, 0.004975),  # the Ask API contract's worked example
-    (1, 1, 0.0000033),  # rounded to 8 decimals like the Ask feature
-    (12345, 678, 0.00632085),
+@pytest.mark.parametrize('model_id, tier, tokens_in, tokens_out, expected', [
+    (FACTS_MODEL, 'default', 0, 0, 0.0),
+    (FACTS_MODEL, None, 1_000_000, 0, 0.18),
+    (FACTS_MODEL, 'default', 0, 1_000_000, 0.71),
+    (FACTS_MODEL, 'flex', 1_000_000, 1_000_000, 0.445),
+    (FACTS_MODEL, 'flex', 10_000, 500, 0.0010775),
+    (FACTS_MODEL, 'default', 12345, 678, 0.00270348),  # rounded to 8 decimals like the Ask feature
+    (NOVA_2_LITE, 'default', 10_000, 500, 0.004975),  # the Ask API contract's worked example
+    (NOVA_2_LITE, 'flex', 10_000, 500, 0.0024875),
+    ('m', 'default', 10, 10, None),  # no price for the model: unknown, not guessed
+    (FACTS_MODEL, 'reserved', 10, 10, None),
+    (None, None, 0, 0, 0.0),  # no call
 ])
-def test_cost_usd(tokens_in, tokens_out, expected):
-    assert cost_usd(tokens_in, tokens_out) == expected
+def test_cost_usd(model_id, tier, tokens_in, tokens_out, expected):
+    assert cost_usd(tokens_in, tokens_out, model_id, tier) == expected
 
 
 def test_usage_record_shape():
-    assert usage_record() == {'model_id': None, 'input_tokens': 0, 'output_tokens': 0, 'cost_usd': 0.0}
-    assert usage_record('global.amazon.nova-2-lite-v1:0', 2000, 400) == {
-        'model_id': 'global.amazon.nova-2-lite-v1:0', 'input_tokens': 2000, 'output_tokens': 400,
-        'cost_usd': 0.00188}
+    assert usage_record() == {'model_id': None, 'service_tier': None, 'input_tokens': 0, 'output_tokens': 0,
+                              'cost_usd': 0.0}
+    assert usage_record(FACTS_MODEL, 2000, 400, 'flex') == {
+        'model_id': FACTS_MODEL, 'service_tier': 'flex', 'input_tokens': 2000, 'output_tokens': 400,
+        'cost_usd': 0.000322}
+
+
+def test_flex_is_half_the_standard_price():
+    for model_id, tiers in PRICES_PER_MILLION_USD.items():
+        assert tiers['flex'] == (tiers['default'][0] / 2, tiers['default'][1] / 2), model_id
+
+
+def test_the_facts_model_of_models_json_is_priced():
+    """FACTS_MODEL_ID comes from models.json: its calls are never recorded at an unknown cost."""
+    import json
+
+    with open(MODELS_JSON, encoding='utf-8') as fh:
+        facts_model = json.load(fh)['facts']
+    assert facts_model == FACTS_MODEL
+    assert {'default', 'flex'} <= set(PRICES_PER_MILLION_USD[facts_model])
 
 
 BACKEND_ASK = os.path.abspath(os.path.join(HERE, '..', '..', '..', '..', '..', 'backend', 'app', 'file_check_ask.py'))
 
 
 @pytest.mark.skipif(not os.path.exists(BACKEND_ASK), reason='backend source not in this checkout')
-def test_prices_equal_the_ask_feature():
-    """The facts step reuses the Ask feature's prices (packages/backend/app/file_check_ask.py)."""
+def test_nova_price_equals_the_ask_feature():
+    """Nova 2 Lite is costed like the Ask feature (packages/backend/app/file_check_ask.py)."""
     import ast
 
     with open(BACKEND_ASK, encoding='utf-8') as fh:
@@ -369,8 +455,5 @@ def test_prices_equal_the_ask_feature():
         if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
         and node.targets[0].id.endswith('_PRICE_PER_MILLION_USD')
     }
-    assert prices == {
-        'INPUT_PRICE_PER_MILLION_USD': extractor.INPUT_PRICE_PER_MILLION_USD,
-        'OUTPUT_PRICE_PER_MILLION_USD': extractor.OUTPUT_PRICE_PER_MILLION_USD,
-    }
-    assert (extractor.INPUT_PRICE_PER_MILLION_USD, extractor.OUTPUT_PRICE_PER_MILLION_USD) == (0.35, 2.95)
+    assert PRICES_PER_MILLION_USD[NOVA_2_LITE]['default'] == (
+        prices['INPUT_PRICE_PER_MILLION_USD'], prices['OUTPUT_PRICE_PER_MILLION_USD'])

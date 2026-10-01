@@ -38,7 +38,18 @@ EXPECTED_CHAT_IDS = [
     'deepseek.v3.2',
     'moonshotai.kimi-k2.5',
 ]
-ALLOWED_PIPELINE_PREFIXES = ('amazon.', 'global.amazon.', 'apac.amazon.')
+# Pipeline models (models.json): AWS-sold, credit-paid Bedrock models only.
+AWS_SOLD_PIPELINE_PREFIXES = (
+    'amazon.',
+    'global.amazon.',
+    'apac.amazon.',
+    'openai.gpt-oss-',
+    'google.gemma-3-',
+    'qwen.',
+    'moonshotai.',
+    'zai.',
+)
+NOVA_2_LITE = 'global.amazon.nova-2-lite-v1:0'
 
 FORBIDDEN_MODEL_ID = re.compile(
     r'\b(?:global\.|us\.|eu\.|apac\.)?'
@@ -112,16 +123,60 @@ def test_chat_models_json_fits_ssm_standard_parameter():
 
 
 # ---------------------------------------------------------------------------
-# models.json (pipeline models): Amazon models only
+# models.json (pipeline models): AWS-sold models only
 # ---------------------------------------------------------------------------
 
 
-def test_pipeline_models_are_amazon_only():
+def test_pipeline_models_are_aws_sold():
     models = _load_json(MODELS_JSON)
     assert isinstance(models, dict) and models
     for key, value in models.items():
         assert isinstance(value, str), key
-        assert value.startswith(ALLOWED_PIPELINE_PREFIXES), (key, value)
+        assert value.startswith(AWS_SOLD_PIPELINE_PREFIXES), (key, value)
+        assert not FORBIDDEN_MODEL_ID.search(value), (key, value)
+
+
+def test_pipeline_model_choices():
+    models = _load_json(MODELS_JSON)
+    # Page images and video need a vision/video model: Nova 2 Lite.
+    for key in ('analysis', 'videoAnalysis', 'scriptExtractor'):
+        assert models[key] == NOVA_2_LITE, key
+    # Text-only background steps: in-region (ap-south-1) open-weight models.
+    assert models['facts'] == 'openai.gpt-oss-120b-1:0'
+    assert models['describer'] == models['docSummarizer'] == 'google.gemma-3-12b-it'
+
+
+@pytest.mark.parametrize(
+    'model_id',
+    [
+        'openai.gpt-oss-120b-1:0',
+        'google.gemma-3-12b-it',
+        'qwen.qwen3-235b-a22b-2507-v1:0',
+        'moonshotai.kimi-k2.5',
+        'zai.glm-5',
+        NOVA_2_LITE,
+    ],
+)
+def test_aws_sold_models_pass_both_guards(model_id):
+    assert model_id.startswith(AWS_SOLD_PIPELINE_PREFIXES)
+    assert not FORBIDDEN_MODEL_ID.search(model_id)
+
+
+@pytest.mark.parametrize(
+    'provider, model',
+    [
+        ('anthropic', 'claude-x-v1:0'),
+        ('cohere', 'embed-v4:0'),
+        ('openai', 'gpt-5.4'),
+        ('openai', 'gpt-6-x'),
+        ('writer', 'palmyra-x5-v1:0'),
+    ],
+)
+def test_marketplace_models_fail_both_guards(provider, model):
+    # Built at run time so the repo scan below does not flag this file.
+    model_id = f'{provider}.{model}'
+    assert not model_id.startswith(AWS_SOLD_PIPELINE_PREFIXES)
+    assert FORBIDDEN_MODEL_ID.search(model_id)
 
 
 # ---------------------------------------------------------------------------

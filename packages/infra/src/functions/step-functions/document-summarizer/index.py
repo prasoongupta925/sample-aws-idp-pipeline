@@ -19,6 +19,9 @@ from shared.s3_analysis import get_all_segment_analyses, save_summary
 
 BATCH_SIZE = 150
 BATCH_OVERLAP = 30
+# Output cap of each summary call: summaries average ~500 tokens; the model
+# default may be lower and Gemma 3 12B allows at most 8K.
+MAX_OUTPUT_TOKENS = 8000
 PROMPTS = None
 
 
@@ -64,6 +67,17 @@ def build_system_prompt(text, use_cache=False):
     ]
 
 
+def build_model(model_id, region):
+    """BedrockModel of the summary calls, on BEDROCK_SERVICE_TIER ('flex') when set."""
+    tier = os.environ.get('BEDROCK_SERVICE_TIER', '')
+    return BedrockModel(
+        model_id=model_id,
+        region_name=region,
+        max_tokens=MAX_OUTPUT_TOKENS,
+        **({'service_tier': tier} if tier else {}),
+    )
+
+
 def batch_with_overlap(items, batch_size, overlap):
     """Split items into batches with overlap between consecutive batches."""
     if len(items) <= batch_size:
@@ -86,7 +100,7 @@ def generate_document_summary(model_id, region, language, page_descriptions, tot
     batches = batch_with_overlap(page_descriptions, BATCH_SIZE, BATCH_OVERLAP)
     use_cache = len(batches) > 1 and 'anthropic' in model_id
 
-    bedrock_model = BedrockModel(model_id=model_id, region_name=region)
+    bedrock_model = build_model(model_id, region)
     system_prompt = build_system_prompt(system_text, use_cache=use_cache)
 
     if len(batches) == 1:
@@ -120,7 +134,7 @@ def generate_document_summary(model_id, region, language, page_descriptions, tot
               f'(pages {batch_page_nums[0]}-{batch_page_nums[-1]})')
 
         try:
-            batch_model = BedrockModel(model_id=model_id, region_name=region)
+            batch_model = build_model(model_id, region)
             agent = Agent(model=batch_model, system_prompt=system_prompt, callback_handler=None)
             partial = str(agent(user_text)).strip()
             if partial:

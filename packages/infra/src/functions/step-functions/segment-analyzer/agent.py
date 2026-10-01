@@ -9,6 +9,7 @@ from PIL import Image
 from strands import Agent
 from strands.models import BedrockModel, CacheConfig
 
+from bedrock_tier import service_tier
 from tools import (
     create_image_analyzer_tool,
     create_image_rotator_tool,
@@ -177,10 +178,12 @@ class VisionReactAgent:
             if 'anthropic' in self.model_id
             else {}
         )
+        tier = service_tier()
         model = BedrockModel(
             model_id=self.model_id,
             region_name=self.region,
-            **cache_kwargs
+            **cache_kwargs,
+            **({'service_tier': tier} if tier else {})
         )
 
         tools = []

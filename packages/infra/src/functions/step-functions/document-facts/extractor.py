@@ -1,7 +1,8 @@
-"""Facts extraction: build the model input from segment data and call Nova 2 Lite.
+"""Facts extraction: build the model input from segment data and call the facts model.
 
-Pure module (importable without AWS): boto3 is imported lazily and every
-Bedrock client is injectable, so tests pass fakes.
+The model is FACTS_MODEL_ID (models.json `facts`: gpt-oss-120b, in-region in
+ap-south-1). Pure module (importable without AWS): boto3 is imported lazily and
+every Bedrock client is injectable, so tests pass fakes.
 
 The model input is TEXT built from the pipeline's segment data. The original
 file and its file name are never sent to the model.
@@ -22,16 +23,34 @@ NON_DOCUMENT_TYPES = {'VIDEO', 'AUDIO', 'CHAPTER'}
 MIN_MACHINE_CHARS = 50
 
 # Output budget of the forced tool call. A 6-month statement lists ~40
-# recurring debits (~45 tokens each) plus salary credits, so 2000 is too
-# small; FACTS_MAX_OUTPUT_TOKENS overrides it without a code change.
-DEFAULT_MAX_OUTPUT_TOKENS = 8000
+# recurring debits (~45 tokens each) plus salary credits, and gpt-oss-120b
+# reasons before the tool call (6.2K output tokens on a 2-page statement), so
+# 8000 is too small; 16000 stays under the model's 16K output limit.
+# FACTS_MAX_OUTPUT_TOKENS overrides it without a code change.
+DEFAULT_MAX_OUTPUT_TOKENS = 16000
 
-# USD per million tokens of Amazon Nova 2 Lite: the price list of the Ask
-# feature (packages/backend/app/file_check_ask.py), so a document's facts
-# extraction and an Ask call are costed alike. test_facts_extractor.py checks
-# that the two price lists stay equal.
-INPUT_PRICE_PER_MILLION_USD = 0.35
-OUTPUT_PRICE_PER_MILLION_USD = 2.95
+# Bedrock service tiers a call may request through BEDROCK_SERVICE_TIER (the
+# pipeline sets 'flex': half the standard price for background work). Unset or
+# any other value sends no tier, i.e. the standard tier.
+SERVICE_TIERS = ('default', 'flex', 'priority')
+
+# USD per million tokens (input, output) by model and service tier: Price List
+# API, AmazonBedrock offer, ap-south-1, version 20260930230255. A model or tier
+# missing here gives cost_usd None (unknown), never a wrong price. The Nova 2
+# Lite standard price is the Ask feature's (packages/backend/app/file_check_ask.py);
+# test_facts_extractor.py checks that the two stay equal.
+PRICES_PER_MILLION_USD = {
+    'openai.gpt-oss-120b-1:0': {
+        'default': (0.18, 0.71),
+        'flex': (0.09, 0.355),
+        'priority': (0.315, 1.2425),
+    },
+    'global.amazon.nova-2-lite-v1:0': {
+        'default': (0.35, 2.95),
+        'flex': (0.175, 1.475),
+        'priority': (0.6125, 5.1625),
+    },
+}
 
 _PROMPTS = None
 _bedrock_client = None
@@ -130,22 +149,39 @@ def max_output_tokens() -> int:
     return value if value > 0 else DEFAULT_MAX_OUTPUT_TOKENS
 
 
-def cost_usd(input_tokens: int, output_tokens: int) -> float:
-    """USD cost of one model call from its token usage (the Ask feature's formula and rounding)."""
-    cost = input_tokens * INPUT_PRICE_PER_MILLION_USD / 1e6 + output_tokens * OUTPUT_PRICE_PER_MILLION_USD / 1e6
+def service_tier():
+    """The service tier to request (BEDROCK_SERVICE_TIER), or None for the standard tier."""
+    tier = (os.environ.get('BEDROCK_SERVICE_TIER') or '').strip().lower()
+    return tier if tier in SERVICE_TIERS else None
+
+
+def cost_usd(input_tokens: int, output_tokens: int, model_id=None, tier=None):
+    """USD cost of one model call from its token usage (the Ask feature's formula and rounding).
+
+    Priced at the model's rate for the service tier that served the call (None =
+    standard); None when the model or tier has no price. No tokens cost 0.0.
+    """
+    if not input_tokens and not output_tokens:
+        return 0.0
+    price = PRICES_PER_MILLION_USD.get(model_id or '', {}).get(tier or 'default')
+    if price is None:
+        return None
+    cost = input_tokens * price[0] / 1e6 + output_tokens * price[1] / 1e6
     return round(cost, 8)
 
 
-def usage_record(model_id=None, input_tokens: int = 0, output_tokens: int = 0) -> dict:
-    """The facts record's `usage`: {model_id, input_tokens, output_tokens, cost_usd}.
+def usage_record(model_id=None, input_tokens: int = 0, output_tokens: int = 0, tier=None) -> dict:
+    """The facts record's `usage`: {model_id, service_tier, input_tokens, output_tokens, cost_usd}.
 
-    No arguments: no model call was made (model_id None, zero tokens, zero cost).
+    No arguments: no model call was made (model_id and service_tier None, zero
+    tokens, zero cost).
     """
     return {
         'model_id': model_id,
+        'service_tier': tier,
         'input_tokens': input_tokens,
         'output_tokens': output_tokens,
-        'cost_usd': cost_usd(input_tokens, output_tokens),
+        'cost_usd': cost_usd(input_tokens, output_tokens, model_id, tier),
     }
 
 
@@ -190,20 +226,23 @@ def _tool_input(block: dict):
     return value if isinstance(value, dict) else None
 
 
-def call_nova(model_text: str, model_id: str, client=None) -> tuple:
-    """Forced-tool Converse call.
+def call_model(model_text: str, model_id: str, client=None) -> tuple:
+    """Forced-tool Converse call, on the BEDROCK_SERVICE_TIER service tier when set.
 
-    Returns (raw fields dict, usage record {model_id, input_tokens, output_tokens,
-    cost_usd}); the usage dict also carries output_truncated=True when the model
-    stopped at maxTokens. Raises NoStructuredOutputError (with the usage) when
-    the answer holds no fields.
+    Returns (raw fields dict, usage record {model_id, service_tier, input_tokens,
+    output_tokens, cost_usd}); the usage dict also carries output_truncated=True
+    when the model stopped at maxTokens. Raises NoStructuredOutputError (with the
+    usage) when the answer holds no fields. reasoningContent blocks (gpt-oss
+    reasons before the tool call) are never read: fields come only from the
+    toolUse input or, failing that, a JSON object in a text block.
     """
     client = client or get_bedrock_client()
-    resp = client.converse(
-        modelId=model_id,
-        system=[{'text': load_prompts()['system_prompt']}],
-        messages=[{'role': 'user', 'content': [{'text': build_user_prompt(model_text)}]}],
-        toolConfig={
+    tier = service_tier()
+    request = {
+        'modelId': model_id,
+        'system': [{'text': load_prompts()['system_prompt']}],
+        'messages': [{'role': 'user', 'content': [{'text': build_user_prompt(model_text)}]}],
+        'toolConfig': {
             'tools': [{'toolSpec': {
                 'name': TOOL_NAME,
                 'description': TOOL_DESCRIPTION,
@@ -211,13 +250,19 @@ def call_nova(model_text: str, model_id: str, client=None) -> tuple:
             }}],
             'toolChoice': {'tool': {'name': TOOL_NAME}},
         },
-        inferenceConfig={'maxTokens': max_output_tokens(), 'temperature': 0},
-    )
+        'inferenceConfig': {'maxTokens': max_output_tokens(), 'temperature': 0},
+    }
+    if tier:
+        request['serviceTier'] = {'type': tier}
+    resp = client.converse(**request)
     usage = resp.get('usage') or {}
+    # The response names the tier that served (and bills) the call.
+    served = (resp.get('serviceTier') or {}).get('type') or tier or 'default'
     out = usage_record(
         model_id,
         int(usage.get('inputTokens', 0) or 0),
         int(usage.get('outputTokens', 0) or 0),
+        served,
     )
     content = ((resp.get('output') or {}).get('message') or {}).get('content') or []
 

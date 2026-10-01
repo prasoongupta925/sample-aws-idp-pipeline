@@ -3,14 +3,15 @@
 After a document is analysed, extract ONE structured loan-file facts record
 (doc type, applicant, PAN, employer, month/period, salaries, salary credits,
 recurring debits, declared existing EMIs, loan amount / tenure, financial
-year) with Amazon Nova 2 Lite, ground identifiers and
-amounts against the document's own machine text, and store the record in S3
+year) with the facts model (FACTS_MODEL_ID, gpt-oss-120b), ground identifiers
+and amounts against the document's own machine text, and store the record in S3
 (analysis/facts.json, with model_fields for audit) and DynamoDB
 (PROJ#{pid} / FACTS#{did}, without document text or model_fields).
 
 The record's `usage` is the cost of that one model call: {model_id,
-input_tokens, output_tokens, cost_usd} at the Ask feature's Nova 2 Lite prices
-(extractor.cost_usd); zero tokens and model_id None when no call was made.
+service_tier, input_tokens, output_tokens, cost_usd} at the model's price for the
+service tier that served it (extractor.cost_usd; BEDROCK_SERVICE_TIER requests
+the tier); zero tokens and model_id None when no call was made.
 
 Non-fatal: the handler never raises. It returns ONLY {workflow_id, status}
 because Step Functions keeps execution history for 90 days, so the output must
@@ -31,12 +32,12 @@ from shared.ddb_client import (
 )
 from shared.s3_analysis import get_all_segment_analyses, save_facts
 
-from extractor import MACHINE_TEXT_FIELDS, build_texts, call_nova, usage_record
+from extractor import MACHINE_TEXT_FIELDS, build_texts, call_model, usage_record
 from grounding import MIN_TEXT_CHARS, ground_fields, unverified_numbers
 from normalize import normalise_fields
 
 SCHEMA_VERSION = 1
-SOURCE_MODEL = 'nova-2-lite'
+SOURCE_MODEL = 'model'
 SOURCE_NONE = 'none'
 DEFAULT_MAX_CHARS = 60000
 WEBREQ_FILE_TYPE = 'application/x-webreq'
@@ -163,7 +164,7 @@ def handler(event, context):
             print(f'Facts skipped: workflow_id={workflow_id} reason={reason}')
             return {'workflow_id': workflow_id, 'status': 'skipped'}
 
-        raw, usage = call_nova(model_text, os.environ['FACTS_MODEL_ID'])
+        raw, usage = call_model(model_text, os.environ['FACTS_MODEL_ID'])
         output_truncated = bool(usage.pop('output_truncated', False))
         model_fields = normalise_fields(raw)
         fields, notes = ground_fields(model_fields, grounding_text)
@@ -201,7 +202,7 @@ def handler(event, context):
               f'unverified={len(record["grounding"]["unverified_fields"])} '
               f'debits={len(fields["recurring_debits"])} declared_emis={len(fields["declared_existing_emis"])} '
               f'input_tokens={usage.get("input_tokens", 0)} output_tokens={usage.get("output_tokens", 0)} '
-              f'cost_usd={usage.get("cost_usd", 0)}')
+              f'service_tier={usage.get("service_tier")} cost_usd={usage.get("cost_usd", 0)}')
         return {'workflow_id': workflow_id, 'status': 'completed'}
 
     except Exception as e:

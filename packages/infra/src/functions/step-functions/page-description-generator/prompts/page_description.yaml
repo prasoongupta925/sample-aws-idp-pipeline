@@ -1,4 +1,4 @@
-# Page Description Generation (Amazon Nova, single page)
+# Page Description Generation (PAGE_DESCRIPTION_MODEL_ID, single page)
 page_description_system: |
   You are a Document Page Indexer that generates detailed, searchable descriptions for individual document pages.
   Your descriptions will be used by LLMs to understand document content and navigate between pages.

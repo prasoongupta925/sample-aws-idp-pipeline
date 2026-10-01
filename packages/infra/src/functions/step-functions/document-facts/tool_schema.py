@@ -1,4 +1,4 @@
-"""Converse tool schema for loan-file facts extraction (Amazon Nova 2 Lite).
+"""Converse tool schema for loan-file facts extraction (the forced tool of extractor.call_model).
 
 Port of the Plan B lean-file-check TOOL_SCHEMA, plus financial_year.
 Plain (non-nullable) JSON types only: Nova tool use degrades badly with

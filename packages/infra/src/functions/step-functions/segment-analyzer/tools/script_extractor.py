@@ -5,6 +5,8 @@ import boto3
 from botocore.config import Config
 from strands import tool
 
+from bedrock_tier import converse_fields
+
 _converse_client = None
 _s3_client = boto3.client('s3')
 _prompt_cache = {}
@@ -169,7 +171,8 @@ def create_script_extractor_tool(
                         'type': 'enabled',
                         'maxReasoningEffort': max_reasoning_effort
                     }
-                }
+                },
+                **converse_fields(),
             }
 
             print(f'Extracting script from video: {video_uri}')

@@ -16,6 +16,11 @@ from shared.s3_analysis import (
 )
 
 PAGE_DESCRIPTION_MODEL_ID = os.environ.get('PAGE_DESCRIPTION_MODEL_ID', '')
+# Bedrock service tier ('flex' for this background step); unset = standard.
+SERVICE_TIER = os.environ.get('BEDROCK_SERVICE_TIER', '')
+# Output cap: a description is one paragraph (~330 tokens on average); the
+# model default may be lower and Gemma 3 12B allows at most 8K.
+MAX_OUTPUT_TOKENS = 4096
 PROMPTS = None
 
 
@@ -74,7 +79,12 @@ def generate_page_description(segment_data: dict, page_number: int, language: st
 
     try:
         region = os.environ.get('AWS_REGION', 'us-east-1')
-        model = BedrockModel(model_id=PAGE_DESCRIPTION_MODEL_ID, region_name=region)
+        model = BedrockModel(
+            model_id=PAGE_DESCRIPTION_MODEL_ID,
+            region_name=region,
+            max_tokens=MAX_OUTPUT_TOKENS,
+            **({'service_tier': SERVICE_TIER} if SERVICE_TIER else {}),
+        )
         agent = Agent(model=model, system_prompt=system_text, callback_handler=None)
         result = agent(user_text)
         description = str(result).strip()

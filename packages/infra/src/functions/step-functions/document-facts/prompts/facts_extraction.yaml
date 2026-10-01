@@ -1,4 +1,4 @@
-# Document facts extraction (Amazon Nova 2 Lite, forced tool call)
+# Document facts extraction (FACTS_MODEL_ID, forced tool call)
 # user_prompt placeholders {document_text} and {tool_name} are substituted with
 # str.replace (never str.format), so braces in document text are safe.
 system_prompt: >-

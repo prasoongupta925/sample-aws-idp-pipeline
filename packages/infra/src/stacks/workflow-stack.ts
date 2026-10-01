@@ -328,6 +328,11 @@ export class WorkflowStack extends Stack {
     // Cross-region model settings (ap-south-1 has no Amazon embedding model)
     const regionConfig = getRegionConfig(this);
 
+    // Bedrock service tier of the background pipeline calls (segment analysis,
+    // page descriptions, summary, facts): Flex is half the standard price for
+    // work nobody waits on. '' = the standard tier.
+    const pipelineServiceTier = 'flex';
+
     const commonLambdaProps = {
       runtime: lambda.Runtime.PYTHON_3_14,
       architecture: lambda.Architecture.ARM_64,
@@ -702,6 +707,7 @@ export class WorkflowStack extends Stack {
         BEDROCK_MODEL_ID: models.analysis,
         BEDROCK_VIDEO_MODEL_ID: models.videoAnalysis,
         NOVA_LITE_MODEL_ID: models.scriptExtractor,
+        BEDROCK_SERVICE_TIER: pipelineServiceTier,
         MAX_REASONING_EFFORT: 'low',
         BUCKET_OWNER_ACCOUNT_ID: this.account,
         AGENT_STORAGE_BUCKET_NAME: agentStorageBucketName,
@@ -748,6 +754,7 @@ export class WorkflowStack extends Stack {
         environment: {
           ...commonLambdaProps.environment,
           PAGE_DESCRIPTION_MODEL_ID: models.describer,
+          BEDROCK_SERVICE_TIER: pipelineServiceTier,
         },
       },
     );
@@ -786,6 +793,7 @@ export class WorkflowStack extends Stack {
         ...commonLambdaProps.environment,
         LANCEDB_FUNCTION_NAME: lancedbService.functionName,
         SUMMARIZER_MODEL_ID: models.docSummarizer,
+        BEDROCK_SERVICE_TIER: pipelineServiceTier,
       },
     });
 
@@ -805,6 +813,9 @@ export class WorkflowStack extends Stack {
         ...commonLambdaProps.environment,
         FACTS_MODEL_ID: models.facts,
         FACTS_MAX_CHARS: '60000',
+        // gpt-oss-120b reasons before the tool call; its output limit is 16K
+        FACTS_MAX_OUTPUT_TOKENS: '16000',
+        BEDROCK_SERVICE_TIER: pipelineServiceTier,
       },
     });
 
@@ -1234,7 +1245,7 @@ export class WorkflowStack extends Stack {
         lambdaFunction: documentSummarizer,
         outputPath: '$.Payload',
         comment:
-          'Generate a comprehensive document summary using Amazon Nova based on all segment analyses. Updates workflow status to completed',
+          'Generate a comprehensive document summary using an LLM based on all segment analyses. Updates workflow status to completed',
         payload: sfn.TaskInput.fromObject({
           'workflow_id.$': '$.workflow_id',
           'document_id.$': '$.document_id',
@@ -1253,7 +1264,7 @@ export class WorkflowStack extends Stack {
         lambdaFunction: documentFacts,
         outputPath: '$.Payload',
         comment:
-          'Extract structured loan-file facts (doc type, applicant, PAN, salary, periods) with Amazon Nova 2 Lite and ground them against the document text. Non-fatal.',
+          'Extract structured loan-file facts (doc type, applicant, PAN, salary, periods) with an LLM and ground them against the document text. Non-fatal.',
         payload: sfn.TaskInput.fromObject({
           'workflow_id.$': '$.workflow_id',
           'document_id.$': '$.document_id',
