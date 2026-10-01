@@ -84,7 +84,7 @@ from app.file_check import (
 )
 from app.routers.file_check import ErrorResponse, ProjectId, UserId
 from app.safe_ids import safe_segment
-from app.webhook_delivery import get_webhook_lambda_client
+from app.webhook_delivery import invoke_delivery
 
 router = APIRouter(prefix="/projects/{project_id}/eligibility", tags=["eligibility"])
 
@@ -1187,12 +1187,7 @@ def _notify_crm(project_id: str, login: dict[str, Any]) -> tuple[str, dict | Non
     if not function_name:
         return "not_configured", None, "webhook delivery is not configured"
     try:
-        response = get_webhook_lambda_client().invoke(
-            FunctionName=function_name,
-            InvocationType="RequestResponse",
-            Payload=json.dumps({"project_id": project_id, "event": EVENT_LOGIN, "login": login}).encode("utf-8"),
-        )
-        raw = response["Payload"].read()
+        response, raw = invoke_delivery(function_name, {"project_id": project_id, "event": EVENT_LOGIN, "login": login})
     except ClientError as e:
         return _failed(f"invoke failed ({e.response.get('Error', {}).get('Code') or 'ClientError'})")
     except BotoCoreError as e:

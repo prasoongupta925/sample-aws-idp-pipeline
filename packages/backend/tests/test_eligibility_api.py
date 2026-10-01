@@ -15,7 +15,7 @@ from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, ConnectionClosedError
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -170,7 +170,7 @@ def webhook(table, monkeypatch):
 
 
 def use_webhook_lambda(stub):
-    return patch("app.routers.eligibility.get_webhook_lambda_client", return_value=stub)
+    return patch("app.webhook_delivery.get_webhook_lambda_client", return_value=stub)
 
 
 def example(**changes):
@@ -786,6 +786,32 @@ class TestLogin:
             "http_status": None,
             "error": delivery_error,
         }
+
+    def test_a_throttled_invoke_is_sent_once_more(self, table, webhook):
+        save()
+        stub = canned_lambda({"delivery_id": "d-4", "status": "delivered", "http_status": 200, "error": None})
+        throttled = ClientError({"Error": {"Code": "TooManyRequestsException"}}, "Invoke")
+        stub.invoke.side_effect = [throttled, stub.invoke.return_value]
+        with use_webhook_lambda(stub):
+            body = login().json()
+
+        assert (body["webhook"], body["delivery"]["delivery_id"]) == ("delivered", "d-4")
+        assert stub.invoke.call_count == 2
+        assert table.of("LOGINREQ#")[0]["webhook_status"] == "delivered"
+
+    def test_an_event_that_may_have_been_sent_is_never_sent_again(self, table, webhook):
+        """The CRM must not get the login twice: a dropped connection is reported, not retried."""
+        save()
+        stub = canned_lambda({"delivery_id": "d-5", "status": "delivered", "http_status": 200, "error": None})
+        dropped = ConnectionClosedError(endpoint_url="https://lambda.ap-south-1.amazonaws.com")
+        stub.invoke.side_effect = [dropped, stub.invoke.return_value]
+        with use_webhook_lambda(stub):
+            body = login().json()
+
+        assert (body["status"], body["webhook"]) == ("recorded", "failed")
+        assert body["delivery"]["error"] == "invoke failed (ConnectionClosedError)"
+        assert stub.invoke.call_count == 1
+        assert table.of("LOGINREQ#")[0]["webhook_status"] == "failed"
 
     def test_skipped_by_the_lambda(self, table, webhook):
         save()

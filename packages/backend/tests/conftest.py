@@ -7,7 +7,9 @@ Every test runs isolated from AWS and from the other tests:
 - the module-level AWS clients the app caches (S3 and its presign client,
   DynamoDB, the Lambda, Bedrock and KMS clients) are reset before and after
   each test, so a client created or stubbed in one test never leaks into the
-  next; so are the webhook test-event rate limits.
+  next; so are the webhook test-event rate limits;
+- the pause before a webhook invoke is sent again is skipped (a test that
+  checks it replaces webhook_delivery._sleep itself).
 """
 
 import os
@@ -42,7 +44,6 @@ def _reset_cached_clients() -> None:
     file_check_ask._bedrock_client = None
     lancedb._lambda_client = None
     graph_router._lambda_client = None
-    webhook_delivery._lambda_client = None
     webhook_secret._kms_client = None
     webhook_delivery.reset_test_limits()
 
@@ -53,6 +54,7 @@ def _isolated_aws(monkeypatch):
         monkeypatch.setenv(name, value)
     for name in ("AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE"):
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(webhook_delivery, "_sleep", lambda seconds: None)
     _reset_cached_clients()
     yield
     _reset_cached_clients()

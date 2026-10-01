@@ -7,7 +7,8 @@ the key and encryption context they were made with, and the boto3 Lambda
 client is stubbed. One test runs the real delivery Lambda handler
 (packages/infra/src/functions/webhook) in-process with stubbed DNS and HTTP,
 so the backend <-> Lambda contract, the secret's encryption and the signature
-are checked end to end.
+are checked end to end. Two run the real boto3 client against a local HTTP
+endpoint, to count the invokes that reach Lambda.
 """
 
 import base64
@@ -18,12 +19,20 @@ import json
 import os
 import re
 import sys
+import threading
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import MagicMock, patch
 
 import pytest
-from botocore.exceptions import ClientError
+from botocore.exceptions import (
+    ClientError,
+    ConnectionClosedError,
+    ConnectTimeoutError,
+    EndpointConnectionError,
+    ReadTimeoutError,
+)
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -196,13 +205,6 @@ def delivery_item(at: datetime, n: int, **fields):
     }
     item.update(fields)
     return item
-
-
-@pytest.fixture(autouse=True)
-def _reset_webhook_client():
-    webhook_delivery._lambda_client = None
-    yield
-    webhook_delivery._lambda_client = None
 
 
 @pytest.fixture
@@ -609,6 +611,154 @@ class TestTestEvent:
         assert response.status_code == status
 
 
+# ------------------------------------------------------------------ invoke: never sent twice
+LAMBDA_URL = "https://lambda.ap-south-1.amazonaws.com"
+DELIVERED = {"delivery_id": "d-1", "status": "delivered", "http_status": 204, "error": None}
+INVOKE_PATH = f"/2015-03-31/functions/{FUNCTION_NAME}/invocations"
+
+
+def lambda_answer(payload=DELIVERED):
+    return {"StatusCode": 200, "Payload": io.BytesIO(json.dumps(payload).encode("utf-8"))}
+
+
+class TestInvokeRetry:
+    """Every run of the delivery Lambda sends the event, so an invoke is sent again only when it cannot have run."""
+
+    def test_every_call_gets_a_new_client_that_never_retries(self):
+        first = webhook_delivery.get_webhook_lambda_client()
+        second = webhook_delivery.get_webhook_lambda_client()
+
+        assert first is not second
+        assert first.meta.config.retries["total_max_attempts"] == 1
+        assert (first.meta.config.connect_timeout, first.meta.config.read_timeout) == (3, 35)
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            EndpointConnectionError(endpoint_url=LAMBDA_URL),
+            ConnectTimeoutError(endpoint_url=LAMBDA_URL),
+            ClientError({"Error": {"Code": "TooManyRequestsException", "Message": "Rate Exceeded."}}, "Invoke"),
+        ],
+        ids=["no-connection", "connect-timeout", "throttled"],
+    )
+    def test_an_invoke_that_did_not_start_is_sent_once_more(self, table, configured, monkeypatch, error):
+        pauses = []
+        monkeypatch.setattr(webhook_delivery, "_sleep", pauses.append)
+        with_secret(table)
+        stub = MagicMock()
+        stub.invoke.side_effect = [error, lambda_answer()]
+        with use_lambda(stub):
+            response = client.post(f"{BASE}/test", headers=HEADERS)
+
+        assert response.status_code == 200
+        assert response.json() == DELIVERED
+        first, second = stub.invoke.call_args_list
+        assert first == second
+        assert pauses == [webhook_delivery.RETRY_PAUSE_S]
+        stub.close.assert_called_once()
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            ReadTimeoutError(endpoint_url=LAMBDA_URL),
+            ConnectionClosedError(endpoint_url=LAMBDA_URL),
+            ClientError({"Error": {"Code": "ServiceException", "Message": "x"}}, "Invoke"),
+        ],
+        ids=["read-timeout", "connection-closed", "service-error"],
+    )
+    def test_an_invoke_that_may_have_run_is_not_sent_again(self, table, configured, monkeypatch, error):
+        pauses = []
+        monkeypatch.setattr(webhook_delivery, "_sleep", pauses.append)
+        with_secret(table)
+        stub = MagicMock()
+        stub.invoke.side_effect = [error, lambda_answer()]
+        with use_lambda(stub):
+            response = client.post(f"{BASE}/test", headers=HEADERS)
+
+        assert response.status_code == 502
+        assert stub.invoke.call_count == 1
+        assert pauses == []
+        stub.close.assert_called_once()
+
+    def test_gives_up_after_the_second_attempt(self, table, configured):
+        with_secret(table)
+        stub = MagicMock()
+        stub.invoke.side_effect = [EndpointConnectionError(endpoint_url=LAMBDA_URL)] * 2 + [lambda_answer()]
+        with use_lambda(stub):
+            response = client.post(f"{BASE}/test", headers=HEADERS)
+
+        assert response.status_code == 502
+        assert response.json() == {"detail": "Webhook delivery failed: invoke failed (EndpointConnectionError)"}
+        assert stub.invoke.call_count == 2
+
+
+class FakeLambdaEndpoint:
+    """Local HTTP endpoint for the real boto3 client. Each request gets the next answer, (status, error type,
+    body); "drop" closes the connection without one, as when the invoke may have run."""
+
+    def __init__(self, *answers):
+        self.answers = list(answers)
+        self.paths = []
+        endpoint = self
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                endpoint.paths.append(self.path)
+                answer = endpoint.answers.pop(0)
+                if answer == "drop":
+                    self.close_connection = True
+                    return
+                status, error_type, body = answer
+                self.send_response(status)
+                if error_type:
+                    self.send_header("x-amzn-ErrorType", error_type)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, format, *args):
+                pass
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.server.server_port}"
+
+    def __enter__(self):
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        return self
+
+    def __exit__(self, *exc):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+def test_the_real_client_sends_an_invoke_that_may_have_run_only_once(table, configured, monkeypatch):
+    with_secret(table)
+    with FakeLambdaEndpoint("drop", "drop") as endpoint:
+        monkeypatch.setenv("AWS_ENDPOINT_URL_LAMBDA", endpoint.url)
+        response = client.post(f"{BASE}/test", headers=HEADERS)
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": "Webhook delivery failed: invoke failed (ConnectionClosedError)"}
+    assert endpoint.paths == [INVOKE_PATH]
+
+
+def test_the_real_client_sends_a_throttled_invoke_once_more(table, configured, monkeypatch):
+    with_secret(table)
+    throttled = (429, "TooManyRequestsException", b'{"Type":"User","message":"Rate Exceeded."}')
+    delivered = (200, None, json.dumps(DELIVERED).encode("utf-8"))
+    with FakeLambdaEndpoint(throttled, delivered) as endpoint:
+        monkeypatch.setenv("AWS_ENDPOINT_URL_LAMBDA", endpoint.url)
+        response = client.post(f"{BASE}/test", headers=HEADERS)
+
+    assert response.status_code == 200
+    assert response.json() == DELIVERED
+    assert endpoint.paths == [INVOKE_PATH, INVOKE_PATH]
+
+
 # ------------------------------------------------------------------ end to end with the real Lambda
 def _load_webhook_lambda():
     if WEBHOOK_DIR not in sys.path:
@@ -631,6 +781,9 @@ class InProcessLambda:
         self.calls.append(kwargs)
         result = self.module.handler(json.loads(kwargs["Payload"]), None)
         return {"StatusCode": 200, "Payload": io.BytesIO(json.dumps(result).encode("utf-8"))}
+
+    def close(self):
+        pass
 
 
 def test_end_to_end_test_event_is_signed_and_logged(table, configured, kms, monkeypatch):

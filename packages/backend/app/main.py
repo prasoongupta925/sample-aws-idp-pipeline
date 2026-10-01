@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app import access_log
 from app.routers import (
     agents,
     applicants,
@@ -18,6 +19,8 @@ from app.routers import (
     sagemaker,
     workflows,
 )
+
+access_log.install()
 
 app = FastAPI(
     openapi_tags=[

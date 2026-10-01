@@ -31,6 +31,11 @@ ENV PATH="/app/.venv/bin:$PATH"
 # Logs (print) reach CloudWatch at once, before Lambda freezes the process.
 ENV PYTHONUNBUFFERED=1
 
+# UV_COMPILE_BYTECODE compiled site-packages only: the app is installed
+# editable, so compile its own modules too. unchecked-hash: the .pyc files are
+# used as they are, whatever timestamps the image's files end up with.
+RUN python -m compileall -q --invalidation-mode unchecked-hash /app/app
+
 # app/duckdb.py runs INSTALL/LOAD httpfs (and its credential_chain secret
 # loads the aws extension) on every connection. Both would be downloaded into
 # $HOME/.duckdb, which is read-only on Lambda, so install them into the image:
