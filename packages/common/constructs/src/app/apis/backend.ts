@@ -156,7 +156,7 @@ export class Backend extends Construct {
     // image (packages/backend/Dockerfile) passes each API request to uvicorn
     // on port 8000. Nothing runs, or costs, while the API is idle. The HTTP API
     // answers the caller after 30 s, but the function keeps going for up to
-    // 120 s, as the Fargate task did: a long delete or an applicant erase
+    // 15 minutes, as the Fargate task did: a long delete or an applicant erase
     // finishes instead of stopping half way.
     this.handler = new DockerImageFunction(this, 'Handler', {
       functionName: 'idp-v2-backend-api',
@@ -166,7 +166,7 @@ export class Backend extends Construct {
       }),
       architecture: Architecture.ARM_64,
       memorySize: 2048,
-      timeout: Duration.seconds(120),
+      timeout: Duration.minutes(15),
       logGroup,
       environment: {
         // gzip large JSON answers (chat history, graphs) so they stay far
