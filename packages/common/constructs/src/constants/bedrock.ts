@@ -8,7 +8,15 @@ export const BLOCKED_BEDROCK_MODEL_PROVIDERS = [
   'cohere',
   'twelvelabs',
   'stability',
+  'writer',
+  'luma',
 ] as const;
+
+/**
+ * OpenAI's own GPT models on Bedrock are sold by OpenAI (Marketplace); only the
+ * open-weight gpt-oss models are sold by AWS, so those stay allowed.
+ */
+const BLOCKED_OPENAI_MODEL_PATTERNS = ['openai.gpt-5', 'openai.gpt-6'] as const;
 
 /**
  * Resources for the `DenyNonAwsSoldModels` IAM statement: foundation models
@@ -29,7 +37,12 @@ export const BLOCKED_BEDROCK_MODEL_RESOURCES: string[] =
   BLOCKED_BEDROCK_MODEL_PROVIDERS.flatMap((p) => [
     `arn:aws:bedrock:*::foundation-model/${p}.*`,
     `arn:aws:bedrock:*:*:inference-profile/*${p}.*`,
-  ]);
+  ]).concat(
+    BLOCKED_OPENAI_MODEL_PATTERNS.flatMap((m) => [
+      `arn:aws:bedrock:*::foundation-model/${m}*`,
+      `arn:aws:bedrock:*:*:inference-profile/*${m}*`,
+    ]),
+  );
 
 /**
  * Model of the backend's POST /projects/{id}/file-check/ask: Amazon Nova 2

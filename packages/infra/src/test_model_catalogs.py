@@ -42,7 +42,7 @@ ALLOWED_PIPELINE_PREFIXES = ('amazon.', 'global.amazon.', 'apac.amazon.')
 
 FORBIDDEN_MODEL_ID = re.compile(
     r'\b(?:global\.|us\.|eu\.|apac\.)?'
-    r'(?:anthropic|cohere|twelvelabs|stability)\.[a-z0-9]'
+    r'(?:(?:anthropic|cohere|twelvelabs|stability|writer|luma)\.[a-z0-9]|openai\.gpt-[5-9])'
 )
 SCAN_ROOTS = [
     'agents',
