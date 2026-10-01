@@ -59,14 +59,14 @@ The same month on the full edition costs ~Rs 20,000 before any use.
 
 | Action | Full edition | Lean edition |
 |---|---|---|
-| First deploy | 60-80 min, several 45-min CodeBuild runs | one CodeBuild run (`deploy/lean/deploy.sh`) |
+| First deploy | 60-80 min, several 45-min CodeBuild runs | `deploy/lean/deploy.sh`: fewer, faster stacks (no Neptune, NAT, ElastiCache or Fargate); if the 45-min cap stops a build, the script starts the next one itself |
 | Code-only update | full CloudFormation update, 30+ min | `deploy.sh --hotswap` (Lambda/Step Functions code in place) |
 | Web app only | same as a code update | `update-frontend.sh`, ~1-2 min, no build server |
 | Destroy | ~60 min (Neptune, NAT, VPC ENIs, WAF) | `destroy.sh`, stacks in 3 parallel waves |
 
 The lean stack has no VPC, so there are no Lambda network interfaces to wait for on delete, which was
-the slowest part of every past teardown. Real timings from the first lean deploy are recorded in
-`deploy/lean/README.md`.
+the slowest part of every past teardown. Lean deploy times are not measured yet; `deploy.sh` prints the
+minutes of every build, so the first fresh deploy will give the real number.
 
 Prices: AWS Price List API for ap-south-1, 30 Sep 2026 (EC2/Lambda/DynamoDB/API Gateway/S3/KMS/CloudWatch),
 AWS pricing pages for Transcribe, Step Functions, Bedrock and AgentCore.

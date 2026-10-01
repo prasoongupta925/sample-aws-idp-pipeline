@@ -54,3 +54,4 @@ packages/infra/src/lambda-layers/
 # Rust
 target/
 *.tsbuildinfo
+deploy/lean/.last-build-id
