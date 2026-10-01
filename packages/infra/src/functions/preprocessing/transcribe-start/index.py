@@ -46,10 +46,8 @@ MEDIA_FORMAT_MAP = {
     'audio/webm': 'webm',
 }
 
-IDENTIFY_LANGUAGE_OPTIONS = [
-    'en-US', 'ko-KR', 'ja-JP', 'zh-CN', 'zh-TW',
-    'es-ES', 'fr-FR', 'de-DE', 'it-IT', 'pt-BR',
-]
+# Calls and recordings for an Indian loan DSA: Indian English, Hindi, Marathi (plus US English).
+IDENTIFY_LANGUAGE_OPTIONS = ['en-IN', 'hi-IN', 'mr-IN', 'en-US']
 
 transcribe_client = None
 
