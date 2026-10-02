@@ -5,8 +5,9 @@ may only call this API (IAM / SigV4 at API Gateway), the agent runtime and the
 WebSocket API. Every upload and download therefore goes through a short-lived
 URL that the backend signs after these checks:
 
-- uploads: a supported file type, a well-formed content type allowed for that
-  type, a size of 1 byte to 500 MB, and one exact key per document;
+- uploads: a supported file type (no video in a build without a video model),
+  a well-formed content type allowed for that type, a size of 1 byte to
+  500 MB, and one exact key per document;
 - document downloads: a plain key under ``projects/{project_id}/``;
 - artifact downloads: a plain key under the caller's ``{user_id}/`` prefix;
 - URLs embedded in responses (segment images and video, images in analysis
@@ -73,6 +74,16 @@ UPLOAD_CONTENT_TYPES: dict[str, frozenset[str]] = {
     "dxf": frozenset({"application/dxf", "application/x-dxf", "image/vnd.dxf", "image/x-dxf"}),
 }
 
+# Video files: type-detection maps these extensions to video/* types, which go
+# to the video analysis steps. A build without a video model (the Mumbai build:
+# no model in ap-south-1 reads video) refuses them with VIDEO_NOT_SUPPORTED.
+VIDEO_EXTENSIONS = frozenset({"mp4", "mov", "avi", "mkv", "webm"})
+VIDEO_NOT_SUPPORTED = (
+    "Video files are not supported in this deployment: no AI model in its AWS Region "
+    "can read video. Upload the audio track instead (MP3, WAV or FLAC); audio is "
+    "transcribed with Amazon Transcribe."
+)
+
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 # RFC 6838 type/subtype, optionally followed by parameters (e.g. "; charset=utf-8").
 _TOKEN = r"[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}"
@@ -88,8 +99,11 @@ class PresignError(ValueError):
         self.detail = detail
 
 
-def check_upload(file_name: str, content_type: str, file_size: int) -> str:
-    """Validate an upload request; return the file extension as given (used in the key)."""
+def check_upload(file_name: str, content_type: str, file_size: int, *, video_allowed: bool = True) -> str:
+    """Validate an upload request; return the file extension as given (used in the key).
+
+    video_allowed=False (config video_uploads_enabled) refuses video files.
+    """
     if not file_name or len(file_name) > MAX_FILE_NAME_LENGTH:
         raise PresignError(400, f"File name must be 1 to {MAX_FILE_NAME_LENGTH} characters")
     if _CONTROL_CHARS.search(file_name) or "/" in file_name or "\\" in file_name or file_name in {".", ".."}:
@@ -104,6 +118,8 @@ def check_upload(file_name: str, content_type: str, file_size: int) -> str:
     allowed = UPLOAD_CONTENT_TYPES.get(ext.lower())
     if allowed is None:
         raise PresignError(400, f"Unsupported file type: .{ext}" if ext else "File name has no extension")
+    if not video_allowed and ext.lower() in VIDEO_EXTENSIONS:
+        raise PresignError(400, VIDEO_NOT_SUPPORTED)
 
     # fullmatch, not match + "$" (which also accepts a trailing newline), and no
     # control characters anywhere (a quoted parameter could carry CR/LF): the

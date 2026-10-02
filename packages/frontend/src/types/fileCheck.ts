@@ -454,7 +454,8 @@ export interface FileCheckUsage {
 
 // ------------------------------------------------------------------ erase
 // POST /projects/{project_id}/applicants/erase: permanently deletes every
-// document of one applicant and the data derived from them, and removes the
+// document of one applicant and the data derived from them (search-index
+// entries at once, their files in storage within a day), and removes the
 // name from the webhook delivery log. `confirm` must repeat the applicant's
 // name exactly (400 otherwise) and `document_ids` must be exactly the
 // applicant's documents now (409 otherwise); 404 when the project has no such

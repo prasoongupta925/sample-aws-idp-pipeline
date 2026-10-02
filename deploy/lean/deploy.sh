@@ -86,6 +86,12 @@ if [ "$(aws_retry codebuild batch-get-projects --names "$PROJECT" --query 'proje
   aws cloudformation deploy --template-file "$ROOT/deploy-codebuild.yml" --stack-name sample-aws-idp-pipeline-codebuild \
     --capabilities CAPABILITY_IAM \
     --parameter-overrides AdminUserEmail="$ADMIN_USER_EMAIL" RepoUrl="$REPO_URL" Version="$BRANCH" >/dev/null
+else
+  # Template changes (such as its role's Bedrock model deny) reach the existing project too; no-op when unchanged.
+  aws cloudformation deploy --template-file "$ROOT/deploy-codebuild.yml" --stack-name sample-aws-idp-pipeline-codebuild \
+    --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset \
+    --parameter-overrides AdminUserEmail="$ADMIN_USER_EMAIL" RepoUrl="$REPO_URL" Version="$BRANCH" >/dev/null \
+    || echo "warning: could not update the CodeBuild stack from deploy-codebuild.yml; the build runs with its current role"
 fi
 RECENT=$(aws_retry codebuild list-builds-for-project --project-name "$PROJECT" --no-paginate --query 'ids[:5]' --output text)
 if [ -n "$RECENT" ] && [ "$RECENT" != "None" ]; then

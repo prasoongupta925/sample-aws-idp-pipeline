@@ -14,6 +14,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from botocore.exceptions import ClientError
 
 os.environ.setdefault('AWS_DEFAULT_REGION', 'ap-south-1')
 os.environ.setdefault('AWS_ACCESS_KEY_ID', 'testing')
@@ -219,30 +220,64 @@ class FakeS3:
 
 
 class FakeLambda:
-    def __init__(self, recorder, fail_actions=(), function_error_actions=()):
+    """The LanceDB service. `tables` is what list_tables answers. An Event
+    invoke (not waited for) is queued, unless its table is in `fail_start`."""
+
+    def __init__(self, recorder, fail_actions=(), function_error_actions=(), tables=()):
         self.recorder = recorder
         self.fail_actions = set(fail_actions)
         self.function_error_actions = set(function_error_actions)
+        self.tables = list(tables)
+        self.fail_tables = set()
+        self.fail_start = set()
         self.calls = []
+        self.invocation_types = []
 
     def invoke(self, FunctionName, InvocationType, Payload):
         body = json.loads(Payload)
         self.calls.append(body)
-        self.recorder.add('lambda.invoke', body['action'], json.dumps(body['params'], sort_keys=True))
+        self.invocation_types.append(InvocationType)
         action = body['action']
+        params = body.get('params')
+        if action != 'list_tables':  # read-only
+            self.recorder.add('lambda.invoke', action, json.dumps(params, sort_keys=True))
+        if InvocationType == 'Event':
+            if params['project_id'] in self.fail_start:
+                raise ClientError({'Error': {'Code': 'TooManyRequestsException'}}, 'Invoke')
+            return {'StatusCode': 202, 'Payload': io.BytesIO(b'')}
         if action in self.function_error_actions:
             return {
                 'FunctionError': 'Unhandled',
                 'Payload': io.BytesIO(json.dumps({'errorMessage': 'crash'}).encode()),
             }
-        if action in self.fail_actions:
+        if action in self.fail_actions or (action == 'optimize' and params['project_id'] in self.fail_tables):
             payload = {'statusCode': 500, 'success': False, 'error': 'lance failure'}
+        elif action == 'list_tables':
+            # A unit action in the service: it rejects any params, even {}
+            assert 'params' not in body
+            payload = {'statusCode': 200, 'success': True, 'tables': list(self.tables)}
+        elif action == 'optimize':
+            payload = {'statusCode': 200, 'success': True, 'tables': [{
+                'table': params['project_id'], 'fragments_removed': 3, 'fragments_added': 1,
+                'fts_indices_rebuilt': 1, 'old_versions_removed': 4, 'bytes_removed': 1000,
+            }]}
         else:
+            if action == 'drop_table' and params['project_id'] in self.tables:
+                self.tables.remove(params['project_id'])
             payload = {'statusCode': 200, 'success': True}
         return {'Payload': io.BytesIO(json.dumps(payload).encode())}
 
     def actions(self):
-        return [(c['action'], c['params']) for c in self.calls]
+        """(action, params) of every call; {} for list_tables, sent without params."""
+        return [(c['action'], c.get('params', {})) for c in self.calls]
+
+    def optimize_calls(self):
+        """(invocation type, table) of every optimize call."""
+        return [
+            (kind, c['params']['project_id'])
+            for kind, c in zip(self.invocation_types, self.calls, strict=True)
+            if c['action'] == 'optimize'
+        ]
 
 
 class FakeSqs:
@@ -299,15 +334,16 @@ class FakeTranscribe:
 
 
 class World:
-    def __init__(self, fail_actions=(), function_error_actions=(), jobs=()):
+    def __init__(self, fail_actions=(), function_error_actions=(), jobs=(), tables=()):
         self.recorder = Recorder()
         self.table = FakeTable(self.recorder)
         self.s3 = FakeS3(self.recorder)
-        self.lambda_client = FakeLambda(self.recorder, fail_actions, function_error_actions)
+        self.lambda_client = FakeLambda(self.recorder, fail_actions, function_error_actions, tables)
         self.sqs = FakeSqs(self.recorder)
         self.transcribe = FakeTranscribe(self.recorder, jobs)
 
-    def run(self, dry_run=False, retention_days=7, now=NOW, delete_transcribe_jobs=True):
+    def run(self, dry_run=False, retention_days=7, now=NOW, delete_transcribe_jobs=True,
+            lancedb_prune_older_than_hours=0, time_left_ms=None):
         cfg = SweepConfig(
             table_name='idp-v2-backend',
             document_bucket=DOC_BUCKET,
@@ -318,9 +354,11 @@ class World:
             retention_days=retention_days,
             dry_run=dry_run,
             delete_transcribe_jobs=delete_transcribe_jobs,
+            lancedb_prune_older_than_hours=lancedb_prune_older_than_hours,
         )
         return run_sweep(
-            self.table, self.s3, self.lambda_client, self.sqs, self.transcribe, cfg, now=now
+            self.table, self.s3, self.lambda_client, self.sqs, self.transcribe, cfg, now=now,
+            time_left_ms=time_left_ms,
         )
 
 
@@ -464,7 +502,8 @@ def test_recent_document_is_untouched():
     add_document(world, 'proj-1', 'doc-new', iso(ago(2)), SECRET_NAMES[1], wid='wf-new')
     result = world.run()
     assert mutations(world) == []
-    assert world.lambda_client.calls == []
+    # Only the nightly LanceDB clean-up's table listing (no table here)
+    assert world.lambda_client.calls == [{'action': 'list_tables'}]
     assert world.sqs.messages == []
     assert result['documents']['expired'] == 0
 
@@ -692,6 +731,115 @@ def test_transcribe_sweep_can_be_disabled():
 
 
 # ---------------------------------------------------------------------------
+# LanceDB physical clean-up
+# ---------------------------------------------------------------------------
+
+
+LANCE_TABLES = ['proj-1', 'proj-1_datasets', 'graph_keywords']
+
+
+def test_every_lancedb_table_is_optimized_after_the_deletes():
+    world = doc_world(tables=LANCE_TABLES)
+    result = world.run()
+
+    actions = world.lambda_client.actions()
+    optimized = [p for a, p in actions if a == 'optimize']
+    assert optimized == [{'project_id': t, 'older_than_hours': 0} for t in LANCE_TABLES]
+    # Listed once, after every delete: the deleted rows are in the clean-up
+    assert [a for a, _ in actions].index('list_tables') > [a for a, _ in actions].index('delete_by_workflow')
+    log = mutations(world)
+    doc_index = log.index(('ddb.delete', 'PROJ#proj-1', 'DOC#doc-old'))
+    optimize_indexes = [i for i, e in enumerate(log) if e[:2] == ('lambda.invoke', 'optimize')]
+    assert min(optimize_indexes) > doc_index
+    assert optimize_indexes == list(range(len(log) - 3, len(log)))  # the last step
+    assert result['lancedb'] == {
+        'tables': 3, 'optimized': 3, 'started': 0, 'old_versions_removed': 12, 'bytes_removed': 3000,
+    }
+    assert set(world.lambda_client.invocation_types) == {'RequestResponse'}  # each one waited for
+    assert result['errors'] == []
+
+
+def test_lancedb_tables_dropped_by_the_sweep_are_not_optimized():
+    world = World(tables=['proj-1', 'proj-1_datasets', 'proj-2'])
+    add_project(world)
+    add_document(world, 'proj-1', 'doc-old', iso(ago(8)), SECRET_NAMES[0], wid='wf-old')
+    result = world.run()
+    assert result['projects']['emptied'] == 1
+    assert [p for a, p in world.lambda_client.actions() if a == 'optimize'] == [
+        {'project_id': 'proj-2', 'older_than_hours': 0}
+    ]
+    assert result['lancedb']['tables'] == 1
+
+
+def test_lancedb_prune_window_is_configurable():
+    world = World(tables=['proj-1'])
+    world.run(lancedb_prune_older_than_hours=6)
+    assert ('optimize', {'project_id': 'proj-1', 'older_than_hours': 6}) in world.lambda_client.actions()
+
+
+def test_one_failing_lancedb_table_does_not_stop_the_others():
+    world = World(tables=['proj-1', 'proj-2'])
+    world.lambda_client.fail_tables.add('proj-1')
+    result = world.run()
+    assert [p['project_id'] for a, p in world.lambda_client.actions() if a == 'optimize'] == ['proj-1', 'proj-2']
+    assert result['lancedb']['optimized'] == 1
+    assert result['errors'] == ['lancedb: optimize failed for table=proj-1 (LanceDbError)']
+
+
+def test_lancedb_list_tables_failure_is_reported():
+    world = doc_world(function_error_actions=['list_tables'], tables=LANCE_TABLES)
+    result = world.run()
+    assert not any(a == 'optimize' for a, _ in world.lambda_client.actions())
+    assert result['errors'] == ['lancedb: list_tables failed (LanceDbError)']
+    assert result['documents']['deleted'] == 1  # the deletes before it still ran
+
+
+def test_without_time_for_a_whole_call_every_table_is_started_unawaited():
+    world = doc_world(tables=LANCE_TABLES)
+    # Enough for the other steps (60 s margin), not for a 5-minute service call
+    result = world.run(time_left_ms=lambda: 200_000)
+    assert result['documents']['deleted'] == 1
+    # Still every table, after the deletes: none waits for a later night
+    assert world.lambda_client.optimize_calls() == [('Event', t) for t in LANCE_TABLES]
+    assert [p for a, p in world.lambda_client.actions() if a == 'optimize'] == [
+        {'project_id': t, 'older_than_hours': 0} for t in LANCE_TABLES
+    ]
+    log = mutations(world)
+    assert min(i for i, e in enumerate(log) if e[:2] == ('lambda.invoke', 'optimize')) > log.index(
+        ('ddb.delete', 'PROJ#proj-1', 'DOC#doc-old')
+    )
+    assert result['stopped_early'] is True
+    assert result['lancedb'] == {
+        'tables': 3, 'optimized': 0, 'started': 3, 'old_versions_removed': 0, 'bytes_removed': 0,
+    }
+    assert result['errors'] == []
+
+
+def test_tables_left_when_time_runs_short_are_started_unawaited():
+    world = World(tables=['proj-1', 'proj-2', 'proj-3'])
+    world.lambda_client.fail_start.add('proj-2')
+    left = {'ms': 900_000}
+    invoke = world.lambda_client.invoke
+
+    def slow_optimize(**kwargs):
+        response = invoke(**kwargs)
+        if json.loads(kwargs['Payload'])['action'] == 'optimize':
+            left['ms'] = 200_000  # the first table used up the time
+        return response
+
+    world.lambda_client.invoke = slow_optimize
+    result = world.run(time_left_ms=lambda: left['ms'])
+
+    assert world.lambda_client.optimize_calls() == [
+        ('RequestResponse', 'proj-1'), ('Event', 'proj-2'), ('Event', 'proj-3'),
+    ]
+    assert result['lancedb']['optimized'] == 1
+    # One that cannot start does not stop the others (the next night retries it)
+    assert result['lancedb']['started'] == 1
+    assert result['errors'] == ['lancedb: optimize not started for table=proj-2 (ClientError)']
+
+
+# ---------------------------------------------------------------------------
 # Dry run, isolation, privacy
 # ---------------------------------------------------------------------------
 
@@ -699,6 +847,7 @@ def test_transcribe_sweep_can_be_disabled():
 def full_world():
     world = artifact_world()
     world.transcribe = FakeTranscribe(world.recorder, JOBS)
+    world.lambda_client.tables = ['proj-1', 'proj-1_datasets', 'proj-2', 'graph_keywords']
     add_project(world)
     add_document(world, 'proj-1', 'doc-old', iso(ago(8)), SECRET_NAMES[0], wid='wf-old')
     add_dataset(world, 'proj-1', 'ds-old', iso(ago(2)), source_document_id='doc-old')
@@ -728,6 +877,7 @@ def test_dry_run_makes_no_mutating_calls_but_counts():
     assert result['artifacts']['orphan_objects_deleted'] == 2
     assert result['transcribe_jobs']['deleted'] == 3
     assert result['facts']['orphans_deleted'] == 1
+    assert result['lancedb']['optimized'] == 0 and result['lancedb']['started'] == 0
 
 
 def test_result_contains_no_names_or_personal_data():
@@ -748,10 +898,11 @@ def test_one_failing_step_does_not_stop_the_others():
     world.table.query = broken_query
     result = world.run()
     assert any(e.startswith('documents:') for e in result['errors'])
-    # sessions, artifacts and transcribe still ran
+    # sessions, artifacts, transcribe and the LanceDB clean-up still ran
     assert result['sessions']['expired'] == 1
     assert result['artifacts']['orphan_objects_deleted'] == 2
     assert result['transcribe_jobs']['deleted'] == 3
+    assert result['lancedb']['optimized'] == 4
 
 
 def test_stops_early_when_lambda_time_runs_out():
@@ -806,6 +957,16 @@ def test_load_config_defaults_and_missing_env():
         index.load_config({k: v for k, v in ENV.items() if k != 'GRAPH_DELETE_QUEUE_URL'})
     with pytest.raises(RuntimeError, match='RETENTION_DAYS'):
         index.load_config({**ENV, 'RETENTION_DAYS': '0'})
+
+
+def test_load_config_lancedb_prune_window():
+    index = _load_index()
+    assert index.load_config(dict(ENV)).lancedb_prune_older_than_hours == 0
+    cfg = index.load_config({**ENV, 'LANCEDB_PRUNE_OLDER_THAN_HOURS': '12'})
+    assert cfg.lancedb_prune_older_than_hours == 12
+    for bad in ('-1', 'one day'):
+        with pytest.raises(RuntimeError, match='LANCEDB_PRUNE_OLDER_THAN_HOURS'):
+            index.load_config({**ENV, 'LANCEDB_PRUNE_OLDER_THAN_HOURS': bad})
 
 
 def test_handler_raises_on_missing_env(monkeypatch):

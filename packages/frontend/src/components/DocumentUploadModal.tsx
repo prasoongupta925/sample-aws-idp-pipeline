@@ -26,6 +26,8 @@ import TranscribeSettingsForm, {
 } from './TranscribeSettingsForm';
 import { LANGUAGES } from './ProjectSettingsModal';
 import { useModal } from '../hooks/useModal';
+import { useRuntimeConfig } from '../hooks/useRuntimeConfig';
+import { fileTabAccept, isVideoFileName } from '../lib/uploadAccept';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
@@ -96,12 +98,11 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-// Accepted file extensions per tab. The File tab handles documents/media; the
-// Data tab handles spreadsheets only (structured datasets). The <input accept>
+// Accepted file extensions per tab. The File tab handles documents/media
+// (lib/uploadAccept.ts: no video in a build without a video model); the Data
+// tab handles spreadsheets only (structured datasets). The <input accept>
 // attribute only filters the picker dialog, NOT drag-and-drop, so these sets are
 // also used to filter dropped/selected files explicitly.
-const FILE_TAB_ACCEPT =
-  '.pdf,.doc,.docx,.ppt,.pptx,.txt,.md,.png,.jpg,.jpeg,.gif,.tiff,.mp4,.mov,.avi,.mp3,.wav,.flac,.dxf';
 const DATA_TAB_ACCEPT = '.xlsx,.xls,.csv,.tsv';
 
 function acceptToExtensions(accept: string): string[] {
@@ -122,6 +123,15 @@ export default function DocumentUploadModal({
   onUpload,
 }: DocumentUploadModalProps) {
   const { t } = useTranslation();
+  // No video model in this build (the Mumbai build): no video in the picker,
+  // and a dropped video gets a message instead of an upload the backend refuses.
+  const { videoUploadsEnabled, bdaEnabled } = useRuntimeConfig();
+  const videoAllowed = videoUploadsEnabled !== false;
+  // No Bedrock Data Automation in this build (it runs through a cross-Region
+  // profile): the BDA option is hidden and never sent.
+  const bdaAllowed = bdaEnabled !== false;
+  const fileAccept = fileTabAccept(videoAllowed);
+  const [refusedVideos, setRefusedVideos] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<UploadTab>('file');
   const [files, setFiles] = useState<File[]>([]);
   const [useBda, setUseBda] = useState(false);
@@ -270,11 +280,17 @@ export default function DocumentUploadModal({
   // Keep only files whose extension matches the active tab (Excel belongs in the
   // Data tab, documents in the File tab). accept on <input> filters the picker
   // but not drag-and-drop, so filter explicitly here for both paths.
-  const acceptForTab = activeTab === 'data' ? DATA_TAB_ACCEPT : FILE_TAB_ACCEPT;
+  const acceptForTab = activeTab === 'data' ? DATA_TAB_ACCEPT : fileAccept;
   const filterAccepted = useCallback(
-    (incoming: File[]) =>
-      incoming.filter((f) => fileMatchesAccept(f, acceptForTab)),
-    [acceptForTab],
+    (incoming: File[]) => {
+      if (activeTab === 'file' && !videoAllowed) {
+        setRefusedVideos(
+          incoming.filter((f) => isVideoFileName(f.name)).map((f) => f.name),
+        );
+      }
+      return incoming.filter((f) => fileMatchesAccept(f, acceptForTab));
+    },
+    [acceptForTab, activeTab, videoAllowed],
   );
 
   const handleDrop = useCallback(
@@ -345,7 +361,7 @@ export default function DocumentUploadModal({
 
   const buildOptions = useCallback((): DocumentProcessingOptions => {
     const opts: DocumentProcessingOptions = {
-      use_bda: useBda,
+      use_bda: bdaAllowed && useBda,
       use_ocr: useOcr,
       use_transcribe: useTranscribe,
     };
@@ -386,6 +402,7 @@ export default function DocumentUploadModal({
 
     return opts;
   }, [
+    bdaAllowed,
     useBda,
     useOcr,
     useTranscribe,
@@ -449,6 +466,7 @@ export default function DocumentUploadModal({
   const handleClose = useCallback(() => {
     if (!uploading) {
       setFiles([]);
+      setRefusedVideos([]);
       setPdfPageCounts(new Map());
       setUseBda(false);
       setUseOcr(true);
@@ -607,23 +625,40 @@ export default function DocumentUploadModal({
                         )}
                   </p>
                   <p className="text-xs text-[#64748b] text-center">
-                    {t(
-                      'documents.supportedFormats',
-                      'PDF, Images, Videos (max 500MB)',
-                    )}
+                    {videoAllowed
+                      ? t(
+                          'documents.supportedFormats',
+                          'PDF, Images, Videos (max 500MB)',
+                        )
+                      : t('documents.supportedFormatsNoVideo')}
                   </p>
                   <input
                     id="file-upload-input"
                     ref={fileInputRef}
                     type="file"
                     multiple
-                    accept={FILE_TAB_ACCEPT}
+                    accept={fileAccept}
                     className="hidden"
                     onChange={handleFileSelect}
                     disabled={uploading}
                   />
                 </label>
               </div>
+
+              {/* Video files refused: no model in this build reads video */}
+              {refusedVideos.length > 0 && (
+                <div
+                  role="alert"
+                  className="flex items-start gap-2 p-3 bg-amber-50 dark:bg-amber-500/[0.07] border border-amber-200 dark:border-amber-400/20 rounded-lg"
+                >
+                  <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+                  <p className="text-xs text-amber-700 dark:text-amber-300">
+                    {t('documents.videoNotSupported', {
+                      files: refusedVideos.join(', '),
+                    })}
+                  </p>
+                </div>
+              )}
 
               {/* Selected Files */}
               {files.length > 0 && (
@@ -692,37 +727,41 @@ export default function DocumentUploadModal({
                     {t('documents.preprocessing', 'Preprocessing')}
                   </p>
                 </div>
-                <div className="grid grid-cols-3 gap-1.5">
-                  {/* BDA */}
-                  <label
-                    className={`relative flex flex-col items-center gap-0.5 px-2 py-2 border rounded-lg cursor-pointer transition-colors ${
-                      useBda
-                        ? 'border-blue-400 bg-blue-50 dark:bg-blue-500/10'
-                        : 'border-black/[0.06] dark:border-[#3b4264] hover:border-black/10 dark:hover:border-[#2a2f45] bg-transparent dark:bg-[#0d1117]'
-                    } ${uploading ? 'opacity-50 pointer-events-none' : ''}`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={useBda}
-                      onChange={(e) => setUseBda(e.target.checked)}
-                      disabled={uploading}
-                      className="sr-only"
-                    />
-                    <span className="absolute top-1 right-1 group/bda">
-                      <Info className="h-3 w-3 text-[#94a3b8] dark:text-[#475569] cursor-help" />
-                      <span className="absolute top-full left-1/2 -translate-x-1/2 mt-1 hidden group-hover/bda:block w-48 p-2 text-xs text-[#475569] dark:text-[#cbd5e1] bg-white dark:bg-[#1e2235] border border-black/10 dark:border-[#3b4264] rounded-lg shadow-lg z-10">
-                        {t('documents.bdaTooltip')}
-                      </span>
-                    </span>
-                    <span
-                      className={`text-xs font-medium ${useBda ? 'text-blue-700 dark:text-blue-300' : 'text-[#475569] dark:text-[#94a3b8]'}`}
+                <div
+                  className={`grid ${bdaAllowed ? 'grid-cols-3' : 'grid-cols-2'} gap-1.5`}
+                >
+                  {/* BDA (not in a build without it: cross-Region profile) */}
+                  {bdaAllowed && (
+                    <label
+                      className={`relative flex flex-col items-center gap-0.5 px-2 py-2 border rounded-lg cursor-pointer transition-colors ${
+                        useBda
+                          ? 'border-blue-400 bg-blue-50 dark:bg-blue-500/10'
+                          : 'border-black/[0.06] dark:border-[#3b4264] hover:border-black/10 dark:hover:border-[#2a2f45] bg-transparent dark:bg-[#0d1117]'
+                      } ${uploading ? 'opacity-50 pointer-events-none' : ''}`}
                     >
-                      {t('documents.bdaAnalysis', 'BDA')}
-                    </span>
-                    <span className="text-[10px] text-[#94a3b8] dark:text-[#64748b] leading-tight text-center">
-                      {t('documents.bdaShort', 'Bedrock Analysis')}
-                    </span>
-                  </label>
+                      <input
+                        type="checkbox"
+                        checked={useBda}
+                        onChange={(e) => setUseBda(e.target.checked)}
+                        disabled={uploading}
+                        className="sr-only"
+                      />
+                      <span className="absolute top-1 right-1 group/bda">
+                        <Info className="h-3 w-3 text-[#94a3b8] dark:text-[#475569] cursor-help" />
+                        <span className="absolute top-full left-1/2 -translate-x-1/2 mt-1 hidden group-hover/bda:block w-48 p-2 text-xs text-[#475569] dark:text-[#cbd5e1] bg-white dark:bg-[#1e2235] border border-black/10 dark:border-[#3b4264] rounded-lg shadow-lg z-10">
+                          {t('documents.bdaTooltip')}
+                        </span>
+                      </span>
+                      <span
+                        className={`text-xs font-medium ${useBda ? 'text-blue-700 dark:text-blue-300' : 'text-[#475569] dark:text-[#94a3b8]'}`}
+                      >
+                        {t('documents.bdaAnalysis', 'BDA')}
+                      </span>
+                      <span className="text-[10px] text-[#94a3b8] dark:text-[#64748b] leading-tight text-center">
+                        {t('documents.bdaShort', 'Bedrock Analysis')}
+                      </span>
+                    </label>
+                  )}
 
                   {/* OCR */}
                   <div

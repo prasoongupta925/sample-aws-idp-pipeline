@@ -36,20 +36,16 @@ DEFAULT_MAX_OUTPUT_TOKENS = 16000
 SERVICE_TIERS = ('default', 'flex', 'priority')
 
 # USD per million tokens (input, output) by model and service tier: Price List
-# API, AmazonBedrock offer, ap-south-1, version 20260930230255. A model or tier
-# missing here gives cost_usd None (unknown), never a wrong price. The Nova 2
-# Lite standard price is the Ask feature's (packages/backend/app/file_check_ask.py);
+# API, AmazonBedrock offer, ap-south-1, version 20260930230255 (in-Region models
+# only: everything runs in ap-south-1). A model or tier missing here gives
+# cost_usd None (unknown), never a wrong price. A model the Ask feature also
+# prices (packages/backend/app/file_check_ask.py) has the same prices there;
 # test_facts_extractor.py checks that the two stay equal.
 PRICES_PER_MILLION_USD = {
     'openai.gpt-oss-120b-1:0': {
         'default': (0.18, 0.71),
         'flex': (0.09, 0.355),
         'priority': (0.315, 1.2425),
-    },
-    'global.amazon.nova-2-lite-v1:0': {
-        'default': (0.35, 2.95),
-        'flex': (0.175, 1.475),
-        'priority': (0.6125, 5.1625),
     },
 }
 

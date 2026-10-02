@@ -4,15 +4,42 @@ import { Construct } from 'constructs';
 /**
  * Per-region deployment settings. Every value can be overridden with CDK
  * context (`-c <key>=<value>`); otherwise the defaults for the stack region
- * apply. Cross-region values exist only for models that the deploy region
- * does not offer (e.g. ap-south-1 has no Amazon embedding or rerank model).
+ * apply. ap-south-1 (Mumbai) keeps every model call in-Region: Titan Text
+ * Embeddings V2 is offered there, while Amazon Rerank and Nova Sonic are not,
+ * so re-ranking and the built-in voice chat are off. In every region the
+ * App's model guard (core/bedrock-model-guard.ts) denies model calls outside
+ * the stack region: LanceServiceStack refuses an embeddingRegion other than
+ * the stack region, AgentStack (with voice chat on) such a voiceModelRegion,
+ * and Amazon Rerank in another region is denied (search then keeps the
+ * hybrid order).
  */
 export interface RegionConfig {
   region: string;
   lancedbExpressAzId: string;
+  /** Region of the embedding model: the stack region (the only one allowed). */
   embeddingRegion: string;
-  rerankRegion: string;
+  /**
+   * Re-rank search results with Amazon Rerank (context enableRerank). When
+   * false, search keeps the LanceDB hybrid order (full-text + vector).
+   */
+  rerankEnabled: boolean;
+  /** Region of Amazon Rerank; undefined when rerankEnabled is false. */
+  rerankRegion?: string;
+  /** Region of the voice chat model (Nova Sonic): the stack region. */
   voiceModelRegion: string;
+  /**
+   * Deploy the built-in speech-to-speech voice chat (Nova Sonic BidiAgent)
+   * (context enableVoiceChat).
+   */
+  voiceChatEnabled: boolean;
+  /**
+   * Offer Bedrock Data Automation, the upload's optional "BDA" preprocessing
+   * (context enableBda). BDA runs only through a geographic cross-Region
+   * profile (bda-start: us./eu./apac.data-automation-v1), so it is off where
+   * every call must stay in the Region: no IAM grant, the step is skipped and
+   * the web app hides the option.
+   */
+  bdaEnabled: boolean;
   /** Create the AgentCore Web Search gateway target (context enableWebSearch). */
   webSearchEnabled: boolean;
 }
@@ -23,21 +50,31 @@ const REGION_DEFAULTS: Record<string, RegionDefaults> = {
   'us-east-1': {
     lancedbExpressAzId: 'use1-az4',
     embeddingRegion: 'us-east-1',
+    rerankEnabled: true,
     rerankRegion: 'us-west-2',
     voiceModelRegion: 'us-east-1',
+    voiceChatEnabled: true,
+    bdaEnabled: true,
   },
   'ap-south-1': {
     // S3 Express One Zone zones in ap-south-1: aps1-az1 and aps1-az3.
     lancedbExpressAzId: 'aps1-az1',
-    embeddingRegion: 'us-east-1',
-    rerankRegion: 'ap-northeast-1',
-    // Nova Sonic is not offered in ap-south-1. Voice stays in-region (off);
-    // opt in with -c voiceModelRegion=ap-northeast-1 (audio leaves India).
+    // Titan Text Embeddings V2 is offered in-Region.
+    embeddingRegion: 'ap-south-1',
+    // No reranking model in ap-south-1: search keeps the LanceDB hybrid order
+    // (full-text + vector).
+    rerankEnabled: false,
+    // Nova Sonic is not offered in ap-south-1, so the built-in voice chat is
+    // not deployed: the voice bot (Transcribe + an in-Region LLM + Polly) is
+    // the voice channel.
     voiceModelRegion: 'ap-south-1',
+    voiceChatEnabled: false,
+    // Bedrock Data Automation in ap-south-1 runs through the APAC cross-Region
+    // profile (apac.data-automation-v1): off.
+    bdaEnabled: false,
   },
 };
 
-const FALLBACK_EMBEDDING_REGION = 'us-east-1';
 const FALLBACK_RERANK_REGION = 'us-west-2';
 
 /**
@@ -114,21 +151,32 @@ export function getRegionConfig(scope: Construct): RegionConfig {
     );
   }
 
+  const rerankEnabled =
+    contextBoolean(scope, 'enableRerank') ?? defaults.rerankEnabled ?? true;
+
   return {
     region,
     lancedbExpressAzId,
     embeddingRegion:
       contextString(scope, 'embeddingRegion') ??
       defaults.embeddingRegion ??
-      FALLBACK_EMBEDDING_REGION,
-    rerankRegion:
-      contextString(scope, 'rerankRegion') ??
-      defaults.rerankRegion ??
-      FALLBACK_RERANK_REGION,
+      region,
+    rerankEnabled,
+    rerankRegion: rerankEnabled
+      ? (contextString(scope, 'rerankRegion') ??
+        defaults.rerankRegion ??
+        FALLBACK_RERANK_REGION)
+      : undefined,
     voiceModelRegion:
       contextString(scope, 'voiceModelRegion') ??
       defaults.voiceModelRegion ??
       region,
+    voiceChatEnabled:
+      contextBoolean(scope, 'enableVoiceChat') ??
+      defaults.voiceChatEnabled ??
+      true,
+    bdaEnabled:
+      contextBoolean(scope, 'enableBda') ?? defaults.bdaEnabled ?? true,
     webSearchEnabled:
       contextBoolean(scope, 'enableWebSearch') ??
       (!Token.isUnresolved(region) && WEB_SEARCH_REGIONS.includes(region)),

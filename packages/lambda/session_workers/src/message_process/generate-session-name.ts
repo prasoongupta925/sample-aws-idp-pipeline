@@ -6,6 +6,9 @@ import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 
 const bedrockClient = new BedrockRuntimeClient();
 
+// Gemma 3 12B: AWS-sold and in-Region in ap-south-1 (no cross-Region profile).
+export const SESSION_NAME_MODEL_ID = 'google.gemma-3-12b-it';
+
 interface MessageContent {
   text?: string;
 }
@@ -27,6 +30,20 @@ function extractTextFromMessage(messageData: MessageData): string {
     .filter((item) => item.text)
     .map((item) => item.text as string)
     .join('\n');
+}
+
+/**
+ * The title in a Converse answer: the first text block (a model may put
+ * reasoning blocks first), its first line, without wrapping quotes or
+ * Markdown emphasis. null when there is no title.
+ */
+export function sessionNameFromContent(
+  content: { text?: string }[] | undefined,
+): string | null {
+  const text = content?.find((block) => typeof block.text === 'string')?.text;
+  const firstLine = (text ?? '').trim().split('\n')[0] ?? '';
+  const title = firstLine.replace(/^[\s"'“”*_#`]+|[\s"'“”*_#`]+$/g, '');
+  return title || null;
 }
 
 export async function generateSessionName(
@@ -67,7 +84,7 @@ export async function generateSessionName(
   ].join('\n');
 
   const command = new ConverseCommand({
-    modelId: 'global.amazon.nova-2-lite-v1:0',
+    modelId: SESSION_NAME_MODEL_ID,
     messages: [{ role: 'user', content: [{ text: prompt }] }],
     inferenceConfig: {
       maxTokens: 50,
@@ -75,7 +92,5 @@ export async function generateSessionName(
   });
 
   const response = await bedrockClient.send(command);
-  const sessionName = response.output?.message?.content?.[0]?.text?.trim();
-
-  return sessionName ?? null;
+  return sessionNameFromContent(response.output?.message?.content);
 }

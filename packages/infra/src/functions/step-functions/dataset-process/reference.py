@@ -13,10 +13,12 @@ import duckdb
 from strands import Agent
 from strands.models import BedrockModel
 
+# WorkflowStack sets DATASET_REFERENCE_MODEL_ID; the default is an in-Region
+# (ap-south-1) text model, never a cross-Region profile.
 REFERENCE_MODEL_ID = os.environ.get(
-    "DATASET_REFERENCE_MODEL_ID", "global.amazon.nova-2-lite-v1:0"
+    "DATASET_REFERENCE_MODEL_ID", "openai.gpt-oss-120b-1:0"
 )
-AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
+AWS_REGION = os.environ.get("AWS_REGION", "ap-south-1")
 
 SYSTEM_PROMPT = """You are a Parquet schema analyst. Produce (1) a short standalone
 description and (2) a reference document that a text2SQL agent uses to translate

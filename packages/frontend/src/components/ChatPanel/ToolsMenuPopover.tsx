@@ -5,6 +5,7 @@ import type { Agent, BidiModelType } from './types';
 import { isBuiltinAgent, sortAgentsBuiltinFirst } from '../../lib/agents';
 
 interface ToolsMenuVoiceChat {
+  /** The build has voice chat (no BidiAgent in the Mumbai build: no item). */
   available?: boolean;
   mode: boolean;
   selectedModel?: BidiModelType;
@@ -42,16 +43,18 @@ export default function ToolsMenuPopover({
   const { t } = useTranslation();
   const [showAgentSubmenu, setShowAgentSubmenu] = useState(false);
   const orderedAgents = useMemo(() => sortAgentsBuiltinFirst(agents), [agents]);
+  // Voice mode counts only where voice chat exists.
+  const voiceActive = Boolean(voiceChat.available) && voiceChat.mode;
 
   return (
     <div className="absolute bottom-full left-0 mb-2 w-56 bg-[#e4eaf4] dark:bg-slate-800 border border-white/60 dark:border-white/30 rounded-xl shadow-lg z-50 py-1">
-      {/* Voice Chat toggle */}
+      {/* Voice Chat toggle (hidden when the build has no voice chat) */}
       {voiceChat.available && voiceChat.onModelSelect && (
         <button
           type="button"
           disabled={!!selectedAgent}
           onClick={() => {
-            if (voiceChat.mode) {
+            if (voiceActive) {
               voiceChat.onDisable();
             } else {
               if (selectedAgent && onAgentSelect) {
@@ -66,20 +69,18 @@ export default function ToolsMenuPopover({
           }`}
         >
           <Mic
-            className={`w-4 h-4 ${voiceChat.mode ? 'text-purple-500' : 'text-slate-500 dark:text-slate-400'}`}
+            className={`w-4 h-4 ${voiceActive ? 'text-purple-500' : 'text-slate-500 dark:text-slate-400'}`}
           />
           <span
             className={
-              voiceChat.mode
+              voiceActive
                 ? 'text-purple-600 dark:text-purple-400'
                 : 'text-slate-700 dark:text-slate-300'
             }
           >
             {t('voiceChat.title')}
           </span>
-          {voiceChat.mode && (
-            <Check className="w-4 h-4 text-purple-500 ml-auto" />
-          )}
+          {voiceActive && <Check className="w-4 h-4 text-purple-500 ml-auto" />}
         </button>
       )}
 
@@ -90,12 +91,12 @@ export default function ToolsMenuPopover({
           <div className="relative">
             <button
               type="button"
-              disabled={voiceChat.mode}
+              disabled={voiceActive}
               onClick={() => {
                 setShowAgentSubmenu((v) => !v);
               }}
               className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors ${
-                voiceChat.mode
+                voiceActive
                   ? 'opacity-30 cursor-not-allowed'
                   : 'text-slate-700 dark:text-slate-300 glass-menu-item'
               }`}
@@ -159,7 +160,7 @@ export default function ToolsMenuPopover({
                           onPendingAgentChange(agent.agent_id);
                           onShowRemoveAgentConfirm();
                         } else {
-                          if (voiceChat.mode) {
+                          if (voiceActive) {
                             voiceChat.setMode(false);
                             voiceChat.onDisconnect?.();
                           }

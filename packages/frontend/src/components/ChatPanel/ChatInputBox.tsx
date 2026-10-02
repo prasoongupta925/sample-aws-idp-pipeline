@@ -98,6 +98,9 @@ export default function ChatInputBox({
   const [isDragging, setIsDragging] = useState(false);
   const [showToolsMenu, setShowToolsMenu] = useState(false);
   const toolsMenuRef = useRef<HTMLDivElement>(null);
+  // Voice mode counts only in a build with voice chat (the Mumbai build has
+  // none): no mic chip, and messages always go to the text chat.
+  const voiceActive = Boolean(voiceChat.available) && voiceChat.mode;
 
   // Mention state
   const [showMentionDropdown, setShowMentionDropdown] = useState(false);
@@ -437,7 +440,7 @@ export default function ChatInputBox({
 
     const messageContent = getInputContent();
 
-    if (voiceChat.mode && voiceChat.onText) {
+    if (voiceActive && voiceChat.onText) {
       voiceChat.onText(messageContent);
     } else {
       onSendMessage(attachedFiles, messageContent);
@@ -452,6 +455,7 @@ export default function ChatInputBox({
   }, [
     hasContent,
     sending,
+    voiceActive,
     voiceChat,
     onSendMessage,
     attachedFiles,
@@ -631,7 +635,7 @@ export default function ChatInputBox({
                 <Plus className="w-5 h-5" />
               </button>
 
-              {/* Tools popover */}
+              {/* Tools popover (the Voice Chat item only where voice chat exists) */}
               {(onAgentSelect || voiceChat.available) && (
                 <div className="relative" ref={toolsMenuRef}>
                   <button
@@ -651,7 +655,7 @@ export default function ChatInputBox({
                     <ToolsMenuPopover
                       voiceChat={{
                         available: voiceChat.available,
-                        mode: voiceChat.mode,
+                        mode: voiceActive,
                         selectedModel: voiceChat.selectedModel,
                         onModelSelect: voiceChat.onModelSelect,
                         onDisable: voiceChat.handleDisable,
@@ -675,7 +679,7 @@ export default function ChatInputBox({
               )}
 
               {/* Model selector (text chat only; voice chat picks its own model) */}
-              {!voiceChat.mode &&
+              {!voiceActive &&
                 models &&
                 models.length > 0 &&
                 modelId &&
@@ -692,7 +696,7 @@ export default function ChatInputBox({
                 )}
 
               {/* Selected tool chips */}
-              {(selectedAgent || voiceChat.mode) && (
+              {(selectedAgent || voiceActive) && (
                 <>
                   <div className="w-px h-5 bg-slate-200 dark:bg-white/10 mx-0.5" />
                   {selectedAgent && onAgentSelect && (
@@ -713,7 +717,7 @@ export default function ChatInputBox({
                       <X className="w-3.5 h-3.5 ml-0.5 opacity-60 hover:opacity-100" />
                     </button>
                   )}
-                  {voiceChat.mode && (
+                  {voiceActive && (
                     <button
                       type="button"
                       onClick={voiceChat.handleDisable}
@@ -756,7 +760,7 @@ export default function ChatInputBox({
                 type="button"
                 className={`inline-flex items-center justify-center h-8 w-8 rounded-xl transition-all active:scale-95 ${
                   hasContent && !sending
-                    ? voiceChat.mode
+                    ? voiceActive
                       ? 'bg-purple-500 hover:bg-purple-600 text-white shadow-md'
                       : 'bg-blue-500 hover:bg-blue-600 text-white shadow-md'
                     : 'bg-slate-200 dark:bg-white/15 text-slate-400 cursor-not-allowed'

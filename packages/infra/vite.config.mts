@@ -1,10 +1,12 @@
 /// <reference types='vitest' />
 import { defineConfig } from 'vite';
+import tsconfigPaths from 'vite-tsconfig-paths';
 
 export default defineConfig(() => ({
   root: import.meta.dirname,
   cacheDir: '../../node_modules/.vite/packages/infra',
-  plugins: [],
+  // Resolves ':idp-v2/common-constructs' (tsconfig.base.json paths), as tsx does.
+  plugins: [tsconfigPaths({ ignoreConfigErrors: true })],
   // Uncomment this if you are using workers.
   // worker: {
   //  plugins: [],

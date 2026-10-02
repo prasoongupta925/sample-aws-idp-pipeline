@@ -17,8 +17,10 @@ class Config(BaseSettings):
     session_storage_bucket_name: str = os.environ.get("SESSION_STORAGE_BUCKET_NAME", "")
     backend_table_name: str = os.environ.get("BACKEND_TABLE_NAME", "")
     agent_storage_bucket_name: str = os.environ.get("AGENT_STORAGE_BUCKET_NAME", "")
+    # AgentStack sets BEDROCK_MODEL_ID from models.json `webcrawler`. The browser
+    # tool returns text (screenshots are saved, not sent), so a text model works.
     bedrock_model_id: str = os.environ.get(
-        "BEDROCK_MODEL_ID", "global.amazon.nova-2-lite-v1:0"
+        "BEDROCK_MODEL_ID", "openai.gpt-oss-120b-1:0"
     )
 
 

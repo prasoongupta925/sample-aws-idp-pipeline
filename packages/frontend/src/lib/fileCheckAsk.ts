@@ -17,11 +17,14 @@ export const ASK_MAX_THREAD = 6;
 /** Longest history message sent back (older answers are context only). */
 export const ASK_MAX_HISTORY_CONTENT = 1000;
 /** Model the backend is configured with by default (a config value). */
-export const ASK_DEFAULT_MODEL_ID = 'global.amazon.nova-2-lite-v1:0';
-/** Amazon Nova 2 Lite list price, USD per 1M tokens (the API returns the live values). */
+export const ASK_DEFAULT_MODEL_ID = 'moonshotai.kimi-k2.5';
+/**
+ * Kimi K2.5 price in ap-south-1 (standard tier), USD per 1M tokens; the API
+ * returns the price of the model and tier that answered.
+ */
 export const ASK_DEFAULT_PRICING: FileCheckAskPricing = {
-  input_per_million_usd: 0.35,
-  output_per_million_usd: 2.95,
+  input_per_million_usd: 0.72,
+  output_per_million_usd: 3.6,
   region: null,
 };
 /** Nothing is kept longer than this (usage window, retention). */
@@ -177,7 +180,7 @@ export function formatUsd(value: number | null | undefined): string {
   return `$${value.toFixed(4)}`;
 }
 
-/** $0.35 (per-1M prices, 2 decimals). */
+/** $0.72 (per-1M prices, 2 decimals). */
 export function formatPrice(value: number): string {
   return `$${value.toFixed(2)}`;
 }

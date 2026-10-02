@@ -1,6 +1,6 @@
 use lambda_runtime::{Error, LambdaEvent, service_fn};
 use lancedb_service::LanceDbAction;
-use lancedb_service::action::{add_dataset, add_graph_keywords, add_record, count, delete_by_workflow, delete_graph_keywords_by_project_id, delete_record, drop_table, get_by_qa_ids, get_by_segment_ids, get_graph_keywords, get_segments_by_document_id, hybrid_search, list_tables, search_datasets, search_graph_keywords};
+use lancedb_service::action::{add_dataset, add_graph_keywords, add_record, count, delete_by_workflow, delete_graph_keywords_by_project_id, delete_record, drop_table, get_by_qa_ids, get_by_segment_ids, get_graph_keywords, get_segments_by_document_id, hybrid_search, list_tables, optimize, search_datasets, search_graph_keywords};
 use lancedb_service::db;
 use serde::Serialize;
 use tracing::info;
@@ -24,8 +24,8 @@ async fn main() -> Result<(), Error> {
 
     let aws_config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
     let lambda_client = aws_sdk_lambda::Client::new(&aws_config);
-    // Amazon embedding models are not offered in every region (e.g. ap-south-1):
-    // call Bedrock in EMBEDDING_REGION when set, else in the Lambda's own region.
+    // Embeddings (client/bedrock.rs): Bedrock in EMBEDDING_REGION when set (the
+    // stack passes its own Region), else in the Lambda's own region.
     let bedrock_client = match std::env::var("EMBEDDING_REGION") {
         Ok(region) if !region.is_empty() => {
             let conf = aws_sdk_bedrockruntime::config::Builder::from(&aws_config)
@@ -104,6 +104,9 @@ async fn handler(
             .map_err(|e| (500, e.to_string()))
             .and_then(|v| serde_json::to_value(v).map_err(|e| (500, e.to_string()))),
         LanceDbAction::DropTable(params) => drop_table::execute(&conn, params).await
+            .map_err(|e| (500, e.to_string()))
+            .and_then(|v| serde_json::to_value(v).map_err(|e| (500, e.to_string()))),
+        LanceDbAction::Optimize(params) => optimize::execute(&conn, params).await
             .map_err(|e| (500, e.to_string()))
             .and_then(|v| serde_json::to_value(v).map_err(|e| (500, e.to_string()))),
         // All actions are now implemented

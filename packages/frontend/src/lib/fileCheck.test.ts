@@ -352,9 +352,9 @@ describe('CSV usage columns', () => {
     expect(lines[0].split(',')).toHaveLength(12);
     const docs = lines.filter((l) => l.split(',')[3] === 'Documents');
     expect(docs).toEqual([
-      'Amit Suresh Patil,NOT READY,Personal Loan - Salaried,Documents,application.pdf,READ,loan application,application.pdf,global.amazon.nova-2-lite-v1:0,12345,678,0.006321',
+      'Amit Suresh Patil,NOT READY,Personal Loan - Salaried,Documents,application.pdf,READ,loan application,application.pdf,openai.gpt-oss-120b-1:0,12345,678,0.001352',
       'Amit Suresh Patil,NOT READY,Personal Loan - Salaried,Documents,slip_aug.pdf,READ,salary slip; unverified: net_salary; usage not recorded,slip_aug.pdf,,,,',
-      'Amit Suresh Patil,NOT READY,Personal Loan - Salaried,Documents,Facts extraction cost (total),INFO,"file-check facts step only, other analysis steps not included; 1 of 2 documents with recorded usage",,,12345,678,0.006321',
+      'Amit Suresh Patil,NOT READY,Personal Loan - Salaried,Documents,Facts extraction cost (total),INFO,"file-check facts step only, other analysis steps not included; 1 of 2 documents with recorded usage",,,12345,678,0.001352',
     ]);
     // Documents come after the applicant's findings, before "Not checked".
     const sections = lines.map((l) => l.split(',')[3]);

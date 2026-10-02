@@ -10,14 +10,17 @@ knowledge and guessing. The context is capped at about max_input_tokens
 estimated tokens: page text is cut first, then the facts, then the verdict's
 evidence lists; the verdict itself is cut only as a last resort.
 
-Amazon Nova 2 Lite (AWS-sold, global inference profile) answers through the
-Bedrock Converse API with temperature 0. Every model call is written to the
-usage ledger (app.ddb.ask_usage) with its tokens and cost. Questions, answers
-and document content are never logged or stored.
+The configured model (default Moonshot AI Kimi K2.5: AWS-sold, in-Region in
+ap-south-1) answers through the Bedrock Converse API with temperature 0. Any
+reasoning the model returns (gpt-oss reasons before it answers) is never shown
+or stored. Every model call is written to the usage ledger (app.ddb.ask_usage)
+with its tokens and its cost at that model's price. Questions, answers and
+document content are never logged or stored.
 """
 
 import json
 import math
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -33,9 +36,24 @@ from app.ddb.ask_usage import put_ask_usage
 from app.ddb.facts import query_facts
 from app.s3 import get_json_object, list_segment_keys
 
-# USD per million tokens of Amazon Nova 2 Lite (the Ask API contract's price list).
-INPUT_PRICE_PER_MILLION_USD = 0.35
-OUTPUT_PRICE_PER_MILLION_USD = 2.95
+# USD per million tokens (input, output) of each model the Ask may use, by Bedrock
+# service tier: Price List API, AmazonBedrock offer, ap-south-1, version
+# 20260930230255 (in-Region prices; no cross-Region profile is ever called). The
+# Ask sends no service tier, so Bedrock serves (and bills) it on the standard
+# tier, "default"; a call is priced at the tier the response names. The facts
+# step prices the same models alike (infra/src/functions/step-functions/
+# document-facts/extractor.py; its tests check that the two agree). A model
+# missing here is refused before any call (AskNotConfiguredError), so the cost
+# meter never shows another model's price.
+PRICES_PER_MILLION_USD: dict[str, dict[str, tuple[float, float]]] = {
+    # The default (Mumbai eval 2026-10-02: every grounded and not-in-file answer
+    # right, Hinglish answered in Hinglish).
+    "moonshotai.kimi-k2.5": {"default": (0.72, 3.6), "flex": (0.36, 1.8)},
+    # The cheaper alternative (FILE_CHECK_ASK_MODEL_ID override): in that eval it
+    # misread a closing balance and answered Hinglish in Devanagari or English.
+    "openai.gpt-oss-120b-1:0": {"default": (0.18, 0.71), "flex": (0.09, 0.355)},
+}
+STANDARD_TIER = "default"
 USAGE_WINDOW_DAYS = 7
 
 # Token estimate for the context cap. JSON, digits and rupee amounts tokenise
@@ -56,6 +74,9 @@ NON_DOCUMENT_TYPES = {"VIDEO", "AUDIO", "CHAPTER"}
 MIN_MACHINE_CHARS = 50
 
 TRUNCATION_MARK = " [... cut to fit the size limit]"
+# gpt-oss returns its reasoning in reasoningContent blocks, which are never
+# read; reasoning that arrives inline in the text (even cut off) is removed too.
+_INLINE_REASONING = re.compile(r"<reasoning>.*?(?:</reasoning>|\Z)", re.DOTALL)
 
 SYSTEM_PROMPT = (
     "You answer questions from the staff of a loan DSA (a loan distributor, not a lender) about one loan file.\n"
@@ -87,6 +108,10 @@ class AskModelError(Exception):
     """The model call failed or gave no answer (the route answers 502)."""
 
 
+class AskNotConfiguredError(Exception):
+    """The configured Ask model has no price, so it is never called (the route answers 503)."""
+
+
 def get_bedrock_client():
     global _bedrock_client
     if _bedrock_client is None:
@@ -109,8 +134,23 @@ def estimate_tokens(text: str) -> int:
     return math.ceil(len(text) / CHARS_PER_TOKEN)
 
 
-def cost_usd(input_tokens: int, output_tokens: int) -> float:
-    cost = input_tokens * INPUT_PRICE_PER_MILLION_USD / 1e6 + output_tokens * OUTPUT_PRICE_PER_MILLION_USD / 1e6
+def model_prices(model_id: str, tier: str | None = None) -> tuple[float, float]:
+    """(input, output) USD per million tokens of model_id on the service tier (None: standard).
+
+    Raises AskNotConfiguredError when the model has no price. A tier without a
+    price of its own (Bedrock serves the Ask on the standard tier) gets the
+    standard price.
+    """
+    tiers = PRICES_PER_MILLION_USD.get(model_id)
+    if not tiers:
+        raise AskNotConfiguredError(f"no price for model {model_id}")
+    return tiers.get(tier or STANDARD_TIER) or tiers[STANDARD_TIER]
+
+
+def cost_usd(input_tokens: int, output_tokens: int, model_id: str, tier: str | None = None) -> float:
+    """USD cost of one call at model_id's price on the service tier, rounded to 8 decimals."""
+    input_price, output_price = model_prices(model_id, tier)
+    cost = input_tokens * input_price / 1e6 + output_tokens * output_price / 1e6
     return round(cost, 8)
 
 
@@ -390,6 +430,8 @@ class ModelAnswer:
     input_tokens: int
     output_tokens: int
     stop_reason: str | None
+    # The service tier that served (and bills) the call; None when not named.
+    service_tier: str | None = None
 
 
 def converse(model_id: str, messages: list[dict[str, Any]], max_tokens: int) -> ModelAnswer:
@@ -405,14 +447,18 @@ def converse(model_id: str, messages: list[dict[str, Any]], max_tokens: int) -> 
         raise AskModelError(f"model call failed ({code})") from e
     except BotoCoreError as e:
         raise AskModelError(f"model call failed ({type(e).__name__})") from e
+    # Text blocks only: reasoningContent blocks (gpt-oss) are never read.
     content = (((response.get("output") or {}).get("message") or {}).get("content")) or []
-    text = "".join(c["text"] for c in content if isinstance(c, dict) and isinstance(c.get("text"), str)).strip()
+    text = "".join(c["text"] for c in content if isinstance(c, dict) and isinstance(c.get("text"), str))
+    text = _INLINE_REASONING.sub("", text).strip()
     usage = response.get("usage") or {}
+    tier = (response.get("serviceTier") or {}).get("type")
     return ModelAnswer(
         text=text,
         input_tokens=int(usage.get("inputTokens") or 0),
         output_tokens=int(usage.get("outputTokens") or 0),
         stop_reason=response.get("stopReason"),
+        service_tier=tier if isinstance(tier, str) and tier else None,
     )
 
 
@@ -425,9 +471,13 @@ def answer_question(
 ) -> dict[str, Any]:
     """Answer from the verdict, facts and page text only; record the call in the ledger.
 
-    Raises AskModelError when the model call fails or returns no text.
+    Raises AskNotConfiguredError, before anything is read or called, when the
+    configured model has no price; AskModelError when the model call fails or
+    returns no text.
     """
     config = get_config()
+    model_id = config.file_check_ask_model_id
+    model_prices(model_id)  # an unpriced model is never called
     total_chars = max(config.file_check_ask_max_input_tokens, 1) * CHARS_PER_TOKEN
     fixed_chars = len(SYSTEM_PROMPT) + len(question)
     turns = fit_history(history, int(total_chars * HISTORY_BUDGET_SHARE))
@@ -446,9 +496,9 @@ def answer_question(
         context_text += "\n<context_notes>\n" + "\n".join(load_notes) + "\n</context_notes>"
     messages = build_messages(turns, context_text, question)
 
-    model_id = config.file_check_ask_model_id
     result = converse(model_id, messages, config.file_check_ask_max_output_tokens)
-    cost = cost_usd(result.input_tokens, result.output_tokens)
+    input_price, output_price = model_prices(model_id, result.service_tier)
+    cost = cost_usd(result.input_tokens, result.output_tokens, model_id, result.service_tier)
     try:
         put_ask_usage(
             project_id,
@@ -462,6 +512,9 @@ def answer_question(
         # The answer is still returned; the meter misses this call.
         print(f"file-check ask: usage ledger write failed ({type(e).__name__})")
     if not result.text:
+        if result.stop_reason == "max_tokens":
+            # A reasoning model can spend the whole output budget before answering.
+            raise AskModelError("the model reached its length limit before it answered")
         raise AskModelError("the model returned no answer")
 
     answer = result.text
@@ -474,8 +527,8 @@ def answer_question(
         "output_tokens": result.output_tokens,
         "cost_usd": cost,
         "pricing": {
-            "input_per_million_usd": INPUT_PRICE_PER_MILLION_USD,
-            "output_per_million_usd": OUTPUT_PRICE_PER_MILLION_USD,
+            "input_per_million_usd": input_price,
+            "output_per_million_usd": output_price,
             "region": config.aws_region,
         },
         "grounded_on": {

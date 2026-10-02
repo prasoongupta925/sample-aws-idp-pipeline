@@ -6,7 +6,7 @@ Python lancedb Lambda를 Rust로 완전 교체하기 위한 구현 추적.
 
 | Action | Rust 구현 | 핸들러 등록 | 테스트 | 호출처 |
 |--------|-----------|-------------|--------|--------|
-| `list_tables` | ✅ | ✅ | ✅ | - |
+| `list_tables` | ✅ | ✅ | ✅ | retention-sweeper |
 | `count` | ✅ | ✅ | ✅ | - |
 | `get_segments` | ✅ | ✅ | ✅ | - |
 | `get_by_segment_ids` | ✅ | ✅ | ✅ | graph-mcp |
@@ -15,6 +15,7 @@ Python lancedb Lambda를 Rust로 완전 교체하기 위한 구현 추적.
 | `drop_table` | ✅ | ✅ | ✅ | backend |
 | `add_record` | ✅ | ✅ | ✅ | lancedb-writer, qa-regenerator |
 | `delete_record` | ✅ | ✅ | ✅ | reanalysis-prep, qa-regenerator |
+| `optimize` | ✅ | ✅ | ✅ (`tests/optimize_local.rs`, AWS 없이 실행) | retention-sweeper, backend (applicant erase) |
 
 ## 호출처 전환 현황
 

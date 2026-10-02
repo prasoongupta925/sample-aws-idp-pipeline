@@ -16,7 +16,7 @@ import * as fs from 'fs';
 import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import {
-  BLOCKED_BEDROCK_MODEL_RESOURCES,
+  bedrockModelInvokeResources,
   getRegionConfig,
   PADDLEOCR_ENDPOINT_NAME_VALUE,
   SSM_KEYS,
@@ -325,13 +325,31 @@ export class WorkflowStack extends Stack {
     // Lambda Functions
     // ========================================
 
-    // Cross-region model settings (ap-south-1 has no Amazon embedding model)
+    // Region settings (region-config.ts): the embedding model's Region.
     const regionConfig = getRegionConfig(this);
 
     // Bedrock service tier of the background pipeline calls (segment analysis,
     // page descriptions, summary, facts): Flex is half the standard price for
     // work nobody waits on. '' = the standard tier.
     const pipelineServiceTier = 'flex';
+
+    // The models the workflow Lambdas call (models.json; the embeddings run in
+    // the LanceDB service). Their roles may invoke these, in this Region, and
+    // nothing else; an empty id (no video model in the Mumbai build) gets no
+    // grant.
+    const pipelineModels = bedrockModelInvokeResources(
+      [
+        models.analysis,
+        models.videoAnalysis,
+        models.scriptExtractor,
+        models.describer,
+        models.docSummarizer,
+        models.facts,
+        models.extractor,
+        models.entityNormalizer,
+      ],
+      this.region,
+    );
 
     const commonLambdaProps = {
       runtime: lambda.Runtime.PYTHON_3_14,
@@ -425,13 +443,14 @@ export class WorkflowStack extends Stack {
       },
     );
     // S3 (doc bucket) + DDB grants come from the allFunctions loop below.
+    // Bedrock: its reference-doc model (DATASET_REFERENCE_MODEL_ID), in-Region.
     datasetProcess.addToRolePolicy(
       new iam.PolicyStatement({
         actions: [
           'bedrock:InvokeModel',
           'bedrock:InvokeModelWithResponseStream',
         ],
-        resources: ['*'],
+        resources: bedrockModelInvokeResources(models.analysis, this.region),
       }),
     );
     lancedbService.grantInvoke(datasetProcess);
@@ -486,8 +505,27 @@ export class WorkflowStack extends Stack {
       layers: [sharedLayer],
     });
 
-    // BDA permissions
+    // BDA permissions. Bedrock Data Automation runs only through a geographic
+    // cross-Region profile (bda-start: us./eu./apac.data-automation-v1), so
+    // where every call must stay in the Region (region config bdaEnabled,
+    // false in ap-south-1) its roles get no BDA grant but an explicit deny,
+    // and bda-start skips the step (BDA_ENABLED).
+    bdaStart.addEnvironment('BDA_ENABLED', String(regionConfig.bdaEnabled));
     for (const fn of [bdaStart, bdaCheck]) {
+      if (!regionConfig.bdaEnabled) {
+        fn.addToRolePolicy(
+          new iam.PolicyStatement({
+            sid: 'DenyBedrockDataAutomation',
+            effect: iam.Effect.DENY,
+            actions: [
+              'bedrock:InvokeDataAutomation*',
+              'bedrock:CreateDataAutomationProject',
+            ],
+            resources: ['*'],
+          }),
+        );
+        continue;
+      }
       fn.addToRolePolicy(
         new iam.PolicyStatement({
           actions: [
@@ -1587,19 +1625,21 @@ export class WorkflowStack extends Stack {
     webcrawlerWait.next(webcrawlerCheckTask);
     webcrawlerCheckTask.next(webcrawlerStatusChoice);
 
+    const skipWebCrawler = new sfn.Pass(this, 'SkipWebCrawler', {
+      comment: 'Not a web document, skip web crawling',
+    });
+    // A Choice that reads a missing field fails the whole execution
+    // (States.Runtime, which no Catch handles): check presence first.
     const webcrawlerBranch = new sfn.Choice(this, 'ShouldRunWebCrawler', {
       comment:
-        'Check processing_type: if "web", invoke web crawler then poll for completion; otherwise skip',
+        'Check processing_type: if "web", invoke web crawler then poll for completion; otherwise (or when missing) skip',
     })
+      .when(sfn.Condition.isNotPresent('$.processing_type'), skipWebCrawler)
       .when(
         sfn.Condition.stringEquals('$.processing_type', 'web'),
         webcrawlerInvokeTask.next(webcrawlerWait),
       )
-      .otherwise(
-        new sfn.Pass(this, 'SkipWebCrawler', {
-          comment: 'Not a web document, skip web crawling',
-        }),
-      );
+      .otherwise(skipWebCrawler);
 
     // ========================================
     // Analysis Throttle Loop
@@ -1707,11 +1747,18 @@ export class WorkflowStack extends Stack {
     // ReanalysisPrep → Map(Analyze) → Summarize
     reanalysisPrepTask.next(parallelSegmentProcessing);
 
-    // Choice at workflow start: check if this is a re-analysis request
+    // Choice at workflow start: check if this is a re-analysis request. The
+    // entry Choices check a field's presence before its value: reading a
+    // missing field fails the execution with States.Runtime, which no Catch
+    // handles (Re-analyze started without processing_type failed that way).
     const isReanalysisChoice = new sfn.Choice(this, 'IsReanalysis', {
       comment:
-        'Entry point: if is_reanalysis=true, skip all preprocessing and go directly to ReanalysisPrep; otherwise run full preprocessing pipeline',
+        'Entry point: if is_reanalysis=true, skip all preprocessing and go directly to ReanalysisPrep; otherwise (or when missing) run full preprocessing pipeline',
     })
+      .when(
+        sfn.Condition.isNotPresent('$.is_reanalysis'),
+        parallelPreprocessing,
+      )
       .when(
         sfn.Condition.booleanEquals('$.is_reanalysis', true),
         reanalysisPrepTask,
@@ -1729,11 +1776,14 @@ export class WorkflowStack extends Stack {
     });
     datasetProcessTask.addCatch(errorHandlerTask, catchConfig);
 
-    // Entry Choice: route structured datasets before the document pipeline.
+    // Entry Choice: route structured datasets before the document pipeline. An
+    // input without processing_type is a document (the first rule matches, so
+    // the comparison never reads the missing field).
     const isDatasetChoice = new sfn.Choice(this, 'IsDataset', {
       comment:
-        "Entry point: if processing_type='dataset' (xlsx/csv), run the structured dataset branch; otherwise fall through to the document pipeline.",
+        "Entry point: if processing_type='dataset' (xlsx/csv), run the structured dataset branch; otherwise (or when missing) fall through to the document pipeline.",
     })
+      .when(sfn.Condition.isNotPresent('$.processing_type'), isReanalysisChoice)
       .when(
         sfn.Condition.stringEquals('$.processing_type', 'dataset'),
         datasetProcessTask,
@@ -1773,13 +1823,19 @@ export class WorkflowStack extends Stack {
             __dirname,
             '../functions/step-functions/workflow-failure-catcher',
           ),
+          { exclude: ['test_*.py', '__pycache__', '.pytest_cache'] },
         ),
         layers: [sharedLayer],
       },
     );
 
-    // Grant describe execution permission
-    this.stateMachine.grant(workflowFailureCatcher, 'states:DescribeExecution');
+    // DescribeExecution (the execution input, when the event leaves it out)
+    // is authorized on the executions (execution:<state machine>:*), not on
+    // the state machine: grant() on the state machine ARN was AccessDenied.
+    this.stateMachine.grantExecution(
+      workflowFailureCatcher,
+      'states:DescribeExecution',
+    );
     backendTable.grantReadWriteData(workflowFailureCatcher);
     (this.documentBucket as s3.Bucket).grantRead(workflowFailureCatcher);
 
@@ -1810,6 +1866,7 @@ export class WorkflowStack extends Stack {
       memorySize: 128,
       code: lambda.Code.fromAsset(
         path.join(__dirname, '../functions/step-function-trigger'),
+        { exclude: ['test_*.py', '__pycache__', '.pytest_cache'] },
       ),
       layers: [sharedLayer],
       environment: {
@@ -1916,27 +1973,17 @@ export class WorkflowStack extends Stack {
         }),
       );
 
-      // Bedrock permissions
+      // Bedrock permissions: the pipeline models, in this Region only. The
+      // App's BedrockModelGuard adds the deny statements (AWS-sold models
+      // only, no model call outside the Region; common-constructs
+      // core/bedrock-model-guard.ts).
       fn.addToRolePolicy(
         new iam.PolicyStatement({
           actions: [
             'bedrock:InvokeModel',
             'bedrock:InvokeModelWithResponseStream',
           ],
-          resources: ['*'],
-        }),
-      );
-
-      // AWS-sold models only: deny Marketplace / third-party-billed providers
-      fn.addToRolePolicy(
-        new iam.PolicyStatement({
-          sid: 'DenyNonAwsSoldModels',
-          effect: iam.Effect.DENY,
-          actions: [
-            'bedrock:InvokeModel',
-            'bedrock:InvokeModelWithResponseStream',
-          ],
-          resources: BLOCKED_BEDROCK_MODEL_RESOURCES,
+          resources: pipelineModels,
         }),
       );
     }

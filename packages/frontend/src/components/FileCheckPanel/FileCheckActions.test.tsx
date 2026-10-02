@@ -154,15 +154,15 @@ describe('VerdictCard actions and usage', () => {
   it('shows tokens and $ per document and the applicant total', () => {
     const html = render(<VerdictCard result={USAGE_RESULT} />);
     expect(textOf(html, 'document-usage', 'span')).toBe(
-      ' · facts extraction: 12,345 in / 678 out tokens · $0.0063',
+      ' · facts extraction: 12,345 in / 678 out tokens · $0.0014',
     );
     expect(tagOf(html, 'document-usage')).toContain(
-      'title="Facts extraction model: global.amazon.nova-2-lite-v1:0"',
+      'title="Facts extraction model: openai.gpt-oss-120b-1:0"',
     );
     expect(html).toContain('usage not recorded');
     // Only the facts extraction step is recorded, and the line says so.
     expect(textOf(html, 'usage-total')).toBe(
-      'Facts extraction (the file-check step only) cost $0.0063 for 1 document (12,345 in / 678 out tokens); the other analysis steps are not included. Usage was not recorded for 1 more document.',
+      'Facts extraction (the file-check step only) cost $0.0014 for 1 document (12,345 in / 678 out tokens); the other analysis steps are not included. Usage was not recorded for 1 more document.',
     );
     // Older backends: no usage, no usage line.
     const old = render(<VerdictCard result={NOT_READY_RESULT} />);
@@ -217,6 +217,11 @@ describe('EraseApplicantDialog', () => {
     expect(html).toContain('aria-modal="true"');
     expect(html).toContain('Erase Amit Suresh Patil&#x27;s data?');
     expect(html).toContain('permanently deletes the documents listed below');
+    // LanceDB only hides deleted rows: the nightly sweep (or the clean-up the
+    // erase starts) deletes their files.
+    expect(html).toContain(
+      'search-index entries (removed now and physically deleted within a day)',
+    );
     expect(html).toContain('removed from the webhook delivery log');
     expect(html).toContain('This cannot be undone.');
     expect(html).toContain('PAN XXXXXX234K');

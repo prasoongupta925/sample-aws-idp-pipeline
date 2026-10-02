@@ -64,6 +64,13 @@ Also note:
 - Nothing is kept longer than `retentionDays` (default 7): documents and
   their analysis, chat sessions, artifacts, queues and every CloudWatch log
   group (the RetentionStack sweeper and log-retention enforcer apply it).
+- Search index (LanceDB on S3 Express One Zone): a delete only hides rows, so
+  after deleting the sweeper runs the LanceDB service's `optimize` on every
+  table (compaction, FTS index rebuild, pruning of the old table versions),
+  which deletes the files that still hold them; an applicant erase starts it
+  for its project at once. Rows deleted during the day are physically gone
+  after the next nightly sweep. Incomplete multipart uploads in the bucket
+  are aborted after 1 day; no rule expires table files.
 - The backend DynamoDB table has TTL on the attribute `expires_at` (epoch
   seconds). The file-check Ask usage ledger (`PROJ#<project>` /
   `FCASK#<timestamp>#<id>`: one item per question with the model, tokens and

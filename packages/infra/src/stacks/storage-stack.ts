@@ -161,8 +161,14 @@ export class StorageStack extends Stack {
     });
 
     // Express One Zone Storage Bucket
-    // No age-based lifecycle: LanceDB data is deleted through LanceDB
-    // (delete_by_workflow / drop_table) so table manifests stay consistent.
+    // No object expiry: LanceDB data is deleted through LanceDB
+    // (delete_by_workflow / drop_table) so table manifests stay consistent;
+    // expiring live table files would corrupt the tables. A delete only hides
+    // rows: the service's optimize action (run nightly by the retention sweeper
+    // and after an applicant erase) deletes the files still holding them. The
+    // tables ({table}.lance/data, _versions, _indices, ...) have no temporary
+    // prefix; the only lifecycle rule aborts incomplete multipart uploads
+    // after 1 day (S3DirectoryBucket).
     const expressStorage = new S3DirectoryBucket(this, 'ExpressStorage', {
       bucketPrefix: 'lancedb-ex',
       availabilityZoneId: regionConfig.lancedbExpressAzId,

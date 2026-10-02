@@ -72,8 +72,13 @@ def update_workflow_status(
     workflow_id: str,
     status: str,
     execution_arn: str | None = None,
+    entity_type: str = "DOC",
 ) -> None:
-    """Update workflow status and optionally execution ARN."""
+    """Update workflow status and optionally execution ARN.
+
+    entity_type: the prefix of the workflow item's PK ("DOC", or "WEB" for a web
+    document); get_workflow_item finds either.
+    """
     from datetime import UTC, datetime
 
     table = get_table()
@@ -88,7 +93,7 @@ def update_workflow_status(
         expression_values[":execution_arn"] = execution_arn
 
     table.update_item(
-        Key=make_workflow_key(document_id, workflow_id),
+        Key=make_workflow_key(document_id, workflow_id, entity_type),
         UpdateExpression=update_expression,
         ExpressionAttributeNames={"#data": "data", "#status": "status"},
         ExpressionAttributeValues=expression_values,

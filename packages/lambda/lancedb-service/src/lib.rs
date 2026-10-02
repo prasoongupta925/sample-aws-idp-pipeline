@@ -55,4 +55,7 @@ pub enum LanceDbAction {
 
     #[serde(rename = "drop_table")]
     DropTable(drop_table::DropTableParams),
+
+    #[serde(rename = "optimize")]
+    Optimize(optimize::OptimizeParams),
 }

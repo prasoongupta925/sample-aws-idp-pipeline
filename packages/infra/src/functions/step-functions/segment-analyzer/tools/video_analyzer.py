@@ -1,4 +1,3 @@
-import json
 import os
 from typing import Callable
 
@@ -66,6 +65,9 @@ def create_video_analyzer_tool(
         video_uri = video_uri_getter()
         if not video_uri:
             return 'No video available for analysis.'
+        if not model_id:
+            # models.json videoAnalysis is empty where no in-Region model reads video.
+            return 'Video reading is not available in this deployment (no in-Region video model).'
 
         try:
             prompt_template = _load_prompt_from_s3('video_analysis_prompt')

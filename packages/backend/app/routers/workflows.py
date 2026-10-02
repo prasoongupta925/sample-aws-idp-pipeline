@@ -260,6 +260,36 @@ def get_segment(document_id: str, workflow_id: str, segment_index: int) -> Segme
     return segment
 
 
+# File types of the structured-dataset branch (type-detection's list).
+_DATASET_FILE_TYPES = frozenset(
+    {
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.ms-excel",
+        "text/csv",
+        "text/tab-separated-values",
+    }
+)
+_TEXT_FILE_TYPES = frozenset({"text/plain", "text/markdown", "application/dxf", "image/vnd.dxf"})
+
+
+def _processing_type(file_type: str) -> str:
+    """processing_type of a file type, the same mapping type-detection uses at upload.
+
+    The state machine's first Choice (IsDataset) reads $.processing_type: an
+    execution input without it fails with States.Runtime before any state runs.
+    """
+    if file_type in _DATASET_FILE_TYPES:
+        return "dataset"
+    if file_type == "application/x-webreq":
+        return "web"
+    if file_type in _TEXT_FILE_TYPES:
+        return "text"
+    for kind in ("image", "video", "audio"):
+        if file_type.startswith(f"{kind}/"):
+            return kind
+    return "document"
+
+
 class ReanalysisRequest(BaseModel):
     user_instructions: str = ""
     language: str = "en"
@@ -293,14 +323,15 @@ def reanalyze_workflow(document_id: str, workflow_id: str, request: ReanalysisRe
     if not step_function_arn:
         raise HTTPException(status_code=500, detail="Step Function ARN not configured")
 
-    # Prepare Step Functions input for re-analysis
+    # Prepare Step Functions input for re-analysis. No file name: Step Functions
+    # keeps execution history for 90 days (the S3 key is document_id-based).
     sfn_input = {
         "workflow_id": workflow_id,
         "document_id": document_id,
         "project_id": wf.data.project_id,
         "file_uri": wf.data.file_uri,
-        "file_name": wf.data.file_name,
         "file_type": wf.data.file_type,
+        "processing_type": _processing_type(wf.data.file_type),
         "is_reanalysis": True,
         "user_instructions": request.user_instructions,
         "language": request.language,
@@ -321,8 +352,10 @@ def reanalyze_workflow(document_id: str, workflow_id: str, request: ReanalysisRe
 
         execution_arn = response["executionArn"]
 
-        # Update workflow and document status
-        update_workflow_status(document_id, workflow_id, "reanalyzing", execution_arn)
+        # Update workflow and document status (the workflow item of a web
+        # document is WEB#{document_id}, not DOC#).
+        entity_type = wf.PK.split("#", 1)[0] if "#" in wf.PK else "DOC"
+        update_workflow_status(document_id, workflow_id, "reanalyzing", execution_arn, entity_type=entity_type)
         update_document_status(wf.data.project_id, document_id, "reanalyzing")
 
         return ReanalysisResponse(

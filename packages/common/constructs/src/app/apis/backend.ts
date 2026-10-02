@@ -12,7 +12,6 @@ import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import { StringParameter } from 'aws-cdk-lib/aws-ssm';
 import { SSM_KEYS } from '../../constants/ssm-keys.js';
 import {
-  BLOCKED_BEDROCK_MODEL_RESOURCES,
   FILE_CHECK_ASK_MODEL_ID,
   bedrockModelInvokeResources,
 } from '../../constants/bedrock.js';
@@ -32,12 +31,7 @@ import {
 } from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import { HttpIamAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
-import {
-  Effect,
-  Grant,
-  IGrantable,
-  PolicyStatement,
-} from 'aws-cdk-lib/aws-iam';
+import { Grant, IGrantable, PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { Distribution } from 'aws-cdk-lib/aws-cloudfront';
 
 function getBucketFromSsm(
@@ -62,10 +56,17 @@ function getTableFromSsm(
 
 export interface BackendProps {
   /**
-   * Model of POST /projects/{id}/file-check/ask (AWS-sold models only).
-   * @default FILE_CHECK_ASK_MODEL_ID (Amazon Nova 2 Lite, global profile)
+   * Model of POST /projects/{id}/file-check/ask (AWS-sold, in-Region models
+   * only): the only model the backend may invoke.
+   * @default FILE_CHECK_ASK_MODEL_ID
    */
   fileCheckAskModelId?: string;
+  /**
+   * Accept video uploads. False when the build has no model that reads video
+   * (ap-south-1): the upload check then refuses video files with a message.
+   * @default true
+   */
+  videoUploadsEnabled?: boolean;
 }
 
 export class Backend extends Construct {
@@ -78,6 +79,7 @@ export class Backend extends Construct {
 
     const fileCheckAskModelId =
       props.fileCheckAskModelId ?? FILE_CHECK_ASK_MODEL_ID;
+    const videoUploadsEnabled = props.videoUploadsEnabled ?? true;
 
     // Logs expire after retentionDays (default 7).
     const logGroup = new LogGroup(this, 'BackendLogGroup', {
@@ -191,6 +193,8 @@ export class Backend extends Construct {
         RETENTION_DAYS: String(getRetentionDays(this)),
         WEBHOOK_FUNCTION_NAME: webhookFunctionArn,
         WEBHOOK_SECRET_KEY_ARN: webhookSecretKeyArn,
+        // Upload check: refuse video files when the build has no video model.
+        VIDEO_UPLOADS_ENABLED: String(videoUploadsEnabled),
       },
     });
 
@@ -222,31 +226,6 @@ export class Backend extends Construct {
       new PolicyStatement({
         actions: ['s3express:*'],
         resources: ['*'],
-      }),
-    );
-
-    // Grant Bedrock model invoke permissions
-    role.addToPrincipalPolicy(
-      new PolicyStatement({
-        actions: [
-          'bedrock:InvokeModel',
-          'bedrock:InvokeModelWithResponseStream',
-          'bedrock:Rerank',
-        ],
-        resources: ['*'],
-      }),
-    );
-
-    // Only AWS-sold models: explicitly deny non-AWS-sold model providers.
-    role.addToPrincipalPolicy(
-      new PolicyStatement({
-        sid: 'DenyNonAwsSoldModels',
-        effect: Effect.DENY,
-        actions: [
-          'bedrock:InvokeModel',
-          'bedrock:InvokeModelWithResponseStream',
-        ],
-        resources: BLOCKED_BEDROCK_MODEL_RESOURCES,
       }),
     );
 
@@ -293,9 +272,10 @@ export class Backend extends Construct {
       }),
     );
 
-    // File-check Ask: Converse on the Ask model's inference profile and the
-    // foundation models it routes to. (Also covered by the broad grant above;
-    // kept explicit so the Ask keeps working if that grant is narrowed.)
+    // Bedrock: the backend calls one model, the file-check Ask (Converse), in
+    // this Region. The App's BedrockModelGuard adds the deny statements
+    // (core/bedrock-model-guard.ts: AWS-sold models only, no model call
+    // outside the Region). Search re-ranking runs in the search MCP Lambda.
     role.addToPrincipalPolicy(
       new PolicyStatement({
         sid: 'InvokeFileCheckAskModel',
@@ -303,7 +283,6 @@ export class Backend extends Construct {
         resources: bedrockModelInvokeResources(
           fileCheckAskModelId,
           Stack.of(this).region,
-          Stack.of(this).account,
         ),
       }),
     );

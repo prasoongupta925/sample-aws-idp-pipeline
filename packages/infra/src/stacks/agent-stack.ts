@@ -1,4 +1,4 @@
-import { Stack, StackProps } from 'aws-cdk-lib';
+import { Stack, StackProps, Token } from 'aws-cdk-lib';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { Table } from 'aws-cdk-lib/aws-dynamodb';
@@ -14,8 +14,14 @@ import {
   Gateway,
   Runtime,
 } from '@aws-cdk/aws-bedrock-agentcore-alpha';
-import { IdpAgent, SSM_KEYS, getRegionConfig } from ':idp-v2/common-constructs';
+import {
+  IdpAgent,
+  SSM_KEYS,
+  VOICE_CHAT_MODEL_ID,
+  getRegionConfig,
+} from ':idp-v2/common-constructs';
 import chatModels from '../chat-models.json' with { type: 'json' };
+import models from '../models.json' with { type: 'json' };
 
 export interface AgentStackProps extends StackProps {
   gateway: Gateway;
@@ -281,6 +287,10 @@ export class AgentStack extends Stack {
       backendTable,
       gateway,
       bedrockModelId: 'zai.glm-5',
+      // The chat models a user may pick (chat-models.json; the agent checks a
+      // requested model_id against this catalog): the role may invoke these.
+      modelIds: chatModels.map((model) => model.value),
+      chatModelCatalog: true,
       agentStorageBucket,
       websocketMessageQueue,
       codeInterpreterIdentifier: idpCodeInterpreter.codeInterpreterId,
@@ -304,28 +314,50 @@ export class AgentStack extends Stack {
       description: 'ARN of the IDP Agent Runtime',
     });
 
-    const bidiAgent = new IdpAgent(this, 'BidiAgent', {
-      agentPath: path.resolve(
-        process.cwd(),
-        '../../packages/agents/bidi-agent',
-      ),
-      agentName: 'bidi_agent',
-      sessionStorageBucket,
-      backendTable,
-      gateway,
-      agentStorageBucket,
-      // Nova Sonic is not offered in every region (e.g. ap-south-1); region is
-      // config (context voiceModelRegion)
-      extraEnvironment: {
-        VOICE_MODEL_REGION: getRegionConfig(this).voiceModelRegion,
-      },
-    });
+    // Built-in speech-to-speech voice chat (Nova 2 Sonic), only where region
+    // config voiceChatEnabled says so. ap-south-1 does not offer Sonic, so the
+    // Mumbai build has no BidiAgent and no runtime ARN parameter: the web app
+    // then hides the mic and the Voice Chat item, and the separate voice bot
+    // (voice/indic-voicebot: Transcribe + an in-Region LLM + Polly) is the
+    // voice channel.
+    const regionConfig = getRegionConfig(this);
+    if (regionConfig.voiceChatEnabled) {
+      // Every model call stays in the stack's Region: the App's model guard
+      // denies Sonic in another Region (DenyModelCallsOutsideRegion), so a
+      // voice chat that could never connect fails here instead.
+      if (
+        !Token.isUnresolved(this.region) &&
+        regionConfig.voiceModelRegion !== this.region
+      ) {
+        throw new Error(
+          `Voice chat needs ${VOICE_CHAT_MODEL_ID} in ${this.region}, but ` +
+            `voiceModelRegion is ${regionConfig.voiceModelRegion}: model ` +
+            `calls outside ${this.region} are denied. Deploy with ` +
+            '-c enableVoiceChat=false (the voice bot is the voice channel).',
+        );
+      }
+      const bidiAgent = new IdpAgent(this, 'BidiAgent', {
+        agentPath: path.resolve(
+          process.cwd(),
+          '../../packages/agents/bidi-agent',
+        ),
+        agentName: 'bidi_agent',
+        sessionStorageBucket,
+        backendTable,
+        gateway,
+        agentStorageBucket,
+        modelIds: [VOICE_CHAT_MODEL_ID],
+        extraEnvironment: {
+          VOICE_MODEL_REGION: regionConfig.voiceModelRegion,
+        },
+      });
 
-    new StringParameter(this, 'BidiAgentRuntimeArnParam', {
-      parameterName: SSM_KEYS.BIDI_AGENT_RUNTIME_ARN,
-      stringValue: bidiAgent.runtime.agentRuntimeArn,
-      description: 'ARN of the Bidi Agent Runtime',
-    });
+      new StringParameter(this, 'BidiAgentRuntimeArnParam', {
+        parameterName: SSM_KEYS.BIDI_AGENT_RUNTIME_ARN,
+        stringValue: bidiAgent.runtime.agentRuntimeArn,
+        description: 'ARN of the Bidi Agent Runtime',
+      });
+    }
 
     // WebCrawler Agent - crawls web pages using AgentCore Browser
     const webcrawlerAgent = new IdpAgent(this, 'WebCrawlerAgent', {
@@ -339,6 +371,10 @@ export class AgentStack extends Stack {
       gateway,
       documentBucket,
       agentStorageBucket,
+      // BEDROCK_MODEL_ID: without it the agent falls back to its config default.
+      bedrockModelId: models.webcrawler,
+      // The only runtime that drives the AgentCore Browser.
+      browserAccess: true,
     });
 
     new StringParameter(this, 'WebCrawlerAgentRuntimeArnParam', {

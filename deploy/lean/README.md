@@ -8,7 +8,8 @@ by default, no WAF. Everything left is pay per use, so the stack costs about $3 
 ## Fresh deploy (the normal path)
 
 1. Push the branch. The build clones it from GitHub (`--repo`, default the fork), not from this working copy.
-2. Run `deploy/lean/deploy.sh`. It creates the CodeBuild project the first time, bootstraps CDK when the region
+2. Run `deploy/lean/deploy.sh`. It creates the CodeBuild project the first time (later runs apply changes of
+   `deploy-codebuild.yml`, such as the Bedrock model deny of its role), bootstraps CDK when the region
    has no bootstrap yet and deploys the 15 stacks. The admin user (`ADMIN_USER_EMAIL`) gets its temporary
    password by email.
 3. Seed the demo data (logins, sample loan files) with the demo seed script. It is kept outside this repository
@@ -36,6 +37,8 @@ the idp-v2 tables, buckets and parameters. It also will not start while another 
 | Destroy everything (keeps the CDK bootstrap) | `deploy/lean/destroy.sh` | - |
 | Destroy including CodeBuild project + bootstrap | `deploy/lean/destroy.sh --all` | - |
 | CloudFront WAF back on | `deploy/lean/deploy.sh --waf`, on every later deploy too | us-east-1 bootstrap (done by the build) |
+| Reset documents stuck on "reanalyzing" / "in_progress" whose run has ended | `deploy/lean/unstick.sh` (dry run; `--project "<name>"`, `--apply` to write) | jq |
+| Re-index every document after an embedding-model change (drops the LanceDB tables, re-analyzes all) | `uv run deploy/lean/reindex.py` (dry run; `--apply` to act) | uv, the new build deployed |
 
 A deploy without `--waf` detaches the WAF from CloudFront, but its us-east-1 stack stays (and bills) until
 `destroy.sh` removes it.

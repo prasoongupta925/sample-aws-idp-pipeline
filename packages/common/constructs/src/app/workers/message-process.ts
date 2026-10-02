@@ -7,6 +7,10 @@ import { IBucket, EventType } from 'aws-cdk-lib/aws-s3';
 import { IQueue } from 'aws-cdk-lib/aws-sqs';
 import { Construct } from 'constructs';
 import * as path from 'path';
+import {
+  SESSION_NAME_MODEL_ID,
+  bedrockModelInvokeResources,
+} from '../../constants/bedrock.js';
 
 export interface MessageProcessProps {
   bucket: IBucket;
@@ -36,14 +40,17 @@ export class MessageProcess extends Construct {
     props.bucket.grantReadWrite(this.function);
     props.websocketMessageQueue.grantSendMessages(this.function);
 
-    const stack = Stack.of(this);
+    // Session names (generate-session-name.ts): its one model, in this Region.
+    // The App's BedrockModelGuard adds the deny statements
+    // (core/bedrock-model-guard.ts: AWS-sold models only, no model call
+    // outside the Region).
     this.function.addToRolePolicy(
       new PolicyStatement({
         actions: ['bedrock:InvokeModel'],
-        resources: [
-          'arn:aws:bedrock:*::foundation-model/*',
-          `arn:aws:bedrock:*:${stack.account}:inference-profile/*`,
-        ],
+        resources: bedrockModelInvokeResources(
+          SESSION_NAME_MODEL_ID,
+          Stack.of(this).region,
+        ),
       }),
     );
 

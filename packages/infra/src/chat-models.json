@@ -10,13 +10,13 @@
     "supportsReasoning": false
   },
   {
-    "value": "global.amazon.nova-2-lite-v1:0",
-    "label": "Nova 2 Lite",
-    "description": "Amazon first-party model (global inference)",
-    "contextWindow": "1M tokens",
-    "inputPrice": "$0.35 / 1M",
-    "outputPrice": "$2.95 / 1M",
-    "metrics": { "intelligence": 6, "speed": 9, "context": 10, "cost": 9 },
+    "value": "openai.gpt-oss-120b-1:0",
+    "label": "gpt-oss-120b",
+    "description": "OpenAI gpt-oss-120b open-weight model (AWS-sold, in-region)",
+    "contextWindow": "128K tokens",
+    "inputPrice": "$0.18 / 1M",
+    "outputPrice": "$0.71 / 1M",
+    "metrics": { "intelligence": 7, "speed": 8, "context": 6, "cost": 10 },
     "supportsReasoning": false
   },
   {

@@ -16,12 +16,14 @@ from unittest.mock import patch
 import pytest
 from botocore.exceptions import ClientError, ReadTimeoutError
 
-from app.config import get_config
+from app.config import Config, get_config
 from app.ddb.ask_usage import put_ask_usage, sum_ask_usage
 from app.file_check_ask import (
     CHARS_PER_TOKEN,
     CONTEXT_ENVELOPE_CHARS,
+    PRICES_PER_MILLION_USD,
     SYSTEM_PROMPT,
+    AskNotConfiguredError,
     SourceDocument,
     build_context,
     build_messages,
@@ -29,6 +31,7 @@ from app.file_check_ask import (
     cost_usd,
     facts_view,
     fit_history,
+    model_prices,
     page_text,
 )
 from app.main import app
@@ -48,7 +51,10 @@ from tests.test_file_check import (
 )
 
 BUCKET = "doc-bucket"
-MODEL_ID = "global.amazon.nova-2-lite-v1:0"
+# The model the env fixture configures (the price math below); the shipped
+# default is KIMI (test_default_model_is_kimi_k2_5).
+MODEL_ID = "openai.gpt-oss-120b-1:0"
+KIMI = "moonshotai.kimi-k2.5"
 ASK = f"/projects/{PROJECT_ID}/file-check/ask"
 USAGE = f"/projects/{PROJECT_ID}/file-check/usage"
 
@@ -138,14 +144,19 @@ class FakeBedrock:
         self.usage = usage
         self.error = error
         self.stop_reason = "end_turn"
+        # Content blocks to return instead of one text block (e.g. gpt-oss reasoning).
+        self.content = None
+        # The service tier the response names (Converse "serviceTier"); None: not named.
+        self.service_tier = None
         self.calls = []
 
     def converse(self, **kwargs):
         self.calls.append(kwargs)
         if self.error:
             raise self.error
-        return {
-            "output": {"message": {"role": "assistant", "content": [{"text": self.text}]}},
+        content = self.content if self.content is not None else [{"text": self.text}]
+        response = {
+            "output": {"message": {"role": "assistant", "content": content}},
             "stopReason": self.stop_reason,
             "usage": {
                 "inputTokens": self.usage[0],
@@ -153,6 +164,9 @@ class FakeBedrock:
                 "totalTokens": sum(self.usage),
             },
         }
+        if self.service_tier:
+            response["serviceTier"] = {"type": self.service_tier}
+        return response
 
     @property
     def prompt(self):
@@ -260,11 +274,11 @@ class TestAsk:
         assert data["answer"] == "The car loan EMI is ₹8,200 [06_bank_statement]."
         assert data["model_id"] == MODEL_ID
         assert (data["input_tokens"], data["output_tokens"]) == (10000, 500)
-        # 10,000 x $0.35/M + 500 x $2.95/M = $0.0035 + $0.001475
-        assert data["cost_usd"] == pytest.approx(0.004975, abs=1e-12)
+        # gpt-oss-120b, Mumbai standard tier: 10,000 x $0.18/M + 500 x $0.71/M = $0.0018 + $0.000355
+        assert data["cost_usd"] == pytest.approx(0.002155, abs=1e-12)
         assert data["pricing"] == {
-            "input_per_million_usd": 0.35,
-            "output_per_million_usd": 2.95,
+            "input_per_million_usd": 0.18,
+            "output_per_million_usd": 0.71,
             "region": "ap-south-1",
         }
         assert data["grounded_on"]["applicants"] == ["Rahul Vijay Deshmukh"]
@@ -286,7 +300,9 @@ class TestAsk:
         # One Converse call: temperature 0, the grounding-only system prompt.
         (converse,) = env.bedrock.calls
         assert converse["modelId"] == MODEL_ID
-        assert converse["inferenceConfig"] == {"temperature": 0, "maxTokens": 1024}
+        # gpt-oss reasons before it answers: the output budget covers both.
+        assert converse["inferenceConfig"] == {"temperature": 0, "maxTokens": 2048}
+        assert "serviceTier" not in converse  # interactive: the standard tier
         assert converse["system"] == [{"text": SYSTEM_PROMPT}]
         assert "ONLY" in SYSTEM_PROMPT and "outside knowledge" in SYSTEM_PROMPT
         assert "Never guess" in SYSTEM_PROMPT and "not in the file" in SYSTEM_PROMPT.lower()
@@ -323,7 +339,7 @@ class TestAsk:
         assert re.fullmatch(r"FCASK#\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}\+00:00#[0-9a-f]{32}", item["SK"])
         assert item["SK"].startswith(f"FCASK#{item['created_at']}#")
         assert (item["input_tokens"], item["output_tokens"]) == (10000, 500)
-        assert item["cost_usd"] == Decimal("0.004975")
+        assert item["cost_usd"] == Decimal("0.002155")
         assert item["model_id"] == MODEL_ID
         assert before + 7 * 86400 <= item["expires_at"] <= after + 7 * 86400
         # Only counts: no question, answer or file content is stored.
@@ -351,9 +367,46 @@ class TestAsk:
             "calls": 2,
             "input_tokens": 2000,
             "output_tokens": 200,
-            # 2 x (1,000 x 0.35 + 100 x 2.95) / 1M
-            "cost_usd": pytest.approx(0.00129, abs=1e-12),
+            # 2 x (1,000 x 0.18 + 100 x 0.71) / 1M
+            "cost_usd": pytest.approx(0.000502, abs=1e-12),
         }
+
+    def test_call_served_on_flex_is_priced_at_flex(self, env):
+        env.bedrock.service_tier = "flex"
+
+        response = client.post(ASK, headers=HEADERS, json={"question": "What is the FOIR?"})
+
+        assert response.status_code == 200
+        data = response.json()
+        # 10,000 x $0.09/M + 500 x $0.355/M = $0.0009 + $0.0001775
+        assert data["cost_usd"] == pytest.approx(0.0010775, abs=1e-12)
+        assert (data["pricing"]["input_per_million_usd"], data["pricing"]["output_per_million_usd"]) == (0.09, 0.355)
+        (item,) = env.table.ledger()
+        assert item["cost_usd"] == Decimal("0.0010775")
+
+    def test_other_priced_model_uses_its_own_price(self, env, monkeypatch):
+        monkeypatch.setattr(get_config(), "file_check_ask_model_id", KIMI)
+
+        response = client.post(ASK, headers=HEADERS, json={"question": "What is the FOIR?"})
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["model_id"] == KIMI
+        # 10,000 x $0.72/M + 500 x $3.60/M = $0.0072 + $0.0018
+        assert data["cost_usd"] == pytest.approx(0.009, abs=1e-12)
+        assert data["pricing"] == {"input_per_million_usd": 0.72, "output_per_million_usd": 3.6, "region": "ap-south-1"}
+        assert env.bedrock.calls[0]["modelId"] == KIMI
+
+    def test_reasoning_is_never_shown(self, env):
+        env.bedrock.content = [
+            {"reasoningContent": {"reasoningText": {"text": "Let me look at the PAN rows first."}}},
+            {"text": "<reasoning>The slip says 82,500.</reasoning>The net salary is ₹82,500 [03_salary_slip]."},
+        ]
+
+        response = client.post(ASK, headers=HEADERS, json={"question": "Net salary?"})
+
+        assert response.status_code == 200
+        assert response.json()["answer"] == "The net salary is ₹82,500 [03_salary_slip]."
 
     def test_history_goes_before_the_question(self, env):
         history = [
@@ -489,6 +542,34 @@ class TestAskErrors:
         assert response.status_code == 502
         assert response.json() == {"detail": "Answer failed: the model returned no answer"}
         assert len(env.table.ledger()) == 1  # the tokens were billed
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            [{"reasoningContent": {"reasoningText": {"text": "First the bank rows, then the slips..."}}}],
+            [{"text": "<reasoning>First the bank rows, then the slips"}],  # cut inside inline reasoning
+        ],
+    )
+    def test_length_limit_reached_while_reasoning_is_502_but_metered(self, env, content):
+        env.bedrock.content = content
+        env.bedrock.stop_reason = "max_tokens"
+
+        response = client.post(ASK, headers=HEADERS, json={"question": "List every debit"})
+
+        assert response.status_code == 502
+        assert response.json() == {"detail": "Answer failed: the model reached its length limit before it answered"}
+        assert len(env.table.ledger()) == 1
+
+    def test_unpriced_model_is_503_and_never_called(self, env, monkeypatch):
+        # The old cross-Region Nova profile (and any model without a price) is refused.
+        nova = "global.amazon.nova-2-lite-v1:0"
+        monkeypatch.setattr(get_config(), "file_check_ask_model_id", nova)
+
+        response = client.post(ASK, headers=HEADERS, json={"question": "Ready?"})
+
+        assert response.status_code == 503
+        assert response.json() == {"detail": f"Ask is not configured: no price for model {nova}"}
+        assert env.bedrock.calls == [] and env.table.ledger() == [] and env.s3.gets == []
 
     def test_file_check_failure_is_502_without_model_call(self, env):
         with use_lambda(canned_lambda({"error": "file check failed: KeyError"})):
@@ -646,10 +727,36 @@ class TestBuildContext:
 
 # ------------------------------------------------------------------ helpers
 def test_cost_math():
-    assert cost_usd(0, 0) == 0
-    assert cost_usd(1_000_000, 0) == pytest.approx(0.35)
-    assert cost_usd(0, 1_000_000) == pytest.approx(2.95)
-    assert cost_usd(12000, 1024) == pytest.approx(0.0042 + 0.0030208, abs=1e-12)
+    assert cost_usd(0, 0, MODEL_ID) == 0
+    assert cost_usd(1_000_000, 0, MODEL_ID) == pytest.approx(0.18)
+    assert cost_usd(0, 1_000_000, MODEL_ID) == pytest.approx(0.71)
+    # The largest call: the input cap and the full output budget.
+    assert cost_usd(12000, 2048, MODEL_ID) == pytest.approx(0.00216 + 0.00145408, abs=1e-12)
+    assert cost_usd(1_000_000, 1_000_000, MODEL_ID, "flex") == pytest.approx(0.445)
+    assert cost_usd(1_000_000, 1_000_000, KIMI) == pytest.approx(4.32)
+    # A tier without a price of its own is priced at the standard tier.
+    assert model_prices(MODEL_ID, "priority") == model_prices(MODEL_ID) == (0.18, 0.71)
+    with pytest.raises(AskNotConfiguredError, match="no price for model x.y"):
+        cost_usd(1, 1, "x.y")
+
+
+def test_default_model_is_kimi_k2_5():
+    # Mumbai eval (2026-10-02): Kimi K2.5 answered every grounded and not-in-file
+    # question right, and Hinglish in Hinglish. A fresh Config: the defaults.
+    default = Config().file_check_ask_model_id
+    assert default == KIMI
+    assert model_prices(default) == (0.72, 3.6)
+    assert model_prices(default, "flex") == (0.36, 1.8)
+    # Room for a model that reasons before it answers.
+    assert Config().file_check_ask_max_output_tokens == 2048
+
+
+def test_prices_are_in_region_and_flex_is_half_the_standard_price():
+    assert get_config().file_check_ask_model_id in PRICES_PER_MILLION_USD
+    for model_id, tiers in PRICES_PER_MILLION_USD.items():
+        assert not model_id.startswith(("global.", "apac.", "in.", "us.", "eu.")), model_id
+        standard = tiers["default"]
+        assert tiers["flex"] == (standard[0] / 2, standard[1] / 2), model_id
 
 
 def test_facts_view_leaves_out_fields_without_a_value():
@@ -727,7 +834,7 @@ def test_usage_window_and_pagination():
                 model_id=MODEL_ID,
                 input_tokens=tokens[0],
                 output_tokens=tokens[1],
-                cost_usd=cost_usd(*tokens),
+                cost_usd=cost_usd(*tokens, MODEL_ID),
                 retention_days=7,
                 now=now - timedelta(days=days_ago),
             )
@@ -738,7 +845,9 @@ def test_usage_window_and_pagination():
         "calls": 3,  # the call 8 days ago is outside the window
         "input_tokens": 3010,
         "output_tokens": 301,
-        "cost_usd": pytest.approx(cost_usd(1000, 100) + cost_usd(2000, 200) + cost_usd(10, 1), abs=1e-12),
+        "cost_usd": pytest.approx(
+            cost_usd(1000, 100, MODEL_ID) + cost_usd(2000, 200, MODEL_ID) + cost_usd(10, 1, MODEL_ID), abs=1e-12
+        ),
     }
     assert len(table.queries) == 3  # one page per item
     assert table.queries[0]["ProjectionExpression"] == "input_tokens, output_tokens, cost_usd"
