@@ -16,7 +16,14 @@ from fastapi.testclient import TestClient
 
 from app.config import Config
 from app.main import app
-from app.presigned import MAX_UPLOAD_BYTES, PresignError, check_key, check_upload
+from app.presigned import (
+    MAX_UPLOAD_BYTES,
+    VIDEO_EXTENSIONS,
+    VIDEO_NOT_SUPPORTED,
+    PresignError,
+    check_key,
+    check_upload,
+)
 
 client = TestClient(app)
 
@@ -224,6 +231,69 @@ class TestUploadUrl:
         with patch("app.routers.documents.get_config", return_value=cfg):
             assert _upload().status_code == 503
         table.put_item.assert_not_called()
+
+
+class TestVideoUploads:
+    """A build without a video model (the Mumbai build: no model in ap-south-1
+    reads video, VIDEO_UPLOADS_ENABLED=false) refuses video files with a
+    message; audio files still go to Transcribe."""
+
+    @pytest.fixture
+    def no_video(self, config):
+        config.video_uploads_enabled = False
+        return config
+
+    @pytest.mark.parametrize(
+        ("file_name", "content_type"),
+        [
+            ("site_visit.mp4", "video/mp4"),
+            ("site_visit.MOV", "video/quicktime"),
+            ("kyc.avi", "video/x-msvideo"),
+            ("kyc.mkv", "video/x-matroska"),
+            # type-detection maps .webm to video/webm, whatever the browser says
+            ("call.webm", "audio/webm"),
+            ("site_visit.mp4", "application/octet-stream"),
+        ],
+    )
+    def test_video_is_refused_with_a_message(self, no_video, table, file_name, content_type):
+        response = _upload(file_name=file_name, content_type=content_type)
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == VIDEO_NOT_SUPPORTED
+        assert "audio" in VIDEO_NOT_SUPPORTED
+        table.put_item.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("file_name", "content_type"),
+        [
+            ("call.wav", "audio/wav"),
+            ("call.mp3", "audio/mpeg"),
+            ("call.flac", "audio/flac"),
+            ("call.m4a", "audio/mp4"),
+            ("bank_statement.pdf", "application/pdf"),
+            ("pan.jpg", "image/jpeg"),
+        ],
+    )
+    def test_audio_and_documents_still_upload(self, no_video, table, file_name, content_type):
+        assert _upload(file_name=file_name, content_type=content_type).status_code == 200
+
+    def test_video_uploads_where_a_video_model_exists(self, config, table):
+        assert config.video_uploads_enabled is True  # the default
+        assert _upload(file_name="site_visit.mp4", content_type="video/mp4").status_code == 200
+
+    def test_the_backend_construct_sets_the_flag(self, monkeypatch):
+        monkeypatch.setenv("VIDEO_UPLOADS_ENABLED", "false")
+        assert Config().video_uploads_enabled is False
+        monkeypatch.setenv("VIDEO_UPLOADS_ENABLED", "true")
+        assert Config().video_uploads_enabled is True
+
+    def test_check_upload_refuses_every_video_extension(self):
+        for ext in VIDEO_EXTENSIONS:
+            with pytest.raises(PresignError) as refused:
+                check_upload(f"clip.{ext}", "application/octet-stream", 10, video_allowed=False)
+            assert refused.value.status == 400
+            assert refused.value.detail == VIDEO_NOT_SUPPORTED
+            assert check_upload(f"clip.{ext}", "application/octet-stream", 10) == ext
 
 
 # ----------------------------------------------------------- document download

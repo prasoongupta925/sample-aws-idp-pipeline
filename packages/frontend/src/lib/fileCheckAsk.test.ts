@@ -1,5 +1,6 @@
 // @vitest-environment node
 import {
+  ASK_DEFAULT_MODEL_ID,
   ASK_DEFAULT_PRICING,
   ASK_MAX_HISTORY,
   ASK_MAX_HISTORY_CONTENT,
@@ -16,13 +17,13 @@ import {
 
 const CONTRACT_RESPONSE = {
   answer: 'The file is **not complete**: the June 2026 salary slip is missing.',
-  model_id: 'global.amazon.nova-2-lite-v1:0',
+  model_id: 'moonshotai.kimi-k2.5',
   input_tokens: 1200,
   output_tokens: 300,
-  cost_usd: 0.001305,
+  cost_usd: 0.001944,
   pricing: {
-    input_per_million_usd: 0.35,
-    output_per_million_usd: 2.95,
+    input_per_million_usd: 0.72,
+    output_per_million_usd: 3.6,
     region: 'ap-south-1',
   },
   grounded_on: {
@@ -32,10 +33,11 @@ const CONTRACT_RESPONSE = {
 };
 
 describe('cost math', () => {
-  it('prices tokens per 1M at the Nova 2 Lite rates', () => {
-    // 1,200 × 0.35 / 1M + 300 × 2.95 / 1M = 0.00042 + 0.000885
-    expect(costUsd(1200, 300)).toBeCloseTo(0.001305, 9);
-    expect(formatUsd(costUsd(1200, 300))).toBe('$0.0013');
+  it('prices tokens per 1M at the Kimi K2.5 rates (ap-south-1)', () => {
+    expect(ASK_DEFAULT_MODEL_ID).toBe('moonshotai.kimi-k2.5');
+    // 1,200 × 0.72 / 1M + 300 × 3.60 / 1M = 0.000864 + 0.00108
+    expect(costUsd(1200, 300)).toBeCloseTo(0.001944, 9);
+    expect(formatUsd(costUsd(1200, 300))).toBe('$0.0019');
     expect(costUsd(0, 0)).toBe(0);
     expect(formatUsd(0)).toBe('$0.0000');
     // A real but tiny cost is not shown as zero.
@@ -61,7 +63,7 @@ describe('cost math', () => {
       input_tokens: 12_345,
       output_tokens: 678,
     });
-    // 12,345 × 0.35 / 1M + 678 × 2.95 / 1M = 0.00432075 + 0.0020001
+    // 12,345 × 0.72 / 1M + 678 × 3.60 / 1M = 0.0088884 + 0.0024408
     expect(
       formatUsd(
         costUsd(
@@ -70,14 +72,14 @@ describe('cost math', () => {
           ASK_DEFAULT_PRICING,
         ),
       ),
-    ).toBe('$0.0063');
+    ).toBe('$0.0113');
   });
 
   it('formats tokens and prices', () => {
     expect(formatTokens(12345)).toBe('12,345');
     expect(formatTokens(undefined)).toBe('–');
-    expect(formatPrice(0.35)).toBe('$0.35');
-    expect(formatPrice(2.95)).toBe('$2.95');
+    expect(formatPrice(0.72)).toBe('$0.72');
+    expect(formatPrice(3.6)).toBe('$3.60');
   });
 });
 
@@ -137,7 +139,7 @@ describe('parseAskResponse', () => {
       output_tokens: 300,
     });
     expect(res.pricing).toEqual(ASK_DEFAULT_PRICING);
-    expect(res.cost_usd).toBeCloseTo(0.001305, 9);
+    expect(res.cost_usd).toBeCloseTo(0.001944, 9);
     expect(res.grounded_on).toEqual({ applicants: [], documents: [] });
     expect(res.model_id).toBe('');
   });

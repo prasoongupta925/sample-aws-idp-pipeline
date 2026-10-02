@@ -390,15 +390,51 @@ def test_ap_south_1_defaults():
     text = REGION_CONFIG_TS.read_text(encoding='utf-8')
     block = _region_block(text, 'ap-south-1')
     assert "lancedbExpressAzId: 'aps1-az1'" in block
-    # User decision 2026-09-27: embeddings cross-region in us-east-1.
-    assert "embeddingRegion: 'us-east-1'" in block
-    assert "FALLBACK_EMBEDDING_REGION = 'us-east-1'" in text
-    # Everything else stays in the deploy region; rerank is the exception.
+    # Owner decision 2026-10-01 (all-Mumbai build): every model call stays in
+    # ap-south-1. Titan Text Embeddings V2 is in-Region; Amazon Rerank and Nova
+    # Sonic are not, so re-ranking and the built-in voice chat are off.
+    assert "embeddingRegion: 'ap-south-1'" in block
+    assert 'rerankEnabled: false' in block
+    assert 'rerankRegion' not in re.sub(r'//.*', '', block)
+    assert 'voiceChatEnabled: false' in block
     assert "voiceModelRegion: 'ap-south-1'" in block
+    # Bedrock Data Automation runs only through a cross-Region profile
+    # (apac.data-automation-v1 from ap-south-1): off.
+    assert 'bdaEnabled: false' in block
+    regions = re.findall(r"^\s*(\w+Region): '([^']*)'", block, re.MULTILINE)
+    assert regions and all(value == 'ap-south-1' for _, value in regions), regions
     web = re.search(r'WEB_SEARCH_REGIONS = \[(.*?)\]', text, re.DOTALL)
     assert web and 'ap-south-1' not in web.group(1)
     assert "'us-east-1'" in web.group(1)
     assert "contextBoolean(scope, 'enableWebSearch')" in text
+
+
+def test_other_regions_keep_their_defaults():
+    text = REGION_CONFIG_TS.read_text(encoding='utf-8')
+    block = _region_block(text, 'us-east-1')
+    assert "embeddingRegion: 'us-east-1'" in block
+    assert 'rerankEnabled: true' in block
+    assert "rerankRegion: 'us-west-2'" in block
+    assert 'voiceChatEnabled: true' in block
+    assert 'bdaEnabled: true' in block
+    # A region without defaults: embeddings in the stack region (Titan V2 is
+    # widely offered), rerank and voice chat on as before. No cross-Region
+    # opt-in is offered: the model guard denies model calls outside the stack
+    # region.
+    assert not re.search(r'-c (embeddingRegion|rerankRegion|voiceModelRegion)=', text)
+    assert 'FALLBACK_EMBEDDING_REGION' not in text
+    assert re.search(
+        r"embeddingRegion:\s*contextString\(scope, 'embeddingRegion'\) \?\?\s*"
+        r'defaults\.embeddingRegion \?\?\s*region,',
+        text,
+    )
+    assert "FALLBACK_RERANK_REGION = 'us-west-2'" in text
+    assert "contextBoolean(scope, 'enableRerank') ?? defaults.rerankEnabled ?? true" in text
+    assert re.search(
+        r"contextBoolean\(scope, 'enableVoiceChat'\) \?\?\s*"
+        r'defaults\.voiceChatEnabled \?\?\s*true',
+        text,
+    )
 
 
 def test_s3_express_az_is_not_hard_coded():
@@ -407,6 +443,8 @@ def test_s3_express_az_is_not_hard_coded():
         for path in root.rglob('*.ts'):
             if path == REGION_CONFIG_TS or 'node_modules' in path.parts:
                 continue
+            if path.name.endswith(('.test.ts', '.spec.ts')):
+                continue  # test fixtures may name a zone
             if re.search(r"'[a-z]{2,6}\d-az\d+'", path.read_text(encoding='utf-8')):
                 hits.append(str(path.relative_to(PACKAGES)))
     assert not hits, hits
@@ -437,15 +475,86 @@ def test_named_buckets_include_region():
     assert all(n.endswith('-{region}') for n in names if '${' not in n), names
 
 
-def test_embedding_region_is_wired_from_config():
+TITAN_V2 = 'amazon.titan-embed-text-v2:0'
+
+
+def test_embedding_model_and_region_are_wired_from_config():
     lance = (INFRA_SRC / 'stacks' / 'lance-service-stack.ts').read_text(
         encoding='utf-8'
     )
-    assert 'EMBEDDING_REGION: getRegionConfig(this).embeddingRegion' in lance
+    assert 'const embeddingModelId = models.embedding;' in lance
+    # Embeddings run in the stack's Region; a region config that names another
+    # one fails synth (the model guard would deny every embedding call).
+    assert 'const embeddingRegion = this.region;' in lance
+    assert (
+        'const configuredEmbeddingRegion = getRegionConfig(this).embeddingRegion;'
+        in lance
+    )
+    assert re.search(
+        r'if \(\s*!Token\.isUnresolved\(embeddingRegion\) &&\s*'
+        r'configuredEmbeddingRegion !== embeddingRegion\s*\) \{\s*throw new Error\(',
+        lance,
+    )
+    assert 'EMBEDDING_MODEL_ID: embeddingModelId,' in lance
+    assert 'EMBEDDING_REGION: embeddingRegion,' in lance
+    # Its own IAM: InvokeModel on that one foundation model in that region only.
+    assert (
+        '`arn:aws:bedrock:${embeddingRegion}::foundation-model/${embeddingModelId}`'
+        in lance
+    )
+    assert "resources: ['*']" not in lance
+    assert 'InvokeModelWithResponseStream' not in lance
+    # The service speaks the Titan Text Embeddings V2 format; synth fails for
+    # any other model (a different model would also need a re-index).
+    titan = re.search(r'const TITAN_TEXT_EMBEDDINGS_V2 = /(.*)/;', lance)
+    models = json.loads((INFRA_SRC / 'models.json').read_text(encoding='utf-8'))
+    assert models['embedding'] == TITAN_V2
+    assert titan and re.fullmatch(titan.group(1), TITAN_V2)
+
     main_rs = (PACKAGES / 'lambda' / 'lancedb-service' / 'src' / 'main.rs').read_text(
         encoding='utf-8'
     )
     assert 'std::env::var("EMBEDDING_REGION")' in main_rs
+    bedrock_rs = (
+        PACKAGES / 'lambda' / 'lancedb-service' / 'src' / 'client' / 'bedrock.rs'
+    ).read_text(encoding='utf-8')
+    assert 'std::env::var("EMBEDDING_MODEL_ID")' in bedrock_rs
+    assert f'pub const DEFAULT_MODEL_ID: &str = "{TITAN_V2}";' in bedrock_rs
+    assert '#[serde(rename = "inputText")]' in bedrock_rs
+    assert 'pub const EMBEDDING_DIMENSION: usize = 1024;' in bedrock_rs
+    embeddings_py = (INFRA_SRC / 'functions' / 'shared' / 'embeddings.py').read_text(
+        encoding='utf-8'
+    )
+    assert f"os.environ.get('EMBEDDING_MODEL_ID') or '{TITAN_V2}'" in embeddings_py
+    # Every place that holds vectors keeps 1024 dimensions (no schema change).
+    model_rs = (
+        PACKAGES / 'lambda' / 'lancedb-service' / 'src' / 'db' / 'model.rs'
+    ).read_text(encoding='utf-8')
+    assert 'const VECTOR_DIMENSION: i32 = 1024;' in model_rs
+
+
+def test_search_mcp_models_stay_in_region():
+    search = (CONSTRUCTS_SRC / 'app' / 'mcp' / 'search-mcp.ts').read_text(
+        encoding='utf-8'
+    )
+    assert "const SUMMARIZE_MODEL_ID = 'openai.gpt-oss-120b-1:0';" in search
+    assert 'global.' not in search
+    assert (
+        '`arn:aws:bedrock:${Stack.of(this).region}::foundation-model/${SUMMARIZE_MODEL_ID}`'
+        in search
+    )
+    # Rerank only where the region config enables it (never in ap-south-1).
+    assert 'RERANK_ENABLED: String(rerankRegion !== undefined),' in search
+    assert 'RERANK_REGION: getRegionConfig' not in search
+    assert search.count("'bedrock:Rerank'") == 1
+    assert search.index("actions: ['bedrock:Rerank']") > search.index(
+        'if (rerankRegion) {'
+    )
+    summarize = (
+        PACKAGES / 'lambda' / 'search-mcp' / 'src' / 'lib' / 'summarize.ts'
+    ).read_text(encoding='utf-8')
+    assert "process.env.SUMMARIZE_MODEL_ID ?? 'openai.gpt-oss-120b-1:0'" in summarize
+    assert 'global.' not in summarize
 
 
 def test_gateway_target_descriptions_fit_the_200_char_limit():

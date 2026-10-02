@@ -45,6 +45,7 @@ OCR_TEXT = 'OCR READING OF THE SAME PAGE: Salary S1ip August 2026 Konkan Softw0r
 VISION_TEXT = 'VISION TRANSCRIPTION: identity sheet of Sneha Anil Kulkarni, PAN CKRPK7314M'
 
 FACTS_MODEL = 'openai.gpt-oss-120b-1:0'
+# The cross-Region Nova 2 Lite profile: never called in the all-Mumbai build.
 NOVA_2_LITE = 'global.amazon.nova-2-lite-v1:0'
 MODELS_JSON = os.path.abspath(os.path.join(HERE, '..', '..', '..', 'models.json'))
 
@@ -406,8 +407,8 @@ def test_call_model_flags_output_cut_at_max_tokens():
     (FACTS_MODEL, 'flex', 1_000_000, 1_000_000, 0.445),
     (FACTS_MODEL, 'flex', 10_000, 500, 0.0010775),
     (FACTS_MODEL, 'default', 12345, 678, 0.00270348),  # rounded to 8 decimals like the Ask feature
-    (NOVA_2_LITE, 'default', 10_000, 500, 0.004975),  # the Ask API contract's worked example
-    (NOVA_2_LITE, 'flex', 10_000, 500, 0.0024875),
+    (FACTS_MODEL, 'default', 10_000, 500, 0.002155),  # the Ask API contract's worked example
+    (NOVA_2_LITE, 'default', 10_000, 500, None),  # cross-Region: not priced (never called)
     ('m', 'default', 10, 10, None),  # no price for the model: unknown, not guessed
     (FACTS_MODEL, 'reserved', 10, 10, None),
     (None, None, 0, 0, 0.0),  # no call
@@ -443,17 +444,21 @@ BACKEND_ASK = os.path.abspath(os.path.join(HERE, '..', '..', '..', '..', '..', '
 
 
 @pytest.mark.skipif(not os.path.exists(BACKEND_ASK), reason='backend source not in this checkout')
-def test_nova_price_equals_the_ask_feature():
-    """Nova 2 Lite is costed like the Ask feature (packages/backend/app/file_check_ask.py)."""
+def test_prices_equal_the_ask_feature():
+    """A model priced here and by the Ask feature (packages/backend/app/file_check_ask.py) costs the same."""
     import ast
 
     with open(BACKEND_ASK, encoding='utf-8') as fh:
         tree = ast.parse(fh.read())
-    prices = {
-        node.targets[0].id: ast.literal_eval(node.value)
+    ask_prices = next(
+        ast.literal_eval(node.value)
         for node in tree.body
-        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
-        and node.targets[0].id.endswith('_PRICE_PER_MILLION_USD')
-    }
-    assert PRICES_PER_MILLION_USD[NOVA_2_LITE]['default'] == (
-        prices['INPUT_PRICE_PER_MILLION_USD'], prices['OUTPUT_PRICE_PER_MILLION_USD'])
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+        and isinstance(node.targets[0] if isinstance(node, ast.Assign) else node.target, ast.Name)
+        and (node.targets[0] if isinstance(node, ast.Assign) else node.target).id == 'PRICES_PER_MILLION_USD'
+    )
+    shared = set(ask_prices) & set(PRICES_PER_MILLION_USD)
+    assert FACTS_MODEL in shared  # the Ask runs on the facts model (gpt-oss-120b)
+    for model_id in shared:
+        for tier, price in ask_prices[model_id].items():
+            assert PRICES_PER_MILLION_USD[model_id][tier] == price, (model_id, tier)

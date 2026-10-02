@@ -3,8 +3,8 @@
 Requires AWS credentials and Bedrock access.
 Set ENTITY_EXTRACTION_MODEL_ID env var before running.
 
-Usage:
-    ENTITY_EXTRACTION_MODEL_ID=global.amazon.nova-2-lite-v1:0 \
+Usage (in-Region, ap-south-1: the models.json `extractor` model):
+    AWS_REGION=ap-south-1 ENTITY_EXTRACTION_MODEL_ID=openai.gpt-oss-120b-1:0 \
     python -m pytest test_extractor.py -v -s
 """
 import json

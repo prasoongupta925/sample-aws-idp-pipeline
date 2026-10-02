@@ -2,7 +2,8 @@
 
 Usage:
     python -m pytest test_normalizer.py -v
-    ENTITY_NORMALIZATION_MODEL_ID=global.amazon.nova-2-lite-v1:0 python -m pytest test_normalizer.py -v -s
+    # In-Region, ap-south-1: the models.json `entityNormalizer` model.
+    AWS_REGION=ap-south-1 ENTITY_NORMALIZATION_MODEL_ID=openai.gpt-oss-120b-1:0 python -m pytest test_normalizer.py -v -s
 """
 import json
 import sys

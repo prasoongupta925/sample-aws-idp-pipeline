@@ -135,10 +135,10 @@ def test_get_document_facts_roundtrip(table):
 def test_usage_record_survives_the_decimal_roundtrip(table):
     from extractor import usage_record
 
-    usage = usage_record('global.amazon.nova-2-lite-v1:0', 900, 120)
+    usage = usage_record('openai.gpt-oss-120b-1:0', 900, 120)
     ddb_client.save_document_facts('p1', 'd1', {'doc_type': 'salary_slip', 'usage': usage})
     (item,) = table.put_calls
-    assert item['data']['usage']['cost_usd'] == Decimal('0.000669')  # exact, not a binary float
+    assert item['data']['usage']['cost_usd'] == Decimal('0.0002472')  # exact, not a binary float
     assert ddb_client.get_document_facts('p1', 'd1')['usage'] == usage
 
 

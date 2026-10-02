@@ -65,28 +65,28 @@ describe('AskMeter', () => {
       <AskMeter
         session={{ calls: 2, input_tokens: 12_345, output_tokens: 678 }}
         pricing={{
-          input_per_million_usd: 0.35,
-          output_per_million_usd: 2.95,
+          input_per_million_usd: 0.72,
+          output_per_million_usd: 3.6,
           region: 'ap-south-1',
         }}
-        modelId="global.amazon.nova-2-lite-v1:0"
+        modelId="moonshotai.kimi-k2.5"
         usage={{
           window_days: 7,
           calls: 5,
           input_tokens: 30_000,
           output_tokens: 2_000,
-          cost_usd: 0.0164,
+          cost_usd: 0.0288,
         }}
       />,
     );
     expect(textOf(html, 'ask-meter')).toBe(
       [
-        'Answered by Amazon Nova 2 Lite using ONLY the extracted fields, check results and document text',
-        'Model global.amazon.nova-2-lite-v1:0 (ap-south-1)',
-        // 12,345 × $0.35/1M + 678 × $2.95/1M = $0.00632085
-        'This session: 12,345 input + 678 output tokens = $0.0063',
-        'Last 7 days: $0.0164 over 5 calls',
-        'Pricing $0.35 / 1M input, $2.95 / 1M output',
+        'Answered by Kimi K2.5 using ONLY the extracted fields, check results and document text',
+        'Model moonshotai.kimi-k2.5 (ap-south-1)',
+        // 12,345 × $0.72/1M + 678 × $3.60/1M = $0.0113292
+        'This session: 12,345 input + 678 output tokens = $0.0113',
+        'Last 7 days: $0.0288 over 5 calls',
+        'Pricing $0.72 / 1M input, $3.60 / 1M output',
         'Nothing is kept longer than 7 days',
         'Synthetic data only.',
       ].join(' · '),
@@ -109,7 +109,7 @@ describe('AskMeter', () => {
     expect(text).toContain('This session: 0 input + 0 output tokens = $0.0000');
     expect(text).toContain('Last 7 days: not available');
     expect(text).not.toContain('Model ');
-    expect(text).toContain('Pricing $0.35 / 1M input, $2.95 / 1M output');
+    expect(text).toContain('Pricing $0.72 / 1M input, $3.60 / 1M output');
   });
 
   it('uses the singular for one call', () => {
@@ -118,21 +118,22 @@ describe('AskMeter', () => {
         <AskMeter
           session={{ calls: 1, input_tokens: 1200, output_tokens: 300 }}
           pricing={ASK_DEFAULT_PRICING}
-          modelId="global.amazon.nova-2-lite-v1:0"
+          modelId="moonshotai.kimi-k2.5"
           usage={{
             window_days: 7,
             calls: 1,
             input_tokens: 1200,
             output_tokens: 300,
-            cost_usd: 0.001305,
+            cost_usd: 0.001944,
           }}
         />,
       ),
       'ask-meter',
     );
-    expect(text).toContain('= $0.0013');
-    expect(text).toContain('Last 7 days: $0.0013 over 1 call ·');
-    expect(text).toContain('Model global.amazon.nova-2-lite-v1:0 ·');
+    // 1,200 × $0.72/1M + 300 × $3.60/1M = $0.001944
+    expect(text).toContain('= $0.0019');
+    expect(text).toContain('Last 7 days: $0.0019 over 1 call ·');
+    expect(text).toContain('Model moonshotai.kimi-k2.5 ·');
   });
 });
 
@@ -172,7 +173,8 @@ describe('AskSection', () => {
               answer: 'No. The application shows **ABCPP1234K**.',
               input_tokens: 1200,
               output_tokens: 300,
-              cost_usd: 0.001305,
+              // 1,200 × $0.72/1M + 300 × $3.60/1M (Kimi K2.5, the default)
+              cost_usd: 0.001944,
               grounded_on: {
                 applicants: ['Amit Suresh Patil'],
                 documents: ['application.pdf', 'slip_aug.pdf'],
@@ -191,14 +193,14 @@ describe('AskSection', () => {
     );
     expect(html).toContain('<strong>ABCPP1234K</strong>');
     expect(textOf(html, 'ask-caption')).toBe(
-      '1,200 in / 300 out tokens · $0.0013 · from 2 documents',
+      '1,200 in / 300 out tokens · $0.0019 · from 2 documents',
     );
     expect(html).toContain('The model call failed (HTTP 502)');
     expect(html).toContain(
       'The verdict above is deterministic and still valid.',
     );
     expect(textOf(html, 'ask-meter')).toContain(
-      'This session: 1,200 input + 300 output tokens = $0.0013',
+      'This session: 1,200 input + 300 output tokens = $0.0019',
     );
   });
 

@@ -159,15 +159,23 @@ class FakeS3:
 
 
 class FakeLanceDb:
-    """The LanceDB service Lambda: delete_by_workflow answers 200 unless the workflow is in `fail`."""
+    """The LanceDB service Lambda: delete_by_workflow answers 200 unless the workflow is in `fail`;
+    optimize is queued (Event invoke, 202) unless `fail_optimize`."""
 
     def __init__(self):
         self.calls = []
+        self.invocation_types = []
         self.fail = set()
+        self.fail_optimize = False
 
     def invoke(self, FunctionName, InvocationType, Payload):
         body = json.loads(Payload)
         self.calls.append(body)
+        self.invocation_types.append(InvocationType)
+        if body["action"] == "optimize":
+            if self.fail_optimize:
+                raise ClientError({"Error": {"Code": "TooManyRequestsException"}}, "Invoke")
+            return {"StatusCode": 202, "Payload": io.BytesIO(b"")}
         workflow_id = body["params"]["workflow_id"]
         ok = workflow_id not in self.fail
         answer = {"statusCode": 200, "success": True} if ok else {"statusCode": 500, "error": "boom"}
@@ -348,10 +356,15 @@ class TestErase:
             assert len(world.document_objects(f)) == 3
         assert world.table.has(f"PROJ#{PROJECT_ID}", "META")
 
-        # LanceDB vectors and the graph of each workflow (the DELETE /documents/{id} cleanup).
+        # LanceDB vectors and the graph of each workflow (the DELETE /documents/{id} cleanup),
+        # then one clean-up that deletes the files still holding the vectors (not waited for).
         rahul_workflows = sorted(_workflow_id(f) for f in rahul())
-        assert sorted(c["params"]["workflow_id"] for c in world.lancedb.calls) == rahul_workflows
-        assert {c["action"] for c in world.lancedb.calls} == {"delete_by_workflow"}
+        *deletes, cleanup = world.lancedb.calls
+        assert sorted(c["params"]["workflow_id"] for c in deletes) == rahul_workflows
+        assert {c["action"] for c in deletes} == {"delete_by_workflow"}
+        assert cleanup == {"action": "optimize", "params": {"project_id": PROJECT_ID, "older_than_hours": 0}}
+        assert world.lancedb.invocation_types[-1] == "Event"
+        assert set(world.lancedb.invocation_types[:-1]) == {"RequestResponse"}
         bodies = [json.loads(c.kwargs["MessageBody"]) for c in world.sqs.send_message.call_args_list]
         assert sorted(b["workflow_id"] for b in bodies) == rahul_workflows
         assert {(b["project_id"], b["phase"]) for b in bodies} == {(PROJECT_ID, "clusters")}
@@ -626,6 +639,29 @@ class TestPartialFailure:
         assert failed["document_id"] == _doc_id(statement)
         assert failed["error"] == "document deleted, but its search-index (LanceDB) entries were not deleted"
         assert len(data["documents_deleted"]) == 6
+        # The others' rows are still cleaned up from storage.
+        assert world.lancedb.calls[-1]["action"] == "optimize"
+
+    def test_a_clean_up_that_cannot_start_does_not_fail_the_erase(self, world, capsys):
+        world.lancedb.fail_optimize = True
+
+        response = _erase()
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["documents_deleted"]) == len(rahul()) and data["failed"] == []
+        # Nothing to add to not_erased: the nightly retention sweep removes them within a day.
+        assert len(data["not_erased"]) == 2
+        out = capsys.readouterr().out
+        assert f"search-index clean-up not started project={PROJECT_ID} (ClientError)" in out
+        for secret in (RAHUL, RAHUL_PAN):
+            assert secret not in out
+
+    def test_no_clean_up_without_the_lancedb_service(self, world, monkeypatch):
+        monkeypatch.setattr(get_config(), "lancedb_function_name", "")
+
+        assert _erase().status_code == 200
+        assert world.lancedb.calls == []
 
     def test_unexpected_errors_do_not_stop_the_erase(self, world):
         first = by_name(rahul())[0]

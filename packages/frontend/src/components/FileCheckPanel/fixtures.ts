@@ -387,11 +387,12 @@ export const USAGE_RESULT: FileCheckResult = {
       documents: [
         {
           ...NOT_READY_RESULT.applicants[0].documents[0],
+          // gpt-oss-120b on Flex (ap-south-1): 12,345 × $0.09/1M + 678 × $0.355/1M.
           usage: {
-            model_id: 'global.amazon.nova-2-lite-v1:0',
+            model_id: 'openai.gpt-oss-120b-1:0',
             input_tokens: 12345,
             output_tokens: 678,
-            cost_usd: 0.00632085,
+            cost_usd: 0.00135174,
           },
         },
         // Analysed before costs were recorded.
@@ -400,7 +401,7 @@ export const USAGE_RESULT: FileCheckResult = {
       usage_total: {
         input_tokens: 12345,
         output_tokens: 678,
-        cost_usd: 0.00632085,
+        cost_usd: 0.00135174,
         documents_with_usage: 1,
         documents_total: 2,
       },
