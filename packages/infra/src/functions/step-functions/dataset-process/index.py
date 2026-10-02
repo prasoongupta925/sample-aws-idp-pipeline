@@ -6,7 +6,12 @@ dataset. Identifiers/paths are document_id-based ASCII (Korean file/sheet names
 live only in the DATASET# `name`).
 
 Input (from Step Functions):
-  { workflow_id, document_id, project_id, file_uri, file_name, file_type }
+  { workflow_id, document_id, project_id, file_uri, file_type }
+
+Step Functions keeps execution history for 90 days, so the input and the
+returned output carry no file or sheet names: the original file name is read
+from the DOC# record, and needs-fix reasons and skipped sheets are recorded on
+the step (DynamoDB) only.
 """
 
 from __future__ import annotations
@@ -183,10 +188,10 @@ def handler(event: dict, context) -> dict:
     file_uri = event["file_uri"]
     file_type = event.get("file_type", "")
 
-    # Prefer the original upload filename (stored on the DOC# item) over the
-    # event's file_name, which is document_id-based (S3 key = {doc_id}.{ext}).
-    # get_document returns the item's `data` dict directly.
-    file_name = event.get("file_name", document_id)
+    # The original upload filename is stored on the DOC# item only (get_document
+    # returns the item's `data` dict directly); without one, use the S3 key's
+    # document_id-based name ({doc_id}.{ext}).
+    file_name = file_uri.rsplit("/", 1)[-1] or document_id
     doc_data = get_document(project_id, document_id)
     if doc_data and doc_data.get("name"):
         file_name = doc_data["name"]
@@ -204,20 +209,21 @@ def handler(event: dict, context) -> dict:
     is_xls = file_type == "application/vnd.ms-excel" or name_lower.endswith(".xls")
     delimiter = "\t" if is_tsv else ("," if is_csv else None)
 
-    # 1) Load sheets as DataFrames + validate.
+    # 1) Load sheets as DataFrames + validate. The reason (which names the CSV
+    # file or the sheets) is recorded on the step only, not returned.
     try:
         sheets, failures = _load_and_validate(body, delimiter, is_xls, file_name)
     except Exception as e:  # noqa: BLE001 - unreadable file is a user-fix case
         reason = f"파일을 읽을 수 없습니다: {e}"
         record_step_needs_fix(workflow_id, StepName.DATASET_PROCESS, reason)
         update_workflow_status(document_id, workflow_id, WorkflowStatus.NEEDS_USER_FIX, entity_type)
-        return {"workflow_id": workflow_id, "status": WorkflowStatus.NEEDS_USER_FIX, "reason": reason}
+        return {"workflow_id": workflow_id, "status": WorkflowStatus.NEEDS_USER_FIX}
 
     if not sheets:
         reason = _format_failures(failures)
         record_step_needs_fix(workflow_id, StepName.DATASET_PROCESS, reason, {"sheets": failures})
         update_workflow_status(document_id, workflow_id, WorkflowStatus.NEEDS_USER_FIX, entity_type)
-        return {"workflow_id": workflow_id, "status": WorkflowStatus.NEEDS_USER_FIX, "reason": reason}
+        return {"workflow_id": workflow_id, "status": WorkflowStatus.NEEDS_USER_FIX}
 
     # 2) Per valid sheet: parquet -> reference -> DATASET#.
     # Outputs live alongside the original document under documents/{doc_id}/.
@@ -319,7 +325,7 @@ def handler(event: dict, context) -> dict:
         "workflow_id": workflow_id,
         "status": WorkflowStatus.COMPLETED,
         "datasets": created,
-        "skipped_sheets": failures,
+        "skipped_sheets": len(failures),
     }
 
 

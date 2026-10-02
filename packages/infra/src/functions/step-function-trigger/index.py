@@ -3,6 +3,10 @@
 Triggered by Workflow Queue (after type-detection distributes messages).
 The workflow record is already created by type-detection Lambda.
 This Lambda starts the Step Functions execution and updates the execution_arn.
+
+Step Functions keeps execution history for 90 days, so the execution input and
+name carry no file name: the S3 key is document_id-based ({document_id}.{ext})
+and a Lambda that needs the original name reads it from the DOC# record.
 """
 import json
 import os
@@ -40,7 +44,6 @@ def handler(event, context):
             document_id = body.get('document_id')
             project_id = body.get('project_id')
             file_uri = body.get('file_uri')
-            file_name = body.get('file_name')
             file_type = body.get('file_type')
             language = body.get('language', 'en')
             use_bda = body.get('use_bda', False)
@@ -55,7 +58,7 @@ def handler(event, context):
             crawl_instruction = body.get('crawl_instruction', '')
 
             if not workflow_id or not document_id:
-                print(f'Skipping: missing workflow_id or document_id')
+                print('Skipping: missing workflow_id or document_id')
                 continue
 
             # Determine entity type based on file type (WEB# for webreq, DOC# for others)
@@ -70,13 +73,12 @@ def handler(event, context):
             client = get_sfn_client()
             execution_name = f'{workflow_id[:16]}-{datetime.utcnow().strftime("%Y%m%d%H%M%S")}'
 
-            # Input for Step Functions (includes all preprocessing fields)
+            # Input for Step Functions (includes all preprocessing fields, no file name)
             sfn_input = {
                 'workflow_id': workflow_id,
                 'document_id': document_id,
                 'project_id': project_id,
                 'file_uri': file_uri,
-                'file_name': file_name,
                 'file_type': file_type,
                 'processing_type': processing_type,
                 'language': language,

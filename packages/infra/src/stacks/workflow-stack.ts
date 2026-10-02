@@ -1810,6 +1810,7 @@ export class WorkflowStack extends Stack {
       memorySize: 128,
       code: lambda.Code.fromAsset(
         path.join(__dirname, '../functions/step-function-trigger'),
+        { exclude: ['test_*.py', '__pycache__', '.pytest_cache'] },
       ),
       layers: [sharedLayer],
       environment: {
