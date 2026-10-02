@@ -1,18 +1,26 @@
 """File Check MCP Lambda handler for AgentCore Gateway.
 
-Exposes two deterministic tools (no LLM):
+Exposes deterministic tools (no LLM):
   - run_file_check(project_id, checklist_id?, applicant?, reference_month?):
     loads every PROJ#{pid} DOC# and FACTS# item, groups documents by applicant
     and applies a bundled loan-product checklist -> READY / NOT READY with
-    findings that cite document names.
+    findings that cite document names. The project's FCCONF# items (needs-review
+    items a person confirmed in the web app) count as met.
   - list_checklists(): the checklists run_file_check can apply.
+  - emi_calculator(principal, annual_rate_pct, tenure_months | tenure_years,
+    new_annual_rate_pct?): EMI, totals, split, yearly schedule, balance transfer.
+  - foir_eligibility(net_monthly_income, existing_emis?, foir_pct,
+    annual_rate_pct, tenure_months | tenure_years): maximum EMI and loan.
+  - loan_eligibility(project_id, applicant): the applicant's saved CIBIL-page
+    inputs at every SAMPLE lender policy (eligibility.py, the backend's engine).
 
 and, for the backend only (not in schema.json, so the chat never sees it):
   - applicant_documents(project_id, applicant): the documents of one
     applicant, grouped exactly as run_file_check groups them (read-only). The
     backend's erase-applicant API deletes these documents.
 
-Only engine.py decides the verdict; the chat model reports it. Facts contents
+Only engine.py decides the verdict and only loan_tools.py / eligibility.py
+compute EMIs and eligibility; the chat model reports them. Facts contents
 (names, PAN, amounts) are never logged.
 """
 
@@ -22,6 +30,7 @@ import re
 import traceback
 
 import engine
+import loan_tools
 
 TABLE_NAME = os.environ['BACKEND_TABLE_NAME']
 AWS_REGION = os.environ.get('AWS_REGION', os.environ.get('AWS_DEFAULT_REGION'))
@@ -69,10 +78,12 @@ def _from_decimal(value):
     return value
 
 
-def load_project_items(table, project_id: str):
+def load_project_items(table, project_id: str, confirmations=None):
     """Return (documents, facts): DOC# and FACTS# data of one project.
 
-    Base-table Query on PK only (no GSI), paginated.
+    A `confirmations` list also collects the FCCONF# data (needs-review items
+    a person confirmed; see engine.py). Base-table Query on PK only (no GSI),
+    paginated.
     """
     from boto3.dynamodb.conditions import Key
 
@@ -89,6 +100,10 @@ def load_project_items(table, project_id: str):
                 documents.append(_from_decimal(data))
             elif sk.startswith('FACTS#'):
                 facts.append(_from_decimal(data))
+            elif confirmations is not None and sk.startswith(
+                engine.CONFIRMATION_SK_PREFIX
+            ):
+                confirmations.append(_from_decimal(data))
         last_key = resp.get('LastEvaluatedKey')
         if not last_key:
             break
@@ -141,7 +156,8 @@ def run_file_check(event: dict) -> dict:
             'available': [c['id'] for c in catalog['checklists']],
         }
 
-    documents, facts = load_project_items(_get_table(), project_id)
+    confirmations = []
+    documents, facts = load_project_items(_get_table(), project_id, confirmations)
     result = engine.run_file_check(
         facts,
         checklist,
@@ -149,10 +165,12 @@ def run_file_check(event: dict) -> dict:
         reference_month=reference_month,
         applicant=applicant,
         project_id=project_id,
+        confirmations=confirmations,
     )
     print(
         f'run_file_check project={project_id} checklist={checklist["id"]} '
         f'docs={len(documents)} facts={len(facts)} '
+        f'confirmations={len(confirmations)} '
         f'applicants={len(result["applicants"])} '
         f'verdict={result["overall_verdict"]}'
     )
@@ -184,10 +202,23 @@ def applicant_documents(event: dict) -> dict:
     return {'project_id': project_id, **result}
 
 
+def loan_eligibility(event: dict) -> dict:
+    return loan_tools.loan_eligibility(event, _get_table(), run_file_check)
+
+
 _TOOLS = {
     'run_file_check': run_file_check,
     'list_checklists': list_checklists,
     'applicant_documents': applicant_documents,
+    'emi_calculator': loan_tools.emi_calculator,
+    'foir_eligibility': loan_tools.foir_eligibility,
+    'loan_eligibility': loan_eligibility,
+}
+# What failed, in the error a tool returns for an unexpected exception.
+_FAILED = {
+    'emi_calculator': 'EMI calculation',
+    'foir_eligibility': 'FOIR eligibility',
+    'loan_eligibility': 'loan eligibility',
 }
 
 
@@ -212,9 +243,10 @@ def handler(event: dict, context) -> dict:
             f'  {f.filename}:{f.lineno} in {f.name}'
             for f in traceback.extract_tb(e.__traceback__)
         ]
+        failed = _FAILED.get(action, 'file check')
         print(
-            f'file check failed: {type(e).__name__}\n'
+            f'{failed} failed: {type(e).__name__}\n'
             + 'Traceback (most recent call last):\n'
             + '\n'.join(frames)
         )
-        return {'error': f'file check failed: {type(e).__name__}'}
+        return {'error': f'{failed} failed: {type(e).__name__}'}

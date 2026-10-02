@@ -261,5 +261,11 @@ def test_applicant_documents_is_not_offered_to_the_chat():
     """Backend-only tool: the Gateway exposes only the tools in schema.json."""
     with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schema.json')) as fh:
         tools = [t['name'] for t in json.load(fh)]
-    assert tools == ['run_file_check', 'list_checklists']
+    assert tools == [
+        'run_file_check',
+        'list_checklists',
+        'emi_calculator',
+        'foir_eligibility',
+        'loan_eligibility',
+    ]
     assert 'applicant_documents' in index._TOOLS
