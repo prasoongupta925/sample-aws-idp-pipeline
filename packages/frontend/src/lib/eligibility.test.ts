@@ -1,11 +1,17 @@
 // @vitest-environment node
 import {
+  SOURCED_FIELDS,
   addOtherIncome,
+  addOtherIncomeRow,
   addTradeline,
+  addTradelineRow,
   calculateRequestBody,
+  documentRowsMissing,
   eligibilityApplicant,
   emptyInputs,
   enquiriesOutOfOrder,
+  fillFromDocuments,
+  fillableFields,
   formatFoir,
   formatIndianNumber,
   formatRoi,
@@ -18,6 +24,7 @@ import {
   localToday,
   mobileLooksValid,
   normalizeInputs,
+  otherDocumentValue,
   parseAmount,
   parseCalculateResponse,
   parseCount,
@@ -26,16 +33,26 @@ import {
   parseLoginResponse,
   removeTradeline,
   roiPercent,
+  rowFromDocument,
+  setCibil,
+  setEnquiries,
+  setFieldValue,
+  setLoan,
+  setProfile,
   setTradelineAction,
+  sourceOf,
+  stillNeeded,
   updateOtherIncome,
   updateTradeline,
   webhookOutcome,
 } from './eligibility';
 import {
+  FULL_DRAFT_RESPONSE,
   LENDERS_RESPONSE,
   LOGIN_NOTIFIED,
   LOGIN_NO_WEBHOOK,
   LOGIN_WEBHOOK_FAILED,
+  NOT_READY_RESULT_RESPONSE,
   PREFILLED_INPUTS_RESPONSE,
   SAVED_INPUTS_RESPONSE,
   WORKED_EXAMPLE_RESPONSE,
@@ -398,5 +415,299 @@ describe('results', () => {
       multiplier: 10,
     });
     expect(() => parseLenders({})).toThrow();
+  });
+});
+
+describe('document values (the auto-fill)', () => {
+  const draft = parseInputsResponse(FULL_DRAFT_RESPONSE, 'BQXPD4821K');
+  const { inputs, sources } = draft;
+
+  it('reads every field a document filled, with its file and page', () => {
+    expect(draft.fromDocuments).toEqual(FULL_DRAFT_RESPONSE.from_documents);
+    expect(Object.keys(sources)).toEqual(
+      expect.arrayContaining([
+        ...SOURCED_FIELDS.filter((f) => f !== 'loan_amount'),
+        'report',
+      ]),
+    );
+    // Rows are not fields: they come as rows, each with its document.
+    expect(sources).not.toHaveProperty('other_income');
+    expect(sources).not.toHaveProperty('tradelines');
+    expect(sources.mobile).toEqual({
+      source: 'document',
+      value: '9000000101',
+      documents: [
+        {
+          document_id: 'r-01',
+          file: '01_loan_application_form.pdf',
+          page: 1,
+          doc_type: 'loan_application',
+        },
+      ],
+      detail: null,
+      unverified: false,
+    });
+    expect(
+      inputs.profile.other_income.map((r) => [
+        r.type,
+        r.document?.documents[0].file,
+      ]),
+    ).toEqual([
+      ['rented', '08_rent_agreement_flat_12.pdf'],
+      ['bonus', '05_salary_slip_2026-08.pdf'],
+      ['incentive', '03_salary_slip_2026-06.pdf'],
+    ]);
+    expect(
+      inputs.cibil.tradelines.map((r) => [
+        r.action,
+        r.source,
+        r.document?.documents[0].page,
+      ]),
+    ).toEqual([
+      ['obligate', 'credit_report', 2],
+      ['obligate', 'credit_report', 2],
+      ['close', 'credit_report', 3],
+    ]);
+    // The CIBIL block carries its own sources (the CIBIL tab gets only it).
+    expect(inputs.cibil.sources?.score?.value).toBe(771);
+    expect(inputs.cibil.sources?.report?.detail).toBe('CIBIL report');
+    expect(inputs.cibil.sources?.tradelines).toHaveLength(3);
+    expect(draft.documentRows.other_income).toHaveLength(3);
+    expect(draft.stillNeeded).toEqual([
+      {
+        field: 'loan_amount',
+        required: false,
+        fromDocuments: false,
+        tab: 'profile',
+      },
+      {
+        field: 'tradelines.2.emi',
+        required: true,
+        fromDocuments: false,
+        tab: 'cibil',
+        loan: { number: 2, lender: null, loanType: null },
+      },
+    ]);
+  });
+
+  it('never sends the sources back; rows keep their credit-report source', () => {
+    const body = inputsRequestBody('BQXPD4821K', inputs);
+    const json = JSON.stringify(body);
+    expect(json).not.toContain('"document"');
+    expect(json).not.toContain('"sources"');
+    expect(json).not.toContain('"documents"');
+    expect(body.cibil).toMatchObject({
+      source: 'credit_report',
+      report_date: '2026-09-20',
+      score: 771,
+    });
+    expect(body.cibil.tradelines.map((r) => r.source)).toEqual([
+      'credit_report',
+      'credit_report',
+      'credit_report',
+    ]);
+    // Only the last 4 of an account number ever reach the page.
+    expect(body.cibil.tradelines[0].account_number).toBe('XXXX4410');
+  });
+
+  it('computes the same still-needed list as the backend', () => {
+    const fields = (items: { field: string; required: boolean }[]) =>
+      items.map((i) => [i.field, i.required]);
+    expect(fields(stillNeeded(inputs, sources))).toEqual(
+      fields(FULL_DRAFT_RESPONSE.still_needed),
+    );
+    // Without documents: every field, those every lender needs marked.
+    const empty = stillNeeded(emptyInputs());
+    expect(empty.filter((i) => i.required).map((i) => i.field)).toEqual([
+      'pincode',
+      'company',
+      'employment_type',
+      'net_income',
+      'score',
+      'enquiries.d90',
+    ]);
+    expect(empty).toHaveLength(18);
+    // Typing a value takes it off the list; the CIBIL tab sees its own part.
+    const typed = setLoan(inputs, { amount: 800000 });
+    expect(stillNeeded(typed, sources).map((i) => i.field)).toEqual([
+      'tradelines.2.emi',
+    ]);
+    expect(stillNeeded(typed, sources, 'profile')).toEqual([]);
+    expect(
+      stillNeeded(updateTradeline(typed, 1, { emi: 900 }), sources),
+    ).toEqual([]);
+    // A loan marked BT needs its outstanding instead.
+    const bt = updateTradeline(setTradelineAction(typed, 0, 'bt'), 0, {
+      outstanding: null,
+    });
+    expect(stillNeeded(bt, sources, 'cibil')[0]).toMatchObject({
+      field: 'tradelines.1.outstanding',
+      fromDocuments: true,
+      loan: { number: 1, lender: 'Mulshi Auto Finance Ltd (sample)' },
+    });
+  });
+
+  it('shows a source only while the field holds the documents value', () => {
+    expect(sourceOf(inputs, sources, 'mobile')).toBe(sources.mobile);
+    const typed = setProfile(inputs, { mobile: '9820012345' });
+    expect(sourceOf(typed, sources, 'mobile')).toBeNull();
+    // The documents' value stays next to the typed one, never put in by itself.
+    expect(otherDocumentValue(typed, sources, 'mobile')).toBe(sources.mobile);
+    expect(typed.profile.mobile).toBe('9820012345');
+    // Same value, other spelling: still the documents' value.
+    expect(
+      sourceOf(
+        setProfile(inputs, {
+          mobile: '+91 90000 00101',
+          name: 'RAHUL  VIJAY DESHMUKH',
+          pan: 'BQXPD4821K',
+        }),
+        sources,
+        'name',
+      ),
+    ).toBe(sources.name);
+    const full = setProfile(inputs, { pan: 'BQXPD4821K' });
+    expect(sourceOf(full, sources, 'pan')).toBe(sources.pan);
+    expect(
+      sourceOf(setProfile(inputs, { pan: 'BQXPD4822K' }), sources, 'pan'),
+    ).toBeNull();
+    expect(sourceOf(inputs, sources, 'enquiries')).toBe(sources.enquiries);
+    expect(
+      sourceOf(setEnquiries(inputs, { d90: 2 }), sources, 'enquiries'),
+    ).toBeNull();
+  });
+
+  it('fills only the empty fields from the documents', () => {
+    // Saved inputs typed by hand: a mobile, an empty pincode and CIBIL block.
+    let saved = normalizeInputs(SAVED_INPUTS_RESPONSE.inputs);
+    saved = setProfile(saved, { mobile: '9820012345', pincode: null });
+    saved = setCibil(saved, {
+      score: null,
+      enquiries: { d30: null, d60: null, d90: null, d120: null },
+    });
+    // The typed mobile and tenure are not empty: not filled.
+    expect(fillableFields(saved, sources)).toEqual([
+      'dob',
+      'pincode',
+      'current_address',
+      'permanent_address',
+      'score',
+      'enquiries',
+    ]);
+    const filled = fillFromDocuments(saved, sources);
+    // Typed values win.
+    expect(filled.profile).toMatchObject({
+      mobile: '9820012345',
+      name: 'Sneha Anil Kulkarni',
+      net_income: 98000,
+      pincode: '401202',
+      dob: '1992-02-14',
+    });
+    expect(filled.loan).toEqual(saved.loan);
+    expect(filled.cibil).toMatchObject({
+      score: 771,
+      enquiries: { d30: 0, d60: 1, d90: 1, d120: 2 },
+      source: 'credit_report',
+      report_date: '2026-09-20',
+    });
+    // Rows are offered, not added: the typed loans stay as they are.
+    expect(filled.cibil.tradelines).toEqual(saved.cibil.tradelines);
+    // Enquiries are taken whole: one typed window keeps all four as typed.
+    const one = setEnquiries(saved, { d90: 4 });
+    expect(fillFromDocuments(one, sources).cibil.enquiries).toEqual({
+      d30: null,
+      d60: null,
+      d90: 4,
+      d120: null,
+    });
+    expect(fillFromDocuments(filled, sources)).toEqual(filled);
+  });
+
+  it('tells a document row from an edited one and offers the missing ones', () => {
+    const [car] = inputs.cibil.tradelines;
+    expect(rowFromDocument(car)).toBe(true);
+    // BT / Obligate / Close is the user's choice: the data is still the report's.
+    expect(rowFromDocument({ ...car, action: 'bt' })).toBe(true);
+    expect(rowFromDocument({ ...car, emi: 8000 })).toBe(false);
+    expect(rowFromDocument(inputs.profile.other_income[1])).toBe(true);
+    expect(
+      rowFromDocument({
+        ...inputs.profile.other_income[1],
+        frequency: 'monthly',
+      }),
+    ).toBe(false);
+    // A draft holds every document row.
+    expect(
+      documentRowsMissing(
+        inputs.cibil.tradelines,
+        draft.documentRows.tradelines,
+      ),
+    ).toEqual([]);
+    // Typed loans: the report's three are offered; an added one is no more.
+    const typed = normalizeInputs(SAVED_INPUTS_RESPONSE.inputs);
+    const missing = documentRowsMissing(
+      typed.cibil.tradelines,
+      draft.documentRows.tradelines,
+    );
+    expect(missing.map((r) => r.lender)).toEqual([
+      'Mulshi Auto Finance Ltd (sample)',
+      'Sample Bank Card (sample)',
+      'Deccan Consumer Finance (sample)',
+    ]);
+    const added = addTradelineRow(typed, missing[0]);
+    expect(added.cibil.tradelines).toHaveLength(3);
+    expect(added.cibil.tradelines[2].key).not.toBe(missing[0].key);
+    expect(
+      documentRowsMissing(
+        added.cibil.tradelines,
+        draft.documentRows.tradelines,
+      ),
+    ).toHaveLength(2);
+    const income = addOtherIncomeRow(
+      emptyInputs(),
+      draft.documentRows.other_income[0],
+    );
+    expect(inputsRequestBody('x', income).profile.other_income).toEqual([
+      {
+        type: 'rented',
+        amount: 12000,
+        frequency: null,
+        agreement: 'registered',
+      },
+    ]);
+  });
+
+  it('puts the documents value in when asked (Use)', () => {
+    const typed = setProfile(inputs, { mobile: '9820012345' });
+    expect(
+      setFieldValue(typed, 'mobile', sources.mobile?.value).profile.mobile,
+    ).toBe('9000000101');
+    expect(
+      setFieldValue(emptyInputs(), 'tenure_months', 48).loan.tenure_months,
+    ).toBe(48);
+    expect(
+      setFieldValue(emptyInputs(), 'enquiries', sources.enquiries?.value).cibil
+        .enquiries,
+    ).toEqual({ d30: 0, d60: 1, d90: 1, d120: 2 });
+  });
+
+  it('reads the file check of a calculation', () => {
+    const result = parseCalculateResponse(NOT_READY_RESULT_RESPONSE, SNEHA);
+    expect(result.file_check).toMatchObject({
+      used: true,
+      verdict: 'NOT READY',
+      ready: false,
+    });
+    expect(result.file_check?.issues).toHaveLength(5);
+    expect(
+      parseLoginResponse({
+        ...LOGIN_NOTIFIED,
+        file_ready: false,
+        open_issues: 5,
+      }),
+    ).toMatchObject({
+      file_ready: false,
+      open_issues: 5,
+    });
   });
 });

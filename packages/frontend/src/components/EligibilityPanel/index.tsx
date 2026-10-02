@@ -21,18 +21,27 @@ import {
 } from 'lucide-react';
 import type {
   EligibilityInputs,
+  EligibilityResult,
   LenderEligibility,
+  LenderPolicy,
 } from '../../types/eligibility';
 import {
   newDraft,
   type EligibilityDraft,
   type EligibilityState,
 } from '../../hooks/useEligibility';
-import { countInvalidNumbers, inputsKey } from '../../lib/eligibility';
+import {
+  countInvalidNumbers,
+  inputsKey,
+  lenderTone,
+  stillNeeded,
+} from '../../lib/eligibility';
 import { maskPan } from '../../lib/fileCheck';
 import ProfileSection from './ProfileSection';
 import CibilSection from './CibilSection';
 import LendersSection from './LendersSection';
+import EmiCalculator, { emiStartOf } from './EmiCalculator';
+import BranchFinder from './BranchFinder';
 import { describeEligibilityError } from './errors';
 import { BUTTON_CLASS, PRIMARY_CLASS } from './fields';
 import { companyCheckRows, pincodeCheckRows, type PolicyCheck } from './checks';
@@ -43,6 +52,8 @@ const TABS: EligibilityTab[] = ['profile', 'cibil', 'lenders'];
 
 interface EligibilityPanelProps {
   state: EligibilityState;
+  /** The project: the Lenders tab shows the nearest branches with it. */
+  projectId?: string;
   /**
    * What the API calls the applicant: the verdict's PAN when it has one,
    * else the name (the same value finds the saved inputs again).
@@ -60,11 +71,30 @@ interface EligibilityPanelProps {
 }
 
 /**
+ * The lenders whose nearest branches the Lenders tab shows: the eligible ones
+ * of the result, the best first; before a calculation, every policy's lender.
+ */
+export function branchLendersOf(
+  result: EligibilityResult | null,
+  policies: LenderPolicy[] | undefined,
+): string[] {
+  if (!result) return (policies ?? []).map((lender) => lender.name);
+  const eligible = result.per_lender
+    .filter((row) => lenderTone(row.status) === 'eligible')
+    .map((row) => row.lender);
+  const best = result.best_lender;
+  return best && eligible.includes(best)
+    ? [best, ...eligible.filter((name) => name !== best)]
+    : eligible;
+}
+
+/**
  * Eligibility & lenders for one applicant: the client's three sheets as three
  * tabs (Profile, CIBIL, Lenders). Overlays the side panel like File Check.
  */
 export default function EligibilityPanel({
   state,
+  projectId,
   applicant,
   name,
   pan,
@@ -133,6 +163,10 @@ export default function EligibilityPanel({
   const busy = !draft.loaded || draft.loading;
   // Typed text that is not a number would be sent as blank: fix it first.
   const invalidNumbers = useMemo(() => countInvalidNumbers(inputs), [inputs]);
+  const branchLenders = useMemo(
+    () => branchLendersOf(draft.result, lenders?.lenders),
+    [draft.result, lenders],
+  );
 
   const onEdit = useCallback(
     (update: (i: EligibilityInputs) => EligibilityInputs) =>
@@ -454,7 +488,18 @@ export default function EligibilityPanel({
                 lenders={lenders?.lenders ?? []}
                 logins={draft.logins}
                 onLogin={handleLogin}
+                stillNeeded={stillNeeded(inputs, draft.prefillValues.fields)}
               />
+            )}
+            {tab === 'lenders' && projectId && (draft.result || lenders) && (
+              <BranchFinder
+                projectId={projectId}
+                pincode={inputs.profile.pincode ?? undefined}
+                lenders={branchLenders}
+              />
+            )}
+            {tab === 'lenders' && (
+              <EmiCalculator start={emiStartOf(draft.result)} />
             )}
           </>
         )}

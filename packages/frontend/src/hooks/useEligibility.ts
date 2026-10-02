@@ -1,18 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   CompanyCheck,
+  DocumentRows,
   EligibilityInputs,
   EligibilityLoginResponse,
   EligibilityPrefill,
   EligibilityResult,
+  FieldSources,
   LendersResponse,
   PincodeCheck,
   PrefillField,
 } from '../types/eligibility';
+import { apiErrorStatus } from '../lib/fileCheck';
 import {
   calculateRequestBody,
   emptyInputs,
   expiresAtIso,
+  fieldValue,
   inputsKey,
   inputsRequestBody,
   parseCalculateResponse,
@@ -35,8 +39,15 @@ export interface LenderLoginState {
   at: Date | null;
 }
 
-/** The documents' value of a pre-filled field (the badge shows while it is unchanged). */
-export type PrefillValues = Partial<Record<PrefillField, string | number>>;
+/**
+ * What the documents give the form: per field its value (the field shows its
+ * source while it holds that value) and the files it was read from, and the
+ * documents' rows (other income, loans), in the inputs or not.
+ */
+export interface PrefillValues {
+  fields?: FieldSources;
+  rows?: DocumentRows;
+}
 
 /** One applicant's eligibility inputs and results, as edited in this tab. */
 export interface EligibilityDraft {
@@ -95,25 +106,51 @@ export function newDraft(applicant: string): EligibilityDraft {
   };
 }
 
-/** The values a pre-fill gave the fields it names. */
+/**
+ * What the documents give the form: the API's `sources` and `document_rows`,
+ * else (an API without them) the values the draft took for the fields it
+ * names, without their files.
+ */
 export function prefillValuesOf(
   inputs: EligibilityInputs,
-  fields: PrefillField[],
+  fromDocuments: PrefillField[],
+  sources: FieldSources = {},
+  rows: DocumentRows = { other_income: [], tradelines: [] },
 ): PrefillValues {
-  const out: PrefillValues = {};
-  const value = (field: PrefillField): unknown => {
-    if (field === 'loan_amount') return inputs.loan.amount;
-    if (field === 'tenure_months') return inputs.loan.tenure_months;
-    if (field === 'tradelines') return undefined;
-    return inputs.profile[field];
-  };
-  for (const field of fields) {
-    const v = value(field);
-    if (typeof v === 'string' ? v !== '' : typeof v === 'number') {
-      out[field] = v as string | number;
+  const fields: FieldSources = { ...sources };
+  for (const field of fromDocuments) {
+    if (field === 'other_income' || field === 'tradelines' || fields[field]) {
+      continue;
     }
+    const value = fieldValue(inputs, field);
+    if (typeof value === 'string' ? value === '' : typeof value !== 'number') {
+      continue;
+    }
+    fields[field] = {
+      source: 'document',
+      value,
+      documents: [],
+      detail: null,
+      unverified: false,
+    };
   }
-  return out;
+  return { fields, rows };
+}
+
+/**
+ * A login with this lender is sent with confirm_not_ready: the result on
+ * screen is NOT READY, or the lender's last login was refused as NOT READY
+ * (428). The Lenders tab sends either only after the user confirmed the open
+ * issues it names.
+ */
+export function confirmsNotReady(
+  draft: EligibilityDraft | undefined,
+  lender: string,
+): boolean {
+  return (
+    draft?.result?.file_check?.ready === false ||
+    apiErrorStatus(draft?.logins[lender]?.error) === 428
+  );
 }
 
 // Request sequence numbers: an answer is used only while its number is the
@@ -235,7 +272,12 @@ export function useEligibility({ fetchApi, projectId }: UseEligibilityOptions) {
           loading: false,
           loaded: true,
           inputs: parsed.inputs,
-          prefillValues: prefillValuesOf(parsed.inputs, parsed.fromDocuments),
+          prefillValues: prefillValuesOf(
+            parsed.inputs,
+            parsed.fromDocuments,
+            parsed.sources,
+            parsed.documentRows,
+          ),
           prefill: parsed.prefill,
           notes: parsed.notes,
           savedKey: inputsKey(parsed.inputs),
@@ -350,14 +392,22 @@ export function useEligibility({ fetchApi, projectId }: UseEligibilityOptions) {
   /**
    * POST .../login {applicant, lender}. The backend recomputes from the SAVED
    * inputs, so `unsavedInputs` (the inputs on screen when they are not saved)
-   * are saved first. `lender` is the lender id (or name).
+   * are saved first. `lender` is the lender id (or name). The backend refuses
+   * a NOT READY file (428) unless confirm_not_ready is sent: it is sent when
+   * the result on screen is NOT READY or this lender's last login was refused
+   * as NOT READY, because the Lenders tab logs such a file in only after the
+   * user confirmed its open issues; `confirmNotReady` overrides that.
    */
   const login = useCallback(
     async (
       applicant: string,
       lender: { id: string | null; name: string },
       unsavedInputs?: EligibilityInputs,
+      confirmNotReady?: boolean,
     ): Promise<LoginOutcome> => {
+      const confirm =
+        confirmNotReady ??
+        confirmsNotReady(draftsRef.current[applicant], lender.name);
       const key = seqKey('login', applicant, lender.name);
       const n = nextSeq(seqs.current, key);
       const current = () => isCurrent(seqs.current, key, n);
@@ -381,7 +431,11 @@ export function useEligibility({ fetchApi, projectId }: UseEligibilityOptions) {
         const raw = await fetchApi<unknown>(`${base}/login`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ applicant, lender: lender.id || lender.name }),
+          body: JSON.stringify({
+            applicant,
+            lender: lender.id || lender.name,
+            ...(confirm ? { confirm_not_ready: true } : {}),
+          }),
         });
         if (!current()) return { kind: 'ignored' };
         const response = parseLoginResponse(raw);

@@ -378,3 +378,593 @@ export const LENDERS_RESPONSE = {
     },
   ],
 };
+
+// The documents' rows of FULL_DRAFT_RESPONSE: in a draft, the rows of the
+// inputs are the documents' rows (row_sources = document_rows).
+const FULL_DRAFT_ROWS = {
+  other_income: [
+    {
+      source: 'document',
+      value: {
+        type: 'rented',
+        amount: 12000.0,
+        frequency: null,
+        agreement: 'registered',
+      },
+      documents: [
+        {
+          document_id: 'r-08',
+          file: '08_rent_agreement_flat_12.pdf',
+          page: null,
+          doc_type: 'rent_agreement',
+        },
+      ],
+      detail: null,
+      unverified: false,
+    },
+    {
+      source: 'document',
+      value: {
+        type: 'bonus',
+        amount: 60000.0,
+        frequency: 'yearly',
+        agreement: null,
+      },
+      documents: [
+        {
+          document_id: 'r-05',
+          file: '05_salary_slip_2026-08.pdf',
+          page: null,
+          doc_type: 'salary_slip',
+        },
+      ],
+      detail:
+        'Bonus on 1 of 3 salary slips: counted as yearly (the lowest); change how often it is paid if it is more often',
+      unverified: false,
+    },
+    {
+      source: 'document',
+      value: {
+        type: 'incentive',
+        amount: 5000.0,
+        frequency: 'monthly',
+        agreement: null,
+      },
+      documents: [
+        {
+          document_id: 'r-03',
+          file: '03_salary_slip_2026-06.pdf',
+          page: null,
+          doc_type: 'salary_slip',
+        },
+        {
+          document_id: 'r-04',
+          file: '04_salary_slip_2026-07.pdf',
+          page: null,
+          doc_type: 'salary_slip',
+        },
+        {
+          document_id: 'r-05',
+          file: '05_salary_slip_2026-08.pdf',
+          page: null,
+          doc_type: 'salary_slip',
+        },
+      ],
+      detail:
+        'Incentive on each of the 3 salary slips: counted monthly (the lowest month)',
+      unverified: false,
+    },
+  ],
+  tradelines: [
+    {
+      source: 'document',
+      value: {
+        loan_type: 'car',
+        lender: 'Mulshi Auto Finance Ltd (sample)',
+        sanction_amount: 450000.0,
+        outstanding: 176000.0,
+        emi: 8200.0,
+        status: 'active',
+        account_number: 'XXXX4410',
+        overdue: 0.0,
+        emis_paid: 30,
+        emis_pending: 18,
+        open_date: '2024-03-05',
+        last_payment_date: '2026-09-05',
+        action: 'obligate',
+        source: 'credit_report',
+      },
+      documents: [
+        {
+          document_id: 'r-09',
+          file: '09_sample_credit_report.pdf',
+          page: 2,
+          doc_type: 'credit_report',
+        },
+      ],
+      detail: null,
+      unverified: false,
+    },
+    {
+      source: 'document',
+      value: {
+        loan_type: 'credit_card',
+        lender: 'Sample Bank Card (sample)',
+        sanction_amount: 150000.0,
+        outstanding: 18000.0,
+        emi: null,
+        status: 'active',
+        account_number: 'XXXX9921',
+        overdue: null,
+        emis_paid: null,
+        emis_pending: null,
+        open_date: null,
+        last_payment_date: null,
+        action: 'obligate',
+        source: 'credit_report',
+      },
+      documents: [
+        {
+          document_id: 'r-09',
+          file: '09_sample_credit_report.pdf',
+          page: 2,
+          doc_type: 'credit_report',
+        },
+      ],
+      detail: null,
+      unverified: false,
+    },
+    {
+      source: 'document',
+      value: {
+        loan_type: 'consumer',
+        lender: 'Deccan Consumer Finance (sample)',
+        sanction_amount: 45000.0,
+        outstanding: 0.0,
+        emi: 0.0,
+        status: 'closed',
+        account_number: 'XXXX1188',
+        overdue: null,
+        emis_paid: null,
+        emis_pending: null,
+        open_date: null,
+        last_payment_date: null,
+        action: 'close',
+        source: 'credit_report',
+      },
+      documents: [
+        {
+          document_id: 'r-09',
+          file: '09_sample_credit_report.pdf',
+          page: 3,
+          doc_type: 'credit_report',
+        },
+      ],
+      detail: null,
+      unverified: false,
+    },
+  ],
+};
+
+/**
+ * GET .../eligibility/inputs for a synthetic applicant whose file holds every
+ * document the CIBIL page reads (the backend's answer in
+ * tests/test_eligibility_api.py TestDocumentDraft): each field with its source
+ * (file and page), the credit report's CAM block, the documents' rows and
+ * what is still needed.
+ */
+export const FULL_DRAFT_RESPONSE = {
+  applicant: 'BQXPD4821K',
+  saved: false,
+  inputs: {
+    profile: {
+      pan: 'XXXXXX821K',
+      name: 'Rahul Vijay Deshmukh',
+      mobile: '9000000101',
+      dob: '1992-02-14',
+      house_ownership: 'rented',
+      pincode: '401202',
+      current_address:
+        'Flat 12, Sample Residency, Ambadi Road, Vasai West, Palghar 401202',
+      permanent_address:
+        'Flat 12, Sample Residency, Ambadi Road, Vasai West, Palghar 401202',
+      company: 'Konkan Softworks Pvt Ltd',
+      employment_type: 'private_limited',
+      net_income: 82500.0,
+      other_income: [
+        {
+          type: 'rented',
+          amount: 12000.0,
+          frequency: null,
+          agreement: 'registered',
+        },
+        {
+          type: 'bonus',
+          amount: 60000.0,
+          frequency: 'yearly',
+          agreement: null,
+        },
+        {
+          type: 'incentive',
+          amount: 5000.0,
+          frequency: 'monthly',
+          agreement: null,
+        },
+      ],
+    },
+    cibil: {
+      score: 771,
+      enquiries: {
+        d30: 0,
+        d60: 1,
+        d90: 1,
+        d120: 2,
+      },
+      tradelines: [
+        {
+          loan_type: 'car',
+          lender: 'Mulshi Auto Finance Ltd (sample)',
+          sanction_amount: 450000.0,
+          outstanding: 176000.0,
+          emi: 8200.0,
+          status: 'active',
+          account_number: 'XXXX4410',
+          overdue: 0.0,
+          emis_paid: 30,
+          emis_pending: 18,
+          open_date: '2024-03-05',
+          last_payment_date: '2026-09-05',
+          action: 'obligate',
+          source: 'credit_report',
+        },
+        {
+          loan_type: 'credit_card',
+          lender: 'Sample Bank Card (sample)',
+          sanction_amount: 150000.0,
+          outstanding: 18000.0,
+          emi: null,
+          status: 'active',
+          account_number: 'XXXX9921',
+          overdue: null,
+          emis_paid: null,
+          emis_pending: null,
+          open_date: null,
+          last_payment_date: null,
+          action: 'obligate',
+          source: 'credit_report',
+        },
+        {
+          loan_type: 'consumer',
+          lender: 'Deccan Consumer Finance (sample)',
+          sanction_amount: 45000.0,
+          outstanding: 0.0,
+          emi: 0.0,
+          status: 'closed',
+          account_number: 'XXXX1188',
+          overdue: null,
+          emis_paid: null,
+          emis_pending: null,
+          open_date: null,
+          last_payment_date: null,
+          action: 'close',
+          source: 'credit_report',
+        },
+      ],
+      source: 'credit_report',
+      report_date: '2026-09-20',
+    },
+    loan: {
+      amount: null,
+      tenure_months: 48,
+    },
+  },
+  from_documents: [
+    'name',
+    'pan',
+    'mobile',
+    'dob',
+    'house_ownership',
+    'pincode',
+    'current_address',
+    'permanent_address',
+    'company',
+    'employment_type',
+    'net_income',
+    'other_income',
+    'tenure_months',
+    'score',
+    'enquiries',
+    'tradelines',
+  ],
+  prefill: {
+    available: true,
+    detail: 'Pre-filled from the file check (9 documents)',
+    applicant_name: 'Rahul Vijay Deshmukh',
+    pan_masked: 'XXXXXX821K',
+    employer: 'Konkan Softworks Pvt Ltd',
+    verified_net_income: 82500.0,
+    income_source: 'verified: salary slips, median net pay',
+    dob: '1992-02-14',
+    suggested_tradelines: 0,
+    credit_report: '09_sample_credit_report.pdf',
+    documents: 9,
+  },
+  sources: {
+    name: {
+      source: 'document',
+      value: 'Rahul Vijay Deshmukh',
+      documents: [
+        {
+          document_id: 'r-02',
+          file: '02_identity_details_self_declaration.pdf',
+          page: null,
+          doc_type: 'identity_details',
+        },
+      ],
+      detail: null,
+      unverified: false,
+    },
+    pan: {
+      source: 'document',
+      value: 'XXXXXX821K',
+      documents: [
+        {
+          document_id: 'r-02',
+          file: '02_identity_details_self_declaration.pdf',
+          page: null,
+          doc_type: 'identity_details',
+        },
+      ],
+      detail: null,
+      unverified: false,
+    },
+    mobile: {
+      source: 'document',
+      value: '9000000101',
+      documents: [
+        {
+          document_id: 'r-01',
+          file: '01_loan_application_form.pdf',
+          page: 1,
+          doc_type: 'loan_application',
+        },
+      ],
+      detail: null,
+      unverified: false,
+    },
+    house_ownership: {
+      source: 'document',
+      value: 'rented',
+      documents: [
+        {
+          document_id: 'r-01',
+          file: '01_loan_application_form.pdf',
+          page: 1,
+          doc_type: 'loan_application',
+        },
+      ],
+      detail: null,
+      unverified: false,
+    },
+    dob: {
+      source: 'document',
+      value: '1992-02-14',
+      documents: [
+        {
+          document_id: 'r-01',
+          file: '01_loan_application_form.pdf',
+          page: 1,
+          doc_type: 'loan_application',
+        },
+      ],
+      detail: null,
+      unverified: false,
+    },
+    current_address: {
+      source: 'document',
+      value:
+        'Flat 12, Sample Residency, Ambadi Road, Vasai West, Palghar 401202',
+      documents: [
+        {
+          document_id: 'r-01',
+          file: '01_loan_application_form.pdf',
+          page: null,
+          doc_type: 'loan_application',
+        },
+      ],
+      detail: null,
+      unverified: false,
+    },
+    pincode: {
+      source: 'document',
+      value: '401202',
+      documents: [
+        {
+          document_id: 'r-01',
+          file: '01_loan_application_form.pdf',
+          page: 1,
+          doc_type: 'loan_application',
+        },
+      ],
+      detail: null,
+      unverified: false,
+    },
+    permanent_address: {
+      source: 'document',
+      value:
+        'Flat 12, Sample Residency, Ambadi Road, Vasai West, Palghar 401202',
+      documents: [
+        {
+          document_id: 'r-01',
+          file: '01_loan_application_form.pdf',
+          page: null,
+          doc_type: 'loan_application',
+        },
+      ],
+      detail: 'the form says: same as the current address',
+      unverified: false,
+    },
+    company: {
+      source: 'document',
+      value: 'Konkan Softworks Pvt Ltd',
+      documents: [
+        {
+          document_id: 'r-01',
+          file: '01_loan_application_form.pdf',
+          page: 1,
+          doc_type: 'loan_application',
+        },
+      ],
+      detail: null,
+      unverified: false,
+    },
+    employment_type: {
+      source: 'document',
+      value: 'private_limited',
+      documents: [
+        {
+          document_id: 'r-01',
+          file: '01_loan_application_form.pdf',
+          page: null,
+          doc_type: 'loan_application',
+        },
+      ],
+      detail: null,
+      unverified: false,
+    },
+    net_income: {
+      source: 'document',
+      value: 82500.0,
+      documents: [
+        {
+          document_id: 'r-03',
+          file: '03_salary_slip_2026-06.pdf',
+          page: null,
+          doc_type: 'salary_slip',
+        },
+        {
+          document_id: 'r-04',
+          file: '04_salary_slip_2026-07.pdf',
+          page: null,
+          doc_type: 'salary_slip',
+        },
+        {
+          document_id: 'r-05',
+          file: '05_salary_slip_2026-08.pdf',
+          page: null,
+          doc_type: 'salary_slip',
+        },
+      ],
+      detail: 'verified: salary slips, median net pay',
+      unverified: false,
+    },
+    tenure_months: {
+      source: 'document',
+      value: 48,
+      documents: [
+        {
+          document_id: 'r-01',
+          file: '01_loan_application_form.pdf',
+          page: null,
+          doc_type: 'loan_application',
+        },
+      ],
+      detail: null,
+      unverified: false,
+    },
+    score: {
+      source: 'document',
+      value: 771,
+      documents: [
+        {
+          document_id: 'r-09',
+          file: '09_sample_credit_report.pdf',
+          page: 1,
+          doc_type: 'credit_report',
+        },
+      ],
+      detail: null,
+      unverified: false,
+    },
+    enquiries: {
+      source: 'document',
+      value: {
+        d30: 0,
+        d60: 1,
+        d90: 1,
+        d120: 2,
+      },
+      documents: [
+        {
+          document_id: 'r-09',
+          file: '09_sample_credit_report.pdf',
+          page: 1,
+          doc_type: 'credit_report',
+        },
+      ],
+      detail: null,
+      unverified: false,
+    },
+    report: {
+      source: 'document',
+      value: '2026-09-20',
+      documents: [
+        {
+          document_id: 'r-09',
+          file: '09_sample_credit_report.pdf',
+          page: 1,
+          doc_type: 'credit_report',
+        },
+      ],
+      detail: 'CIBIL report',
+      unverified: false,
+    },
+  },
+  still_needed: [
+    {
+      field: 'loan_amount',
+      label: 'Loan amount',
+      required: false,
+      from_documents: false,
+    },
+    {
+      field: 'tradelines.2.emi',
+      label: 'EMI of loan 2 (Sample Bank Card (sample))',
+      required: true,
+      from_documents: false,
+    },
+  ],
+  created_at: null,
+  updated_at: null,
+  expires_at: null,
+  notes: [
+    '07_form16_itr_summary_FY2025-26.pdf shows other income of ₹24,000 a year: add it as an income row if a lender counts it',
+    'CIBIL block read from the credit report 09_sample_credit_report.pdf (CIBIL, report of 2026-09-20): active loans are marked Obligate and closed ones Close',
+    '1 loan EMI(s) of the bank statement are on the credit report: not added twice',
+  ],
+  label: 'sample policy — replace with your lender grid',
+  row_sources: FULL_DRAFT_ROWS,
+  document_rows: FULL_DRAFT_ROWS,
+};
+
+/** The calculation's file check of a NOT READY file (the demo's Sneha: 5 open issues). */
+export const NOT_READY_FILE_CHECK = {
+  used: true,
+  detail: 'verified figures from the file check',
+  applicant: 'Sneha Anil Kulkarni',
+  verdict: 'NOT READY',
+  ready: false,
+  issues: [
+    "MISSING – Last 3 months' salary slips: missing Jun 2026 slip(s); found: Jul 2026 (03_salary_slip_2026-07_jul.pdf), Aug 2026 (04_salary_slip_2026-08_aug.pdf)",
+    "MISSING – Last 6 months' bank statement: covers 3 of 6 months (Jun 2026 – Aug 2026); missing Mar 2026, Apr 2026, May 2026 [05_bank_statement_2026-06_to_2026-08.pdf]",
+    'MISSING – Form-16 / ITR (latest FY): not found in the file',
+    'MISMATCH – Declared net salary vs salary slips: declared ₹65,000 [01_loan_application_form.pdf] vs slip net ₹58,000 [03_salary_slip_2026-07_jul.pdf, 04_salary_slip_2026-08_aug.pdf] – 10.8% apart; declared amount equals slip GROSS ₹65,000 → gross appears declared as net',
+    'MISMATCH – Declared net salary vs bank credits: declared ₹65,000 [01_loan_application_form.pdf] vs bank salary credits ₹58,000 (3 credits on 2026-06-01, 2026-07-01, 2026-08-01) [05_bank_statement_2026-06_to_2026-08.pdf] – ₹7,000/month, 10.8% apart',
+  ],
+};
+
+/** The worked example for a file the file check finds NOT READY. */
+export const NOT_READY_RESULT_RESPONSE = {
+  ...WORKED_EXAMPLE_RESPONSE,
+  file_check: NOT_READY_FILE_CHECK,
+};

@@ -4,13 +4,18 @@
 // requests, check the responses and format the backend's numbers with Indian
 // digit grouping.
 import type {
+  CheckSource,
   CibilEnquiries,
   CibilSource,
+  CibilSources,
   CompanyCategory,
   CompanyCheck,
   CountedObligation,
+  DocumentRef,
+  DocumentRows,
   EligibilityCalculateRequest,
   EligibilityCibil,
+  EligibilityFileCheck,
   EligibilityIncome,
   EligibilityInputs,
   EligibilityInputsRequest,
@@ -21,6 +26,8 @@ import type {
   EligibilityProfile,
   EligibilityResult,
   EmploymentType,
+  FieldSource,
+  FieldSources,
   HouseOwnership,
   IncomeFrequency,
   LenderEligibility,
@@ -34,6 +41,8 @@ import type {
   PincodeCheck,
   PrefillField,
   RentAgreement,
+  SourcedField,
+  StillNeeded,
   Tradeline,
   TradelineAction,
   TradelineSource,
@@ -54,7 +63,12 @@ export const EMPLOYMENT_TYPES: readonly EmploymentType[] = [
   'public_limited',
 ];
 
-export const HOUSE_OWNERSHIP: readonly HouseOwnership[] = ['owned', 'rented'];
+export const HOUSE_OWNERSHIP: readonly HouseOwnership[] = [
+  'owned',
+  'rented',
+  'parental',
+  'company_provided',
+];
 
 export const OTHER_INCOME_TYPES: readonly OtherIncomeType[] = [
   'rented',
@@ -105,10 +119,15 @@ export const TRADELINE_STATUSES: readonly TradelineStatus[] = [
 const TRADELINE_SOURCES: readonly TradelineSource[] = [
   'manual',
   'bureau',
+  'credit_report',
   'bank_statement',
 ];
 
-const CIBIL_SOURCES: readonly CibilSource[] = ['manual', 'bureau'];
+const CIBIL_SOURCES: readonly CibilSource[] = [
+  'manual',
+  'bureau',
+  'credit_report',
+];
 
 // The API's limits (Field max_length / le), so a row is not refused.
 export const MAX_OTHER_INCOME = 10;
@@ -407,15 +426,23 @@ export function normalizeInputs(raw: unknown): EligibilityInputs {
   };
 }
 
-const PREFILL_FIELDS: readonly PrefillField[] = [
+export const PREFILL_FIELDS: readonly PrefillField[] = [
   'name',
   'pan',
+  'mobile',
+  'dob',
+  'house_ownership',
+  'pincode',
+  'current_address',
+  'permanent_address',
   'company',
   'employment_type',
   'net_income',
-  'dob',
+  'other_income',
   'loan_amount',
   'tenure_months',
+  'score',
+  'enquiries',
   'tradelines',
 ];
 
@@ -427,8 +454,87 @@ function prefill(raw: unknown): EligibilityPrefill | null {
     detail: text(o.detail),
     income_source: text(o.income_source),
     suggested_tradelines: finite(o.suggested_tradelines) ?? 0,
+    credit_report: text(o.credit_report),
     documents: finite(o.documents) ?? 0,
   };
+}
+
+/** The fields of GET .../inputs `sources` that hold one value each. */
+export const SOURCED_FIELDS: readonly SourcedField[] = PREFILL_FIELDS.filter(
+  (f): f is SourcedField => f !== 'other_income' && f !== 'tradelines',
+);
+
+function documentRef(raw: unknown): DocumentRef | null {
+  const o = obj(raw);
+  const file = text(o.file);
+  if (!file) return null;
+  const page = finite(o.page);
+  return {
+    document_id: text(o.document_id),
+    file,
+    page: page !== null && Number.isInteger(page) && page > 0 ? page : null,
+    doc_type: text(o.doc_type),
+  };
+}
+
+/** One entry of GET .../inputs `sources` (or a row source); null when it is not one. */
+export function parseFieldSource(raw: unknown): FieldSource | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = obj(raw);
+  if (o.source !== 'document' && o.source !== 'table') return null;
+  return {
+    source: o.source,
+    value: o.value ?? null,
+    documents: Array.isArray(o.documents)
+      ? o.documents.map(documentRef).filter((d): d is DocumentRef => d !== null)
+      : [],
+    detail: text(o.detail),
+    unverified: o.unverified === true,
+  };
+}
+
+function rowSources(raw: unknown): (FieldSource | null)[] {
+  return Array.isArray(raw) ? raw.map(parseFieldSource) : [];
+}
+
+/** `document_rows`: each source's value as a row of the form, with its `document`. */
+function documentRows<T extends OtherIncome | Tradeline>(
+  raw: unknown,
+  normalize: (row: unknown) => T | null,
+): T[] {
+  return rowSources(raw).flatMap((source) => {
+    const row = source ? normalize(source.value) : null;
+    return row && source ? [{ ...row, document: source }] : [];
+  });
+}
+
+const STILL_NEEDED_TABS: Record<string, StillNeeded['tab']> = {
+  score: 'cibil',
+  enquiries: 'cibil',
+  tradelines: 'cibil',
+};
+
+/** GET .../inputs `still_needed` (the API's list for the inputs it returned). */
+function parseStillNeeded(raw: unknown): StillNeeded[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((item): StillNeeded[] => {
+    const o = obj(item);
+    const field = text(o.field);
+    if (!field) return [];
+    const [head, n] = field.split('.');
+    const number = Number(n);
+    return [
+      {
+        field,
+        required: o.required === true,
+        fromDocuments: o.from_documents === true,
+        tab: STILL_NEEDED_TABS[head] ?? 'profile',
+        ...(head === 'tradelines' && Number.isInteger(number)
+          ? { loan: { number, lender: null, loanType: null } }
+          : {}),
+      },
+    ];
+  });
 }
 
 /** expires_at as ISO: an ISO string or epoch seconds (the DynamoDB TTL). */
@@ -440,26 +546,407 @@ export function expiresAtIso(value: unknown): string | null {
   return s && !Number.isNaN(Date.parse(s)) ? s : null;
 }
 
-/** GET / PUT .../inputs: the inputs to edit, and which fields the documents filled. */
+/**
+ * GET / PUT .../inputs: the inputs to edit, which fields the documents filled
+ * and what the documents give each field. Each row of the inputs gets its
+ * `document` (row_sources) and the CIBIL block its `sources` (never sent).
+ */
 export function parseInputsResponse(
   raw: unknown,
   applicant: string,
 ): EligibilityInputsResponse {
   const o = obj(raw);
-  const inputs = o.inputs && typeof o.inputs === 'object' ? o.inputs : null;
-  if (!inputs || typeof o.saved !== 'boolean') {
+  const raws = o.inputs && typeof o.inputs === 'object' ? o.inputs : null;
+  if (!raws || typeof o.saved !== 'boolean') {
     throw new Error('unexpected response from the eligibility inputs API');
   }
   const fields = strings(o.from_documents);
+  const sources: FieldSources = {};
+  for (const [key, value] of Object.entries(obj(o.sources))) {
+    const source = parseFieldSource(value);
+    if (
+      source &&
+      (key === 'report' || SOURCED_FIELDS.includes(key as SourcedField))
+    ) {
+      sources[key as SourcedField | 'report'] = source;
+    }
+  }
+  const rows = obj(o.document_rows);
+  const documents: DocumentRows = {
+    other_income: documentRows(rows.other_income, normalizeOtherIncome),
+    tradelines: documentRows(rows.tradelines, normalizeTradeline),
+  };
+
+  // Each row of the inputs gets the document row it is (null: typed by hand).
+  const inputs = normalizeInputs(raws);
+  const row = obj(o.row_sources);
+  const incomeSources = rowSources(row.other_income);
+  const tradelineSources = rowSources(row.tradelines);
+  inputs.profile.other_income = inputs.profile.other_income.map((r, i) =>
+    incomeSources[i] ? { ...r, document: incomeSources[i] } : r,
+  );
+  inputs.cibil.tradelines = inputs.cibil.tradelines.map((r, i) =>
+    tradelineSources[i] ? { ...r, document: tradelineSources[i] } : r,
+  );
+  const cibil: CibilSources = {};
+  for (const key of ['score', 'enquiries', 'report'] as const) {
+    if (sources[key]) cibil[key] = sources[key];
+  }
+  if (documents.tradelines.length > 0) cibil.tradelines = documents.tradelines;
+  if (Object.keys(cibil).length > 0) inputs.cibil.sources = cibil;
   return {
     applicant: text(o.applicant) ?? applicant,
-    inputs: normalizeInputs(inputs),
+    inputs,
     fromDocuments: PREFILL_FIELDS.filter((f) => fields.includes(f)),
     prefill: prefill(o.prefill),
+    sources,
+    documentRows: documents,
+    stillNeeded: parseStillNeeded(o.still_needed),
     saved: o.saved,
     expiresAt: expiresAtIso(o.expires_at),
     notes: strings(o.notes),
   };
+}
+
+// ------------------------------------------------------------------ document values
+// What the documents give a field is shown with it while the field holds that
+// value; typed values always win (nothing here overwrites one).
+
+/** A field's value in the inputs (enquiries: the four windows). */
+export function fieldValue(
+  inputs: EligibilityInputs,
+  field: SourcedField,
+): unknown {
+  if (field === 'loan_amount') return inputs.loan.amount;
+  if (field === 'tenure_months') return inputs.loan.tenure_months;
+  if (field === 'score') return inputs.cibil.score;
+  if (field === 'enquiries') return inputs.cibil.enquiries;
+  return inputs.profile[field];
+}
+
+function present(value: unknown): boolean {
+  if (typeof value === 'string') return value.trim() !== '';
+  if (typeof value === 'number') return Number.isFinite(value);
+  return value !== null && value !== undefined;
+}
+
+/** Text as compared: spacing collapsed, case ignored. */
+function folded(value: string): string {
+  return value.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function sameValue(field: SourcedField, a: unknown, b: unknown): boolean {
+  if (!present(a) || !present(b)) return false;
+  if (field === 'enquiries') {
+    const x = obj(a);
+    const y = obj(b);
+    return (['d30', 'd60', 'd90', 'd120'] as const).every(
+      (w) => (finite(x[w]) ?? null) === (finite(y[w]) ?? null),
+    );
+  }
+  if (typeof a === 'number' || typeof b === 'number') return a === b;
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  if (field === 'pan') {
+    const x = a.replace(/\s/g, '').toUpperCase();
+    const y = b.replace(/\s/g, '').toUpperCase();
+    // A masked PAN is the same PAN when its last 4 are.
+    return isMaskedPan(x) || isMaskedPan(y)
+      ? x.slice(-4) === y.slice(-4)
+      : x === y;
+  }
+  if (field === 'mobile') {
+    const digits = (s: string) => s.replace(/\D/g, '').slice(-10);
+    return digits(a) === digits(b);
+  }
+  return folded(a) === folded(b);
+}
+
+/** `source` while `value` is the documents' value; null once typed over (or none). */
+export function sourceFor(
+  field: SourcedField,
+  value: unknown,
+  source: FieldSource | null | undefined,
+): FieldSource | null {
+  return source && sameValue(field, value, source.value) ? source : null;
+}
+
+/** `source` when the documents give a value other than `value` (an empty one too), else null. */
+export function otherSourceFor(
+  field: SourcedField,
+  value: unknown,
+  source: FieldSource | null | undefined,
+): FieldSource | null {
+  if (!source || !present(source.value)) return null;
+  return sameValue(field, value, source.value) ? null : source;
+}
+
+/** The field's source while it holds the documents' value; null once typed over (or none). */
+export function sourceOf(
+  inputs: EligibilityInputs,
+  sources: FieldSources | null | undefined,
+  field: SourcedField,
+): FieldSource | null {
+  return sourceFor(field, fieldValue(inputs, field), sources?.[field]);
+}
+
+/** The documents' value of a field the inputs hold something else in (else null). */
+export function otherDocumentValue(
+  inputs: EligibilityInputs,
+  sources: FieldSources | null | undefined,
+  field: SourcedField,
+): FieldSource | null {
+  return otherSourceFor(field, fieldValue(inputs, field), sources?.[field]);
+}
+
+/** The CIBIL block alone as inputs, for the helpers that take inputs. */
+export function cibilInputs(cibil: EligibilityCibil): EligibilityInputs {
+  return {
+    profile: emptyProfile(),
+    cibil,
+    loan: { amount: null, tenure_months: null },
+  };
+}
+
+/** The CIBIL block's sources as FieldSources (score, enquiries, report). */
+export function cibilFieldSources(cibil: EligibilityCibil): FieldSources {
+  const { score, enquiries, report } = cibil.sources ?? {};
+  return {
+    ...(score ? { score } : {}),
+    ...(enquiries ? { enquiries } : {}),
+    ...(report ? { report } : {}),
+  };
+}
+
+const TRADELINE_DATA = [
+  'loan_type',
+  'lender',
+  'sanction_amount',
+  'outstanding',
+  'emi',
+  'status',
+  'account_number',
+  'overdue',
+  'emis_paid',
+  'emis_pending',
+  'open_date',
+  'last_payment_date',
+] as const;
+
+/**
+ * A row still holds what its document gives (a tradeline's BT / Obligate /
+ * Close is the user's choice, not the document's).
+ */
+export function rowFromDocument(row: OtherIncome | Tradeline): boolean {
+  const value = row.document ? obj(row.document.value) : null;
+  if (!value) return false;
+  const same = (a: unknown, b: unknown) =>
+    (a ?? null) === (b ?? null) ||
+    (typeof a === 'string' && typeof b === 'string' && folded(a) === folded(b));
+  if ('type' in row) {
+    return (['type', 'amount', 'frequency', 'agreement'] as const).every((k) =>
+      same(row[k], value[k]),
+    );
+  }
+  return TRADELINE_DATA.every((k) => same(row[k], value[k]));
+}
+
+function sourceKey(source: FieldSource): string {
+  return JSON.stringify([
+    source.value,
+    source.documents.map((d) => [d.document_id, d.file, d.page]),
+  ]);
+}
+
+/** The documents' rows that no row of the inputs came from (saved inputs typed otherwise). */
+export function documentRowsMissing<T extends OtherIncome | Tradeline>(
+  rows: readonly T[],
+  documentRowsOf: readonly T[] | null | undefined,
+): T[] {
+  const used = new Set(
+    rows.flatMap((r) => (r.document ? [sourceKey(r.document)] : [])),
+  );
+  return (documentRowsOf ?? []).filter(
+    (r) => r.document && !used.has(sourceKey(r.document)),
+  );
+}
+
+/** A document's row as a new row of the inputs (its own key; its document kept). */
+export function rowOfDocument<T extends OtherIncome | Tradeline>(row: T): T {
+  return { ...row, key: rowKey() };
+}
+
+export function addOtherIncomeRow(
+  inputs: EligibilityInputs,
+  row: OtherIncome,
+): EligibilityInputs {
+  if (inputs.profile.other_income.length >= MAX_OTHER_INCOME) return inputs;
+  return setProfile(inputs, {
+    other_income: [...inputs.profile.other_income, rowOfDocument(row)],
+  });
+}
+
+export function addTradelineRow(
+  inputs: EligibilityInputs,
+  row: Tradeline,
+): EligibilityInputs {
+  if (inputs.cibil.tradelines.length >= MAX_TRADELINES) return inputs;
+  return setCibil(inputs, {
+    tradelines: [...inputs.cibil.tradelines, rowOfDocument(row)],
+  });
+}
+
+/** The value of one field set (the documents' value for "Use" and the fill below). */
+export function setFieldValue(
+  inputs: EligibilityInputs,
+  field: SourcedField,
+  value: unknown,
+): EligibilityInputs {
+  if (field === 'loan_amount' || field === 'tenure_months') {
+    const n = finite(value);
+    return setLoan(
+      inputs,
+      field === 'loan_amount' ? { amount: n } : { tenure_months: n },
+    );
+  }
+  if (field === 'score') return setCibil(inputs, { score: finite(value) });
+  if (field === 'enquiries') {
+    const e = obj(value);
+    return setCibil(inputs, {
+      enquiries: {
+        d30: finite(e.d30),
+        d60: finite(e.d60),
+        d90: finite(e.d90),
+        d120: finite(e.d120),
+      },
+    });
+  }
+  return setProfile(inputs, {
+    [field]: field === 'net_income' ? finite(value) : value,
+  } as Partial<EligibilityProfile>);
+}
+
+function blank(inputs: EligibilityInputs, field: SourcedField): boolean {
+  if (field === 'enquiries') {
+    // Taken whole: the windows add up only as the report gives them.
+    return Object.values(inputs.cibil.enquiries).every((v) => !present(v));
+  }
+  return !present(fieldValue(inputs, field));
+}
+
+/** The fields that are empty and a document fills ("Fill from the documents"). */
+export function fillableFields(
+  inputs: EligibilityInputs,
+  sources: FieldSources | null | undefined,
+): SourcedField[] {
+  return SOURCED_FIELDS.filter(
+    (f) => present(sources?.[f]?.value) && blank(inputs, f),
+  );
+}
+
+/**
+ * Every empty field a document fills, filled; typed values are kept. The CIBIL
+ * block becomes the credit report's once its score or enquiries come from it.
+ */
+export function fillFromDocuments(
+  inputs: EligibilityInputs,
+  sources: FieldSources | null | undefined,
+): EligibilityInputs {
+  let next = inputs;
+  const fields = fillableFields(inputs, sources);
+  for (const field of fields) {
+    next = setFieldValue(next, field, sources?.[field]?.value);
+  }
+  const report = sources?.report;
+  if (
+    report &&
+    (fields.includes('score') || fields.includes('enquiries')) &&
+    (next.cibil.source ?? 'manual') === 'manual'
+  ) {
+    const date = typeof report.value === 'string' ? report.value : null;
+    next = setCibil(next, {
+      source: 'credit_report',
+      ...(date ? { report_date: date } : {}),
+    });
+  }
+  return next;
+}
+
+// "Still needed before Check eligibility", in the order of the sheet:
+// app/routers/eligibility.py NEEDED_FIELDS (required: every lender's check needs it).
+const NEEDED_FIELDS: readonly {
+  field: string;
+  required: boolean;
+  tab: StillNeeded['tab'];
+}[] = [
+  { field: 'pan', required: false, tab: 'profile' },
+  { field: 'name', required: false, tab: 'profile' },
+  { field: 'mobile', required: false, tab: 'profile' },
+  { field: 'dob', required: false, tab: 'profile' },
+  { field: 'house_ownership', required: false, tab: 'profile' },
+  { field: 'pincode', required: true, tab: 'profile' },
+  { field: 'current_address', required: false, tab: 'profile' },
+  { field: 'permanent_address', required: false, tab: 'profile' },
+  { field: 'company', required: true, tab: 'profile' },
+  { field: 'employment_type', required: true, tab: 'profile' },
+  { field: 'net_income', required: true, tab: 'profile' },
+  { field: 'loan_amount', required: false, tab: 'profile' },
+  { field: 'tenure_months', required: false, tab: 'profile' },
+  { field: 'score', required: true, tab: 'cibil' },
+  { field: 'enquiries.d30', required: false, tab: 'cibil' },
+  { field: 'enquiries.d60', required: false, tab: 'cibil' },
+  { field: 'enquiries.d90', required: true, tab: 'cibil' },
+  { field: 'enquiries.d120', required: false, tab: 'cibil' },
+];
+
+/**
+ * The fields still empty (no document filled them and nobody typed them),
+ * then the loans a lender cannot count yet (Obligate without an EMI, BT
+ * without the outstanding); `fromDocuments` when a document holds a value.
+ */
+export function stillNeeded(
+  inputs: EligibilityInputs,
+  sources?: FieldSources | null,
+  tab?: StillNeeded['tab'],
+): StillNeeded[] {
+  const out: StillNeeded[] = [];
+  for (const { field, required, tab: on } of NEEDED_FIELDS) {
+    if (tab && on !== tab) continue;
+    const [name, window] = field.split('.') as [
+      SourcedField,
+      keyof CibilEnquiries | undefined,
+    ];
+    const value = fieldValue(inputs, name);
+    const documented = sources?.[name]?.value;
+    const held = window ? present(obj(value)[window]) : present(value);
+    if (held) continue;
+    out.push({
+      field,
+      required,
+      tab: on,
+      fromDocuments: window
+        ? present(obj(documented)[window])
+        : present(documented),
+    });
+  }
+  if (tab === 'profile') return out;
+  inputs.cibil.tradelines.forEach((row, i) => {
+    if (row.status === 'closed') return;
+    const key =
+      row.action === 'obligate' && !present(row.emi)
+        ? 'emi'
+        : row.action === 'bt' && !present(row.outstanding)
+          ? 'outstanding'
+          : null;
+    if (!key) return;
+    out.push({
+      field: `tradelines.${i + 1}.${key}`,
+      required: true,
+      tab: 'cibil',
+      fromDocuments: present(obj(row.document?.value)[key]),
+      loan: { number: i + 1, lender: row.lender, loanType: row.loan_type },
+    });
+  });
+  return out;
 }
 
 function trimmed(value: string | null | undefined): string | null {
@@ -909,11 +1396,15 @@ export function parseCalculateResponse(
     .map(lenderRow)
     .filter((r): r is LenderEligibility => r !== null);
   const best = text(o.best_lender);
-  const fileCheck =
+  const check = obj(o.file_check);
+  const fileCheck: EligibilityFileCheck | null =
     o.file_check && typeof o.file_check === 'object'
       ? {
-          used: obj(o.file_check).used === true,
-          detail: text(obj(o.file_check).detail),
+          used: check.used === true,
+          detail: text(check.detail),
+          verdict: text(check.verdict),
+          ready: bool(check.ready),
+          issues: strings(check.issues),
         }
       : null;
   return {
@@ -969,6 +1460,8 @@ export function parseLoginResponse(raw: unknown): EligibilityLoginResponse {
         : 'not_enabled'),
     webhook_detail: text(o.webhook_detail),
     delivery: d,
+    file_ready: bool(o.file_ready),
+    open_issues: finite(o.open_issues) ?? 0,
   };
 }
 
@@ -1049,7 +1542,7 @@ export function parsePincodeCheck(raw: unknown, pincode: string): PincodeCheck {
     pincode: text(o.pincode) ?? pincode,
     region: text(o.region),
     lenders: o.lenders
-      .map((row) => {
+      .map((row): PincodeLenderCheck | null => {
         const r = obj(row);
         const lender = text(r.lender);
         return lender
@@ -1057,15 +1550,25 @@ export function parsePincodeCheck(raw: unknown, pincode: string): PincodeCheck {
               lender_id: text(r.lender_id) ?? lender,
               lender,
               serviceable: r.serviceable === true,
+              source: checkSource(r.source),
             }
           : null;
       })
-      .filter(
-        (r): r is { lender_id: string; lender: string; serviceable: boolean } =>
-          r !== null,
-      ),
+      .filter((r): r is PincodeLenderCheck => r !== null),
     sample: o.sample !== false,
   };
+}
+
+type PincodeLenderCheck = PincodeCheck['lenders'][number];
+
+function checkSource(value: unknown): CheckSource {
+  return value === 'dsa_list' ? 'dsa_list' : 'sample';
+}
+
+function foirRange(value: unknown): [number, number] | null {
+  if (!Array.isArray(value) || value.length !== 2) return null;
+  const [low, high] = value.map(finite);
+  return low !== null && high !== null && low < high ? [low, high] : null;
 }
 
 /** GET .../companies?name= ("Check category"). */
@@ -1097,6 +1600,8 @@ export function parseCompanyCheck(raw: unknown, name: string): CompanyCheck {
           accepted: r.accepted === true,
           foir: finite(r.foir),
           multiplier: finite(r.multiplier),
+          foir_range: foirRange(r.foir_range),
+          source: checkSource(r.source),
         };
       })
       .filter((r): r is CompanyCategory => r !== null),

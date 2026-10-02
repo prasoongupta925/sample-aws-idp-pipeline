@@ -5,16 +5,21 @@ import {
   Calculator,
   ChevronDown,
   ChevronRight,
+  CircleCheck,
   Landmark,
   Loader2,
   LogIn,
   RefreshCw,
+  TriangleAlert,
   Trophy,
 } from 'lucide-react';
 import type {
+  EligibilityFileCheck,
   EligibilityResult,
   LenderEligibility,
   LenderPolicy,
+  SourceKind,
+  StillNeeded,
 } from '../../types/eligibility';
 import type { LenderLoginState } from '../../hooks/useEligibility';
 import {
@@ -25,11 +30,18 @@ import {
   webhookOutcome,
   type LenderTone,
 } from '../../lib/eligibility';
+import { apiErrorDetail } from '../../lib/apiError';
+import { apiErrorStatus } from '../../lib/fileCheck';
 import {
   BUTTON_CLASS,
   IndicativeTag,
   PRIMARY_CLASS,
+  SOURCE_CHIP_CLASS,
+  SOURCE_RULE_CLASS,
   SamplePolicyTag,
+  SourceLegend,
+  StillNeededList,
+  sourceKind,
 } from './fields';
 import { describeEligibilityError } from './errors';
 
@@ -96,10 +108,13 @@ function Metric({
   label,
   value,
   source,
+  kind,
 }: {
   label: string;
   value: string;
   source?: string;
+  /** The source's colour (the sheet's legend). */
+  kind?: SourceKind | null;
 }) {
   return (
     <div className="min-w-0 rounded-md border border-white/50 bg-white/40 px-2 py-1 dark:border-white/[0.08] dark:bg-white/[0.03]">
@@ -111,7 +126,16 @@ function Metric({
       </dd>
       {source && (
         <dd className="text-[9px] text-slate-500 dark:text-slate-400">
-          {source}
+          {kind ? (
+            <span
+              className={`inline-block rounded-full border px-1 leading-snug ${SOURCE_CHIP_CLASS[kind]}`}
+              data-source={kind}
+            >
+              {source}
+            </span>
+          ) : (
+            source
+          )}
         </dd>
       )}
     </div>
@@ -189,7 +213,42 @@ interface LoginControlProps {
   /** The result is for other inputs: log in only after a new calculation. */
   stale: boolean;
   busy: boolean;
+  /** The file check of the result: a NOT READY file is logged in only once its issues are confirmed. */
+  fileCheck: EligibilityFileCheck | null;
   onLogin: (row: LenderEligibility) => void;
+  /** Shows the confirmation at first (tests render statically). */
+  initiallyConfirming?: boolean;
+}
+
+/** How many open issues the NOT READY confirmation lists before "+N more". */
+const SHOWN_ISSUES = 8;
+
+/** The file check's open issues, as the NOT READY confirmation names them. */
+export function OpenIssues({ issues }: { issues: string[] }) {
+  const { t } = useTranslation();
+  const more = issues.length - SHOWN_ISSUES;
+  return (
+    <div className="w-full space-y-0.5" data-testid="open-issues">
+      <p className="flex items-center gap-1 font-semibold text-amber-900 dark:text-amber-200">
+        <TriangleAlert className="h-3 w-3 flex-shrink-0" aria-hidden="true" />
+        {t('eligibility.lenders.notReadyTitle', { count: issues.length })}
+      </p>
+      {issues.length > 0 && (
+        <ul className="list-disc space-y-0.5 pl-4 text-[10px] leading-snug text-amber-900 dark:text-amber-200">
+          {issues.slice(0, SHOWN_ISSUES).map((issue, i) => (
+            <li key={i} className="break-words">
+              {issue}
+            </li>
+          ))}
+          {more > 0 && (
+            <li className="list-none text-amber-700 dark:text-amber-300">
+              {t('eligibility.lenders.moreIssues', { count: more })}
+            </li>
+          )}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 /** What the CRM webhook did with a login: notified, failed, or not sent (and why). */
@@ -233,14 +292,17 @@ function LoginControl({
   state,
   stale,
   busy,
+  fileCheck,
   onLogin,
+  initiallyConfirming = false,
 }: LoginControlProps) {
   const { t } = useTranslation();
-  const [confirming, setConfirming] = useState(false);
+  const [confirming, setConfirming] = useState(initiallyConfirming);
   const eligible = lenderTone(row.status) === 'eligible';
   const sending = state?.sending ?? false;
   const response = state?.response ?? null;
   const outcome = response ? webhookOutcome(response) : null;
+  const notReady = fileCheck?.ready === false;
 
   let result: ReactNode = null;
   if (sending) {
@@ -248,6 +310,31 @@ function LoginControl({
       <span className="inline-flex items-center gap-1 text-slate-500 dark:text-slate-400">
         <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
         {t('eligibility.lenders.loggingIn')}
+      </span>
+    );
+  } else if (state?.error != null && apiErrorStatus(state.error) === 428) {
+    // The file check turned NOT READY after this result: its issues are in the answer.
+    const detail = apiErrorDetail(state.error);
+    result = (
+      <span
+        className="inline-flex flex-wrap items-center gap-1.5 text-amber-800 dark:text-amber-300"
+        data-testid="login-not-ready"
+      >
+        <TriangleAlert className="h-3 w-3 flex-shrink-0" aria-hidden="true" />
+        <span className="min-w-0 break-words">
+          {t('eligibility.lenders.notReadyNow')}
+          {detail ? ` ${detail}` : ''}
+        </span>
+        <button
+          type="button"
+          onClick={() => onLogin(row)}
+          disabled={stale || busy}
+          className={BUTTON_CLASS}
+          data-testid="confirm-login-not-ready"
+        >
+          <LogIn className="h-3 w-3" aria-hidden="true" />
+          {t('eligibility.lenders.confirmLoginAnyway')}
+        </button>
       </span>
     );
   } else if (state?.error != null) {
@@ -267,6 +354,16 @@ function LoginControl({
         <span className="font-semibold text-green-700 dark:text-green-400">
           {t('eligibility.lenders.loggedIn', { lender: row.lender, time })}
         </span>
+        {response.file_ready === false && (
+          <span
+            className="font-medium text-amber-700 dark:text-amber-400"
+            data-testid="logged-in-not-ready"
+          >
+            {t('eligibility.lenders.loggedInNotReady', {
+              count: response.open_issues,
+            })}
+          </span>
+        )}
         <span
           data-testid="webhook-outcome"
           data-outcome={outcome ?? 'notSent'}
@@ -296,7 +393,7 @@ function LoginControl({
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
       {confirming ? (
-        <span
+        <div
           role="group"
           aria-label={t('eligibility.lenders.login')}
           onKeyDown={(e) => {
@@ -306,13 +403,31 @@ function LoginControl({
               setConfirming(false);
             }
           }}
-          className="inline-flex flex-wrap items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50/80 px-2 py-1 dark:border-indigo-800/50 dark:bg-indigo-900/20"
+          className={`inline-flex max-w-full flex-wrap items-center gap-1.5 rounded-lg border px-2 py-1 ${
+            notReady
+              ? 'border-amber-300 bg-amber-50/90 dark:border-amber-700/60 dark:bg-amber-900/20'
+              : 'border-indigo-200 bg-indigo-50/80 dark:border-indigo-800/50 dark:bg-indigo-900/20'
+          }`}
+          data-testid={notReady ? 'confirm-not-ready' : 'confirm'}
         >
-          <span className="text-indigo-900 dark:text-indigo-200">
-            {t('eligibility.lenders.loginConfirm', {
-              name: applicantName,
-              lender: row.lender,
-            })}
+          {/* A NOT READY file: the user confirms its open issues by name. */}
+          {notReady && <OpenIssues issues={fileCheck?.issues ?? []} />}
+          <span
+            className={
+              notReady
+                ? 'text-amber-900 dark:text-amber-200'
+                : 'text-indigo-900 dark:text-indigo-200'
+            }
+          >
+            {notReady
+              ? t('eligibility.lenders.loginConfirmNotReady', {
+                  name: applicantName,
+                  lender: row.lender,
+                })
+              : t('eligibility.lenders.loginConfirm', {
+                  name: applicantName,
+                  lender: row.lender,
+                })}
           </span>
           <button
             type="button"
@@ -325,7 +440,9 @@ function LoginControl({
             data-testid="confirm-login"
           >
             <LogIn className="h-3 w-3" aria-hidden="true" />
-            {t('eligibility.lenders.confirmLogin')}
+            {notReady
+              ? t('eligibility.lenders.confirmLoginAnyway')
+              : t('eligibility.lenders.confirmLogin')}
           </button>
           <button
             type="button"
@@ -334,17 +451,27 @@ function LoginControl({
           >
             {t('common.cancel')}
           </button>
-        </span>
+        </div>
       ) : (
         <button
           type="button"
           onClick={() => setConfirming(true)}
           disabled={stale || busy || sending}
-          title={stale ? t('eligibility.lenders.loginNeedsFresh') : undefined}
+          title={
+            stale
+              ? t('eligibility.lenders.loginNeedsFresh')
+              : notReady
+                ? t('eligibility.lenders.loginNotReadyHint')
+                : undefined
+          }
           className={PRIMARY_CLASS}
           data-testid="login-button"
         >
-          <LogIn className="h-3 w-3" aria-hidden="true" />
+          {notReady ? (
+            <TriangleAlert className="h-3 w-3" aria-hidden="true" />
+          ) : (
+            <LogIn className="h-3 w-3" aria-hidden="true" />
+          )}
           {response
             ? t('eligibility.lenders.loginAgain')
             : t('eligibility.lenders.login')}
@@ -369,7 +496,9 @@ interface LenderRowsProps {
   login: LenderLoginState | undefined;
   stale: boolean;
   busy: boolean;
+  fileCheck: EligibilityFileCheck | null;
   onLogin: (row: LenderEligibility) => void;
+  confirming?: boolean;
 }
 
 function LenderRows({
@@ -381,12 +510,15 @@ function LenderRows({
   login,
   stale,
   busy,
+  fileCheck,
   onLogin,
+  confirming,
 }: LenderRowsProps) {
   const { t } = useTranslation();
   const detailsId = useId();
   const tone = lenderTone(row.status);
   const src = (key: string) => sourceLabel(t, row.sources[key]);
+  const kind = (key: string) => sourceKind(row.sources[key]);
   const td = `${TD_CLASS} ${NUMBER_COLOR[tone]}`;
   return (
     <tbody
@@ -468,7 +600,9 @@ function LenderRows({
               state={login}
               stale={stale}
               busy={busy}
+              fileCheck={fileCheck}
               onLogin={onLogin}
+              initiallyConfirming={confirming}
             />
             <button
               type="button"
@@ -501,46 +635,55 @@ function LenderRows({
                   label={t('eligibility.lenders.perLakhEmi')}
                   value={formatRupees(row.per_lakh_emi)}
                   source={src('per_lakh_emi')}
+                  kind={kind('per_lakh_emi')}
                 />
                 <Metric
                   label={t('eligibility.lenders.foirEligibility')}
                   value={formatRupees(row.foir_eligibility)}
                   source={src('foir_eligibility')}
+                  kind={kind('foir_eligibility')}
                 />
                 <Metric
                   label={t('eligibility.lenders.multiplierEligibility')}
                   value={formatRupees(row.multiplier_eligibility)}
                   source={src('multiplier_eligibility')}
+                  kind={kind('multiplier_eligibility')}
                 />
                 <Metric
                   label={t('eligibility.lenders.btAmount')}
                   value={formatRupees(row.bt_amount)}
                   source={src('bt_amount')}
+                  kind={kind('bt_amount')}
                 />
                 <Metric
                   label={t('eligibility.lenders.incomeConsidered')}
                   value={formatRupees(row.income_considered)}
                   source={src('income')}
+                  kind={kind('income')}
                 />
                 <Metric
                   label={t('eligibility.lenders.obligations')}
                   value={formatRupees(row.obligations)}
                   source={src('obligations')}
+                  kind={kind('obligations')}
                 />
                 <Metric
                   label={t('eligibility.lenders.foir')}
                   value={formatFoir(row.foir)}
                   source={withCategory(src('foir'), row.company_category)}
+                  kind={kind('foir')}
                 />
                 <Metric
                   label={t('eligibility.lenders.multiplier')}
                   value={row.multiplier === null ? '–' : `${row.multiplier}×`}
                   source={withCategory(src('multiplier'), row.company_category)}
+                  kind={kind('multiplier')}
                 />
                 <Metric
                   label={t('eligibility.lenders.calcTenure')}
                   value={months(t, row.calculation_tenure_months)}
                   source={src('calculation_tenure_months')}
+                  kind={kind('calculation_tenure_months')}
                 />
                 {lenderTone(row.status) === 'eligible' &&
                   row.calculation_tenure_months !== null &&
@@ -551,12 +694,14 @@ function LenderRows({
                       })}
                       value={formatRupees(row.emi_at_calculation_tenure)}
                       source={src('emi')}
+                      kind={kind('emi')}
                     />
                   )}
                 <Metric
                   label={t('eligibility.lenders.maxAmount')}
                   value={formatRupees(row.max_amount)}
                   source={src('max_amount')}
+                  kind={kind('max_amount')}
                 />
               </dl>
               <HowCalculated row={row} />
@@ -739,8 +884,69 @@ interface LendersSectionProps {
   lenders?: LenderPolicy[];
   logins?: Record<string, LenderLoginState>;
   onLogin: (row: LenderEligibility) => void;
+  /**
+   * "Still needed before Check eligibility" (lib/eligibility stillNeeded of
+   * the inputs on screen), shown before the first calculation.
+   */
+  stillNeeded?: StillNeeded[];
   /** Lenders whose details show at first; default: the best lender. */
   initialExpanded?: string[];
+  /** Lenders whose login confirmation shows at first (tests render statically). */
+  initialConfirming?: string[];
+}
+
+// The lenders table's columns underlined in their source's colour, as the
+// sheet colours its cells.
+const COLUMN_SOURCES: readonly [string, SourceKind][] = [
+  ['eligible_amount', 'formula'],
+  ['tenure_months', 'policy'],
+  ['roi', 'policy'],
+  ['emi', 'formula'],
+  ['per_lakh_emi', 'formula'],
+  ['foir_eligibility', 'formula'],
+  ['multiplier_eligibility', 'formula'],
+  ['bt_amount', 'table'],
+];
+
+const COLUMN_LABELS: Record<string, string> = {
+  eligible_amount: 'eligibility.lenders.eligibleAmount',
+  tenure_months: 'eligibility.lenders.tenure',
+  roi: 'eligibility.lenders.roi',
+  emi: 'eligibility.lenders.emi',
+  per_lakh_emi: 'eligibility.lenders.perLakhEmi',
+  foir_eligibility: 'eligibility.lenders.foirEligibility',
+  multiplier_eligibility: 'eligibility.lenders.multiplierEligibility',
+  bt_amount: 'eligibility.lenders.btAmount',
+};
+
+/** The file check behind the result: READY, or NOT READY with how many open issues. */
+function FileCheckLine({ fileCheck }: { fileCheck: EligibilityFileCheck }) {
+  const { t } = useTranslation();
+  if (fileCheck.ready === null) return null;
+  return fileCheck.ready ? (
+    <p
+      className="flex items-center gap-1 text-[11px] text-green-700 dark:text-green-400"
+      data-testid="file-check-verdict"
+      data-ready="true"
+    >
+      <CircleCheck className="h-3 w-3" aria-hidden="true" />
+      {t('eligibility.lenders.readyNote')}
+    </p>
+  ) : (
+    <p
+      className="flex items-start gap-1 rounded-md border-l-4 border-amber-500 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-900 dark:bg-amber-900/20 dark:text-amber-200"
+      data-testid="file-check-verdict"
+      data-ready="false"
+    >
+      <TriangleAlert
+        className="mt-0.5 h-3 w-3 flex-shrink-0"
+        aria-hidden="true"
+      />
+      {t('eligibility.lenders.notReadyNote', {
+        count: fileCheck.issues.length,
+      })}
+    </p>
+  );
 }
 
 /** Sheet 3 of the client's page: eligibility per lender, the best highlighted, and login. */
@@ -756,7 +962,9 @@ export default function LendersSection({
   lenders = [],
   logins = {},
   onLogin,
+  stillNeeded,
   initialExpanded,
+  initialConfirming = [],
 }: LendersSectionProps) {
   const { t } = useTranslation();
   const bestOf = (r: EligibilityResult | null) =>
@@ -824,22 +1032,27 @@ export default function LendersSection({
         </div>
       )}
 
+      <SourceLegend />
       {!result ? (
-        <div className="flex flex-col items-center justify-center gap-2 px-4 py-8 text-center">
-          <Landmark
-            className="h-8 w-8 text-slate-300 dark:text-slate-500"
-            aria-hidden="true"
-          />
-          <p className="text-xs font-medium text-slate-600 dark:text-slate-300">
-            {t('eligibility.lenders.empty')}
-          </p>
-          <p className="text-[11px] text-slate-500 dark:text-slate-400">
-            {t('eligibility.lenders.emptyHint')}
-          </p>
-          {calculateButton}
-        </div>
+        <>
+          {stillNeeded && <StillNeededList items={stillNeeded} tab="lenders" />}
+          <div className="flex flex-col items-center justify-center gap-2 px-4 py-8 text-center">
+            <Landmark
+              className="h-8 w-8 text-slate-300 dark:text-slate-500"
+              aria-hidden="true"
+            />
+            <p className="text-xs font-medium text-slate-600 dark:text-slate-300">
+              {t('eligibility.lenders.empty')}
+            </p>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              {t('eligibility.lenders.emptyHint')}
+            </p>
+            {calculateButton}
+          </div>
+        </>
       ) : (
         <>
+          {result.file_check && <FileCheckLine fileCheck={result.file_check} />}
           {stale && (
             <div
               role="status"
@@ -934,30 +1147,20 @@ export default function LendersSection({
                   <th scope="col" className={TH_CLASS}>
                     {t('eligibility.lenders.lenderStatus')}
                   </th>
-                  <th scope="col" className={`${TH_CLASS} text-right`}>
-                    {t('eligibility.lenders.eligibleAmount')}
-                  </th>
-                  <th scope="col" className={`${TH_CLASS} text-right`}>
-                    {t('eligibility.lenders.tenure')}
-                  </th>
-                  <th scope="col" className={`${TH_CLASS} text-right`}>
-                    {t('eligibility.lenders.roi')}
-                  </th>
-                  <th scope="col" className={`${TH_CLASS} text-right`}>
-                    {t('eligibility.lenders.emi')}
-                  </th>
-                  <th scope="col" className={`${TH_CLASS} ${WIDE} text-right`}>
-                    {t('eligibility.lenders.perLakhEmi')}
-                  </th>
-                  <th scope="col" className={`${TH_CLASS} ${WIDE} text-right`}>
-                    {t('eligibility.lenders.foirEligibility')}
-                  </th>
-                  <th scope="col" className={`${TH_CLASS} ${WIDE} text-right`}>
-                    {t('eligibility.lenders.multiplierEligibility')}
-                  </th>
-                  <th scope="col" className={`${TH_CLASS} ${WIDE} text-right`}>
-                    {t('eligibility.lenders.btAmount')}
-                  </th>
+                  {COLUMN_SOURCES.map(([col, fallback], i) => {
+                    const kind = sourceKind(rows[0]?.sources[col]) ?? fallback;
+                    return (
+                      <th
+                        key={col}
+                        scope="col"
+                        className={`${TH_CLASS} ${i >= 4 ? WIDE : ''} text-right ${SOURCE_RULE_CLASS[kind]}`}
+                        title={sourceLabel(t, kind)}
+                        data-source={kind}
+                      >
+                        {t(COLUMN_LABELS[col])}
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               {rows.map((row) => (
@@ -971,7 +1174,9 @@ export default function LendersSection({
                   login={logins[row.lender]}
                   stale={stale}
                   busy={calculating}
+                  fileCheck={result.file_check}
                   onLogin={onLogin}
+                  confirming={initialConfirming.includes(row.lender)}
                 />
               ))}
             </table>

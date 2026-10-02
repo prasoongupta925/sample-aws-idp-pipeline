@@ -1,9 +1,12 @@
 import { useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { ChevronDown, ChevronRight, Info, Plus, Trash2 } from 'lucide-react';
 import type {
+  CibilEnquiries,
   EligibilityCibil,
   EligibilityInputs,
+  StillNeeded,
   Tradeline,
   TradelineAction,
 } from '../../types/eligibility';
@@ -14,26 +17,43 @@ import {
   TRADELINE_STATUSES,
   accountNumberLooksValid,
   addTradeline,
+  addTradelineRow,
+  cibilFieldSources,
+  cibilInputs,
+  documentRowsMissing,
   enquiriesOutOfOrder,
+  fillFromDocuments,
+  fillableFields,
   formatRupees,
   isFutureDate,
   localToday,
+  otherSourceFor,
   removeTradeline,
+  rowFromDocument,
   scoreLooksValid,
   setCibil,
   setEnquiries,
+  setFieldValue,
   setTradelineAction,
+  sourceFor,
+  stillNeeded,
   updateTradeline,
 } from '../../lib/eligibility';
 import {
   BUTTON_CLASS,
   CONTROL_CLASS,
+  DocumentRowOffers,
+  DocumentValueOffer,
   Field,
-  FromDocumentsBadge,
+  FieldSourceBadge,
   NumberInput,
   SECTION_CLASS,
   SectionTitle,
   Segmented,
+  SourceLegend,
+  goToField,
+  SourceNote,
+  StillNeededList,
 } from './fields';
 
 type Edit = (update: (inputs: EligibilityInputs) => EligibilityInputs) => void;
@@ -94,6 +114,32 @@ export function TradelineActionToggle({
   );
 }
 
+/** "Car loan · Mulshi Auto Finance · EMI ₹8,200" */
+function tradelineSummary(t: TFunction, row: Tradeline): string {
+  return [
+    row.loan_type ? t(`eligibility.cibil.loanTypes.${row.loan_type}`) : '',
+    row.lender ?? '',
+    row.emi !== null && Number.isFinite(row.emi)
+      ? t('eligibility.cibil.emiSummary', { amount: formatRupees(row.emi) })
+      : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+/** "0 / 1 / 1 / 2 in 30 / 60 / 90 / 120 days" ('–' for a window not given). */
+function enquiriesText(t: TFunction, value: unknown): string {
+  const e = (value ?? {}) as Partial<CibilEnquiries>;
+  const n = (w: keyof CibilEnquiries) =>
+    typeof e[w] === 'number' ? String(e[w]) : '–';
+  return t('eligibility.cibil.enquiriesShown', {
+    d30: n('d30'),
+    d60: n('d60'),
+    d90: n('d90'),
+    d120: n('d120'),
+  });
+}
+
 interface TradelineRowProps {
   row: Tradeline;
   index: number;
@@ -140,26 +186,25 @@ function TradelineRow({
       : row.action === 'obligate' && row.emi === null && row.status !== 'closed'
         ? t('eligibility.cibil.needsEmi')
         : null;
-  const summary = [
-    row.loan_type ? t(`eligibility.cibil.loanTypes.${row.loan_type}`) : '',
-    row.lender ?? '',
-    row.emi !== null && Number.isFinite(row.emi)
-      ? t('eligibility.cibil.emiSummary', { amount: formatRupees(row.emi) })
-      : '',
-  ]
-    .filter(Boolean)
-    .join(' · ');
+  const summary = tradelineSummary(t, row);
+  // The row's data is still the document's (the action is the user's choice).
+  const fromDocument = rowFromDocument(row);
 
   return (
     <li
       className={`space-y-2 rounded-lg border p-2.5 ${ACTION_ROW_CLASS[row.action]}`}
       data-testid="tradeline"
       data-action={row.action}
+      data-source={fromDocument ? 'document' : undefined}
       aria-label={t('eligibility.cibil.tradeline', { number })}
     >
       {/* Minimised row: what the report shows per loan, and the action */}
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <span className="text-xs font-semibold text-slate-800 dark:text-slate-100">
+        <span
+          id={`${groupName}-loan-${number}`}
+          tabIndex={-1}
+          className="text-xs font-semibold text-slate-800 focus:outline-none dark:text-slate-100"
+        >
           {t('eligibility.cibil.tradeline', { number })}
         </span>
         {summary && (
@@ -167,7 +212,16 @@ function TradelineRow({
             {summary}
           </span>
         )}
-        {row.source === 'bank_statement' && <FromDocumentsBadge />}
+        {fromDocument && <FieldSourceBadge source={row.document} />}
+        {row.source === 'bank_statement' && (
+          <span
+            className="rounded-full border border-dashed border-blue-300 px-1.5 py-px text-[9px] font-semibold text-blue-700 dark:border-blue-700/60 dark:text-blue-300"
+            title={t('eligibility.cibil.suggestedHint')}
+            data-testid="suggested"
+          >
+            {t('eligibility.cibil.suggested')}
+          </span>
+        )}
         {row.source === 'bureau' && (
           <span className="rounded-full border border-sky-200 bg-sky-50 px-1.5 py-px text-[9px] font-semibold text-sky-700 dark:border-sky-800/60 dark:bg-sky-900/30 dark:text-sky-300">
             {t('eligibility.cibil.fromBureau')}
@@ -184,6 +238,13 @@ function TradelineRow({
           <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
         </button>
       </div>
+      {row.document && (
+        <SourceNote
+          source={row.document}
+          edited={!fromDocument}
+          showDetail={fromDocument}
+        />
+      )}
 
       <div className="flex flex-wrap items-center gap-2">
         <TradelineActionToggle
@@ -263,7 +324,10 @@ function TradelineRow({
             />
           )}
         </Field>
-        <Field label={t('eligibility.cibil.outstanding')}>
+        <Field
+          id={`${groupName}-loan-${number}-outstanding`}
+          label={t('eligibility.cibil.outstanding')}
+        >
           {({ id }) => (
             <NumberInput
               id={id}
@@ -273,7 +337,10 @@ function TradelineRow({
             />
           )}
         </Field>
-        <Field label={t('eligibility.cibil.emi')}>
+        <Field
+          id={`${groupName}-loan-${number}-emi`}
+          label={t('eligibility.cibil.emi')}
+        >
           {({ id }) => (
             <NumberInput
               id={id}
@@ -425,7 +492,47 @@ function TradelineRow({
   );
 }
 
+/** Where the CIBIL block came from: the credit report, a bureau pull, or by hand. */
+function ReportNote({ cibil }: { cibil: EligibilityCibil }) {
+  const { t } = useTranslation();
+  const report = cibil.sources?.report ?? null;
+  const file = report?.documents[0]?.file ?? null;
+  const date = cibil.report_date ?? null;
+  const kind = report?.detail || t('eligibility.cibil.creditReport');
+  let text: string;
+  if (cibil.source === 'credit_report') {
+    text = file
+      ? date
+        ? t('eligibility.cibil.creditReportOn', { file, report: kind, date })
+        : t('eligibility.cibil.creditReportRead', { file })
+      : date
+        ? t('eligibility.cibil.creditReportSavedOn', { date })
+        : t('eligibility.cibil.creditReportSaved');
+    text = `${text} ${t('eligibility.cibil.creditReportCheck')}`;
+  } else if (cibil.source === 'bureau') {
+    text = date
+      ? t('eligibility.cibil.fromBureauOn', { date })
+      : t('eligibility.cibil.fromBureauNote');
+  } else if (file) {
+    // Typed by hand, and a credit report is in the documents.
+    text = t('eligibility.cibil.creditReportAvailable', { file });
+  } else {
+    text = t('eligibility.cibil.bureauNote');
+  }
+  return (
+    <p
+      className="flex items-start gap-1.5 rounded-lg border border-blue-200 bg-blue-50/70 px-2.5 py-1.5 text-[11px] leading-snug text-blue-800 dark:border-blue-800/50 dark:bg-blue-900/20 dark:text-blue-300"
+      data-testid="bureau-note"
+      data-source={cibil.source ?? 'manual'}
+    >
+      <Info className="mt-0.5 h-3 w-3 flex-shrink-0" aria-hidden="true" />
+      {text}
+    </p>
+  );
+}
+
 interface CibilSectionProps {
+  /** The CIBIL block; its `sources` and rows' `document` say what the documents give. */
   cibil: EligibilityCibil;
   onEdit: Edit;
   disabled?: boolean;
@@ -443,6 +550,7 @@ export default function CibilSection({
   const { t } = useTranslation();
   const groupName = useId();
   const enquiriesErrorId = useId();
+  const sources = cibilFieldSources(cibil);
   const score = cibil.score;
   // A score typed as text that is not a number is flagged by the input itself.
   const scoreError =
@@ -457,31 +565,76 @@ export default function CibilSection({
         second: t(`eligibility.cibil.window.${order[1]}`),
       })
     : null;
+  const scoreSource = sourceFor('score', score, sources.score);
+  const scoreOther = otherSourceFor('score', score, sources.score);
+  const enquiriesSource = sourceFor(
+    'enquiries',
+    cibil.enquiries,
+    sources.enquiries,
+  );
+  const enquiriesOther = otherSourceFor(
+    'enquiries',
+    cibil.enquiries,
+    sources.enquiries,
+  );
+  const asInputs = cibilInputs(cibil);
+  const needed = stillNeeded(asInputs, sources, 'cibil');
+  // Saved inputs typed otherwise: the documents' loans they do not hold.
+  const missing = documentRowsMissing(rows, cibil.sources?.tradelines);
+  const goTo = (item: StillNeeded) => {
+    const [head, n, key] = item.field.split('.');
+    goToField(
+      head === 'score'
+        ? `${groupName}-score`
+        : head === 'enquiries'
+          ? `${groupName}-enquiries-${n}`
+          : `${groupName}-loan-${n}-${key}`,
+    );
+  };
 
   return (
     <div className="space-y-3">
-      <p
-        className="flex items-start gap-1.5 rounded-lg border border-blue-200 bg-blue-50/70 px-2.5 py-1.5 text-[11px] leading-snug text-blue-800 dark:border-blue-800/50 dark:bg-blue-900/20 dark:text-blue-300"
-        data-testid="bureau-note"
-      >
-        <Info className="mt-0.5 h-3 w-3 flex-shrink-0" aria-hidden="true" />
-        {cibil.source === 'bureau'
-          ? cibil.report_date
-            ? t('eligibility.cibil.fromBureauOn', { date: cibil.report_date })
-            : t('eligibility.cibil.fromBureauNote')
-          : t('eligibility.cibil.bureauNote')}
-      </p>
+      <SourceLegend />
+      <StillNeededList
+        items={needed}
+        tab="cibil"
+        onGo={goTo}
+        fillable={fillableFields(asInputs, sources).length}
+        onFill={() => onEdit((i) => fillFromDocuments(i, sources))}
+        disabled={disabled}
+      />
+      <ReportNote cibil={cibil} />
 
       <section
         className={SECTION_CLASS}
         aria-label={t('eligibility.cibil.report')}
       >
         <SectionTitle>{t('eligibility.cibil.report')}</SectionTitle>
-        <div className="grid grid-cols-1 gap-2 @md:grid-cols-[minmax(0,10rem)_minmax(0,1fr)]">
+        <div className="grid grid-cols-1 gap-2 @md:grid-cols-[minmax(0,13rem)_minmax(0,1fr)]">
           <Field
-            label={t('eligibility.cibil.score')}
+            id={`${groupName}-score`}
+            label={
+              <>
+                {t('eligibility.cibil.score')}
+                <FieldSourceBadge source={scoreSource} />
+              </>
+            }
             hint={t('eligibility.cibil.scoreHint')}
             error={scoreError}
+            note={
+              scoreSource ? (
+                <SourceNote source={scoreSource} />
+              ) : scoreOther ? (
+                <DocumentValueOffer
+                  source={scoreOther}
+                  value={String(scoreOther.value)}
+                  onUse={() =>
+                    onEdit((i) => setFieldValue(i, 'score', scoreOther.value))
+                  }
+                  disabled={disabled}
+                />
+              ) : undefined
+            }
           >
             {({ id, describedBy }) => (
               <NumberInput
@@ -504,13 +657,15 @@ export default function CibilSection({
             disabled={disabled}
             aria-describedby={enquiriesError ? enquiriesErrorId : undefined}
           >
-            <legend className="text-[11px] font-semibold text-slate-600 dark:text-slate-300">
+            <legend className="flex flex-wrap items-center gap-1 text-[11px] font-semibold text-slate-600 dark:text-slate-300">
               {t('eligibility.cibil.enquiries')}
+              <FieldSourceBadge source={enquiriesSource} />
             </legend>
             <div className="grid grid-cols-4 gap-1.5">
               {ENQUIRY_WINDOWS.map((w) => (
                 <Field
                   key={w}
+                  id={`${groupName}-enquiries-${w}`}
                   label={
                     <span className="font-normal text-slate-500 dark:text-slate-400">
                       {t(`eligibility.cibil.window.${w}`)}
@@ -543,6 +698,22 @@ export default function CibilSection({
               >
                 {enquiriesError}
               </p>
+            )}
+            {enquiriesSource ? (
+              <SourceNote source={enquiriesSource} />
+            ) : (
+              enquiriesOther && (
+                <DocumentValueOffer
+                  source={enquiriesOther}
+                  value={enquiriesText(t, enquiriesOther.value)}
+                  onUse={() =>
+                    onEdit((i) =>
+                      setFieldValue(i, 'enquiries', enquiriesOther.value),
+                    )
+                  }
+                  disabled={disabled}
+                />
+              )
             )}
           </fieldset>
         </div>
@@ -585,6 +756,15 @@ export default function CibilSection({
             ))}
           </ul>
         )}
+        <DocumentRowOffers
+          rows={missing}
+          summary={(row, i) =>
+            tradelineSummary(t, row) ||
+            t('eligibility.cibil.tradeline', { number: i + 1 })
+          }
+          onAdd={(row) => onEdit((inputs) => addTradelineRow(inputs, row))}
+          disabled={disabled || rows.length >= MAX_TRADELINES}
+        />
       </section>
     </div>
   );

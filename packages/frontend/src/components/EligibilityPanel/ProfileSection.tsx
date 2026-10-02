@@ -1,5 +1,6 @@
 import { useId, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import {
   Building2,
   CircleAlert,
@@ -13,9 +14,12 @@ import {
 import type {
   EligibilityInputs,
   EligibilityProfile,
+  FieldSource,
+  FieldSources,
   HouseOwnership,
   OtherIncome,
-  PrefillField,
+  SourcedField,
+  StillNeeded,
 } from '../../types/eligibility';
 import type { PrefillValues } from '../../hooks/useEligibility';
 import {
@@ -26,32 +30,129 @@ import {
   OTHER_INCOME_TYPES,
   RENT_AGREEMENTS,
   addOtherIncome,
+  addOtherIncomeRow,
+  documentRowsMissing,
+  fillFromDocuments,
+  fillableFields,
+  formatRupees,
   incomeHasFrequency,
   isFutureDate,
   localToday,
   isMaskedPan,
   mobileLooksValid,
+  otherDocumentValue,
   panLooksValid,
   pincodeLooksValid,
   removeOtherIncome,
+  rowFromDocument,
+  setFieldValue,
   setLoan,
   setProfile,
+  sourceOf,
+  stillNeeded,
   updateOtherIncome,
 } from '../../lib/eligibility';
 import type { PolicyCheck } from './checks';
 import {
   BUTTON_CLASS,
   CONTROL_CLASS,
+  DocumentRowOffers,
+  DocumentValueOffer,
   Field,
-  FromDocumentsBadge,
+  FieldSourceBadge,
+  goToField,
   NumberInput,
   SECTION_CLASS,
   SamplePolicyTag,
   SectionTitle,
-  Segmented,
+  SourceLegend,
+  SourceNote,
+  StillNeededList,
 } from './fields';
 
 type Edit = (update: (inputs: EligibilityInputs) => EligibilityInputs) => void;
+
+/** A documents' value as the form shows it: ₹82,500, Rented, 48 months. */
+export function shownValue(
+  t: TFunction,
+  field: SourcedField,
+  value: unknown,
+): string {
+  if (field === 'net_income' || field === 'loan_amount') {
+    return formatRupees(value as number);
+  }
+  if (field === 'tenure_months') {
+    return t('eligibility.months', { count: value as number });
+  }
+  if (field === 'house_ownership') {
+    return t(`eligibility.profile.house.${String(value)}`);
+  }
+  if (field === 'employment_type') {
+    return t(`eligibility.profile.employmentTypes.${String(value)}`);
+  }
+  return String(value);
+}
+
+interface FieldNoteProps {
+  inputs: EligibilityInputs;
+  sources: FieldSources;
+  field: SourcedField;
+  onEdit: Edit;
+  /** Shows the source's detail (off where the field's hint already gives it). */
+  showDetail?: boolean;
+  disabled?: boolean;
+}
+
+/**
+ * What FieldNote shows: where the value was read (it holds the documents'
+ * value), the documents' other value, or nothing.
+ */
+function noteOf({
+  inputs,
+  sources,
+  field,
+  showDetail = true,
+}: FieldNoteProps): { kind: 'read' | 'other'; source: FieldSource } | null {
+  const matched = sourceOf(inputs, sources, field);
+  if (matched) {
+    const shows =
+      matched.documents.length > 0 ||
+      (showDetail && !!matched.detail) ||
+      matched.unverified;
+    return shows ? { kind: 'read', source: matched } : null;
+  }
+  const other = otherDocumentValue(inputs, sources, field);
+  return other ? { kind: 'other', source: other } : null;
+}
+
+/**
+ * What a field shows under its control: where its value was read while it
+ * holds the documents' value, else the documents' value with "Use".
+ */
+export function FieldNote(props: FieldNoteProps) {
+  const { t } = useTranslation();
+  const note = noteOf(props);
+  if (!note) return null;
+  const { source } = note;
+  if (note.kind === 'read') {
+    return <SourceNote source={source} showDetail={props.showDetail ?? true} />;
+  }
+  return (
+    <DocumentValueOffer
+      source={source}
+      value={shownValue(t, props.field, source.value)}
+      onUse={() =>
+        props.onEdit((i) => setFieldValue(i, props.field, source.value))
+      }
+      disabled={props.disabled}
+    />
+  );
+}
+
+/** The note of a field, or undefined when it has none (no room taken). */
+export function fieldNote(props: FieldNoteProps): ReactNode {
+  return noteOf(props) ? <FieldNote {...props} /> : undefined;
+}
 
 function PolicyCheckResult({
   check,
@@ -154,7 +255,10 @@ function PolicyCheckResult({
 interface ProfileSectionProps {
   inputs: EligibilityInputs;
   onEdit: Edit;
-  /** The documents' values of pre-filled fields (badge while unchanged). */
+  /**
+   * What the documents give the form: per field (its source shows while the
+   * field holds that value) and the documents' rows.
+   */
   prefill: PrefillValues;
   /** How the verified net income was taken, e.g. "verified: salary slips, median net pay". */
   incomeSource?: string | null;
@@ -179,26 +283,22 @@ export default function ProfileSection({
   onCheckCompany,
 }: ProfileSectionProps) {
   const { t } = useTranslation();
-  const groupName = useId();
+  const baseId = useId();
   const p = inputs.profile;
+  const sources = prefill.fields ?? {};
   const patch = (next: Partial<EligibilityProfile>) =>
     onEdit((i) => setProfile(i, next));
-  const current = (field: PrefillField): unknown =>
-    field === 'loan_amount'
-      ? inputs.loan.amount
-      : field === 'tenure_months'
-        ? inputs.loan.tenure_months
-        : field === 'tradelines'
-          ? undefined
-          : p[field];
-  const fromDocs = (field: PrefillField) =>
-    prefill[field] !== undefined && prefill[field] === current(field);
-  const label = (text: string, field?: PrefillField): ReactNode => (
+  const source = (field: SourcedField) => sourceOf(inputs, sources, field);
+  const label = (text: string, field?: SourcedField): ReactNode => (
     <>
       {text}
-      {field && fromDocs(field) && <FromDocumentsBadge />}
+      {field && <FieldSourceBadge source={source(field)} />}
     </>
   );
+  const note = (field: SourcedField, showDetail = true) =>
+    fieldNote({ inputs, sources, field, onEdit, showDetail, disabled });
+  // Controls the still-needed list moves to.
+  const idOf = (field: string) => `${baseId}-${field}`;
 
   const panMasked = isMaskedPan(p.pan);
   const panError =
@@ -219,9 +319,22 @@ export default function ProfileSection({
   const sameAddress =
     !!p.current_address && p.current_address === p.permanent_address;
   const today = localToday();
+  const netIncome = source('net_income');
+  const netIncomeDetail = incomeSource || netIncome?.detail;
+  const needed = stillNeeded(inputs, sources);
 
   return (
     <div className="space-y-3">
+      <SourceLegend />
+      <StillNeededList
+        items={needed}
+        tab="profile"
+        onGo={(item: StillNeeded) => goToField(idOf(item.field))}
+        fillable={fillableFields(inputs, sources).length}
+        onFill={() => onEdit((i) => fillFromDocuments(i, sources))}
+        disabled={disabled}
+      />
+
       <section
         className={SECTION_CLASS}
         aria-label={t('eligibility.profile.personal')}
@@ -229,9 +342,11 @@ export default function ProfileSection({
         <SectionTitle>{t('eligibility.profile.personal')}</SectionTitle>
         <div className="grid grid-cols-1 gap-2 @md:grid-cols-2">
           <Field
+            id={idOf('pan')}
             label={label(t('eligibility.profile.pan'), 'pan')}
             hint={panMasked ? t('eligibility.profile.panMasked') : undefined}
             error={panError}
+            note={note('pan')}
           >
             {({ id, describedBy }) => (
               <input
@@ -252,8 +367,12 @@ export default function ProfileSection({
               />
             )}
           </Field>
-          <Field label={label(t('eligibility.profile.name'), 'name')}>
-            {({ id }) => (
+          <Field
+            id={idOf('name')}
+            label={label(t('eligibility.profile.name'), 'name')}
+            note={note('name')}
+          >
+            {({ id, describedBy }) => (
               <input
                 id={id}
                 type="text"
@@ -261,13 +380,19 @@ export default function ProfileSection({
                 onChange={(e) => patch({ name: e.target.value })}
                 maxLength={200}
                 autoComplete="off"
+                aria-describedby={describedBy}
                 disabled={disabled}
                 className={CONTROL_CLASS}
                 data-testid="profile-name"
               />
             )}
           </Field>
-          <Field label={t('eligibility.profile.mobile')} error={mobileError}>
+          <Field
+            id={idOf('mobile')}
+            label={label(t('eligibility.profile.mobile'), 'mobile')}
+            error={mobileError}
+            note={note('mobile')}
+          >
             {({ id, describedBy }) => (
               <input
                 id={id}
@@ -281,12 +406,15 @@ export default function ProfileSection({
                 aria-invalid={mobileError ? true : undefined}
                 disabled={disabled}
                 className={CONTROL_CLASS}
+                data-testid="profile-mobile"
               />
             )}
           </Field>
           <Field
+            id={idOf('dob')}
             label={label(t('eligibility.profile.dob'), 'dob')}
             error={dobError}
+            note={note('dob')}
           >
             {({ id, describedBy }) => (
               <input
@@ -300,30 +428,52 @@ export default function ProfileSection({
                 aria-invalid={dobError ? true : undefined}
                 disabled={disabled}
                 className={CONTROL_CLASS}
+                data-testid="profile-dob"
               />
             )}
           </Field>
-          <Segmented<HouseOwnership>
-            name={`${groupName}-house`}
-            legend={t('eligibility.profile.houseOwnership')}
-            showLegend
-            options={HOUSE_OWNERSHIP.map((value) => ({
-              value,
-              label: t(`eligibility.profile.house.${value}`),
-            }))}
-            value={p.house_ownership}
-            onChange={(value) => patch({ house_ownership: value })}
-            disabled={disabled}
-            testId="house-ownership"
-          />
           <Field
+            id={idOf('house_ownership')}
+            label={label(
+              t('eligibility.profile.houseOwnership'),
+              'house_ownership',
+            )}
+            note={note('house_ownership')}
+          >
+            {({ id, describedBy }) => (
+              <select
+                id={id}
+                value={p.house_ownership ?? ''}
+                onChange={(e) =>
+                  patch({
+                    house_ownership: (e.target.value ||
+                      null) as HouseOwnership | null,
+                  })
+                }
+                aria-describedby={describedBy}
+                disabled={disabled}
+                className={CONTROL_CLASS}
+                data-testid="house-ownership"
+              >
+                <option value="">{t('eligibility.select')}</option>
+                {HOUSE_OWNERSHIP.map((value) => (
+                  <option key={value} value={value}>
+                    {t(`eligibility.profile.house.${value}`)}
+                  </option>
+                ))}
+              </select>
+            )}
+          </Field>
+          <Field
+            id={idOf('pincode')}
             label={
               <>
                 <MapPin className="h-3 w-3" aria-hidden="true" />
-                {t('eligibility.profile.pincode')}
+                {label(t('eligibility.profile.pincode'), 'pincode')}
               </>
             }
             error={pincodeError}
+            note={note('pincode')}
           >
             {({ id, describedBy }) => (
               <div className="flex gap-1.5">
@@ -370,8 +520,15 @@ export default function ProfileSection({
           />
         )}
         <div className="grid grid-cols-1 gap-2 @md:grid-cols-2">
-          <Field label={t('eligibility.profile.currentAddress')}>
-            {({ id }) => (
+          <Field
+            id={idOf('current_address')}
+            label={label(
+              t('eligibility.profile.currentAddress'),
+              'current_address',
+            )}
+            note={note('current_address')}
+          >
+            {({ id, describedBy }) => (
               <textarea
                 id={id}
                 rows={2}
@@ -385,13 +542,22 @@ export default function ProfileSection({
                   );
                 }}
                 maxLength={300}
+                aria-describedby={describedBy}
                 disabled={disabled}
                 className={`${CONTROL_CLASS} resize-y`}
+                data-testid="profile-current-address"
               />
             )}
           </Field>
-          <Field label={t('eligibility.profile.permanentAddress')}>
-            {({ id }) => (
+          <Field
+            id={idOf('permanent_address')}
+            label={label(
+              t('eligibility.profile.permanentAddress'),
+              'permanent_address',
+            )}
+            note={note('permanent_address')}
+          >
+            {({ id, describedBy }) => (
               <div className="space-y-1">
                 <textarea
                   id={id}
@@ -400,8 +566,10 @@ export default function ProfileSection({
                   onChange={(e) => patch({ permanent_address: e.target.value })}
                   maxLength={300}
                   readOnly={sameAddress}
+                  aria-describedby={describedBy}
                   disabled={disabled}
                   className={`${CONTROL_CLASS} resize-y`}
+                  data-testid="profile-permanent-address"
                 />
                 <label className="flex items-center gap-1.5 text-[10px] text-slate-600 dark:text-slate-300">
                   <input
@@ -432,14 +600,16 @@ export default function ProfileSection({
         <SectionTitle>{t('eligibility.profile.employment')}</SectionTitle>
         <div className="grid grid-cols-1 gap-2 @md:grid-cols-2">
           <Field
+            id={idOf('company')}
             label={
               <>
                 <Building2 className="h-3 w-3" aria-hidden="true" />
                 {label(t('eligibility.profile.company'), 'company')}
               </>
             }
+            note={note('company')}
           >
-            {({ id }) => (
+            {({ id, describedBy }) => (
               <div className="flex gap-1.5">
                 <input
                   id={id}
@@ -448,6 +618,7 @@ export default function ProfileSection({
                   onChange={(e) => patch({ company: e.target.value })}
                   maxLength={200}
                   autoComplete="off"
+                  aria-describedby={describedBy}
                   disabled={disabled}
                   className={CONTROL_CLASS}
                   data-testid="profile-company"
@@ -468,12 +639,14 @@ export default function ProfileSection({
             )}
           </Field>
           <Field
+            id={idOf('employment_type')}
             label={label(
               t('eligibility.profile.employmentType'),
               'employment_type',
             )}
+            note={note('employment_type')}
           >
-            {({ id }) => (
+            {({ id, describedBy }) => (
               <select
                 id={id}
                 value={p.employment_type ?? ''}
@@ -483,6 +656,7 @@ export default function ProfileSection({
                       null) as EligibilityProfile['employment_type'],
                   })
                 }
+                aria-describedby={describedBy}
                 disabled={disabled}
                 className={CONTROL_CLASS}
                 data-testid="profile-employment-type"
@@ -513,16 +687,19 @@ export default function ProfileSection({
           />
         )}
         <Field
+          id={idOf('net_income')}
           label={label(t('eligibility.profile.netIncome'), 'net_income')}
           hint={
-            fromDocs('net_income')
-              ? incomeSource
+            netIncome
+              ? netIncomeDetail
                 ? t('eligibility.profile.netIncomeSource', {
-                    source: incomeSource,
+                    source: netIncomeDetail,
                   })
                 : t('eligibility.profile.netIncomeFromDocuments')
               : t('eligibility.profile.netIncomeHint')
           }
+          // The hint gives how the income was verified; the note its files.
+          note={note('net_income', false)}
           className="@md:w-1/2 @md:pr-1"
         >
           {({ id, describedBy }) => (
@@ -540,6 +717,7 @@ export default function ProfileSection({
 
       <OtherIncomeSection
         rows={p.other_income}
+        documentRows={prefill.rows?.other_income}
         onEdit={onEdit}
         disabled={disabled}
       />
@@ -551,21 +729,26 @@ export default function ProfileSection({
         <SectionTitle>{t('eligibility.profile.loan')}</SectionTitle>
         <div className="grid grid-cols-2 gap-2">
           <Field
+            id={idOf('loan_amount')}
             label={label(t('eligibility.profile.loanAmount'), 'loan_amount')}
+            note={note('loan_amount')}
           >
-            {({ id }) => (
+            {({ id, describedBy }) => (
               <NumberInput
                 id={id}
                 value={inputs.loan.amount}
                 onChange={(v) => onEdit((i) => setLoan(i, { amount: v }))}
+                describedBy={describedBy}
                 disabled={disabled}
                 testId="loan-amount"
               />
             )}
           </Field>
           <Field
+            id={idOf('tenure_months')}
             label={label(t('eligibility.profile.tenure'), 'tenure_months')}
             hint={t('eligibility.profile.tenureHint')}
+            note={note('tenure_months')}
           >
             {({ id, describedBy }) => (
               <NumberInput
@@ -587,18 +770,39 @@ export default function ProfileSection({
   );
 }
 
+/** One other income as the documents give it: "Rented income ₹12,000". */
+function incomeSummary(t: TFunction, row: OtherIncome): string {
+  return [
+    t(`eligibility.profile.incomeTypes.${row.type}`),
+    formatRupees(row.amount),
+    row.type === 'rented' && row.agreement
+      ? t(`eligibility.profile.agreements.${row.agreement}`)
+      : null,
+    incomeHasFrequency(row.type) && row.frequency
+      ? t(`eligibility.profile.frequencies.${row.frequency}`)
+      : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
 function OtherIncomeSection({
   rows,
+  documentRows,
   onEdit,
   disabled,
 }: {
   rows: OtherIncome[];
+  /** The documents' other income, in the rows or not. */
+  documentRows?: OtherIncome[];
   onEdit: Edit;
   disabled?: boolean;
 }) {
   const { t } = useTranslation();
   const patch = (index: number, next: Partial<OtherIncome>) =>
     onEdit((i) => updateOtherIncome(i, index, next));
+  // Saved inputs typed otherwise: the documents' rows they do not hold.
+  const missing = documentRowsMissing(rows, documentRows);
   return (
     <section
       className={SECTION_CLASS}
@@ -624,13 +828,24 @@ function OtherIncomeSection({
         <ul className="space-y-1.5">
           {rows.map((row, index) => {
             const typeLabel = t(`eligibility.profile.incomeTypes.${row.type}`);
+            const fromDocument = rowFromDocument(row);
             return (
               <li
                 key={row.key ?? index}
                 className="grid grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,1fr)_auto] items-end gap-1.5"
                 data-testid="other-income"
+                data-source={fromDocument ? 'document' : undefined}
               >
-                <Field label={t('eligibility.profile.incomeType')}>
+                <Field
+                  label={
+                    <>
+                      {t('eligibility.profile.incomeType')}
+                      <FieldSourceBadge
+                        source={fromDocument ? row.document : null}
+                      />
+                    </>
+                  }
+                >
                   {({ id }) => (
                     <select
                       id={id}
@@ -736,11 +951,26 @@ function OtherIncomeSection({
                 >
                   <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
                 </button>
+                {row.document && (
+                  <div className="col-span-full">
+                    <SourceNote
+                      source={row.document}
+                      edited={!fromDocument}
+                      showDetail={fromDocument}
+                    />
+                  </div>
+                )}
               </li>
             );
           })}
         </ul>
       )}
+      <DocumentRowOffers
+        rows={missing}
+        summary={(row) => incomeSummary(t, row)}
+        onAdd={(row) => onEdit((inputs) => addOtherIncomeRow(inputs, row))}
+        disabled={disabled || rows.length >= MAX_OTHER_INCOME}
+      />
       <p className="text-[10px] leading-snug text-slate-500 dark:text-slate-400">
         {t('eligibility.profile.otherIncomeNote')}
       </p>

@@ -6,7 +6,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import i18next from 'i18next';
 import { I18nextProvider, initReactI18next } from 'react-i18next';
 import en from '../../i18n/locales/en.json';
-import EligibilityPanel from '.';
+import EligibilityPanel, { branchLendersOf } from '.';
 import VerdictCard from '../FileCheckPanel/VerdictCard';
 import {
   READY_OBLIGATIONS_RESULT,
@@ -45,6 +45,11 @@ import type {
   EligibilityInputs,
   TradelineAction,
 } from '../../types/eligibility';
+
+// The Lenders tab's branch finder gets its fetchApi itself.
+vi.mock('../../hooks/useAwsClient', () => ({
+  useAwsClient: () => ({ fetchApi: async () => undefined }),
+}));
 
 const i18n = i18next.createInstance();
 
@@ -502,6 +507,122 @@ describe('Profile', () => {
     expect(html).toContain('>Check availability</button>');
     expect(html).toContain('>Check category</button>');
   });
+
+  it('marks the answers of the uploaded lists', () => {
+    const t = i18n.t.bind(i18n);
+    const pincode = pincodeCheckRows(
+      t,
+      parsePincodeCheck(
+        {
+          pincode: '401202',
+          region: null,
+          lenders: [
+            {
+              lender_id: 'icici_bank',
+              lender: 'ICICI Bank',
+              serviceable: false,
+              source: 'dsa_list',
+            },
+            {
+              lender_id: 'hdfc_bank',
+              lender: 'HDFC Bank',
+              serviceable: true,
+              source: 'sample',
+            },
+            // An API without the field: the SAMPLE list.
+            { lender_id: 'axis_bank', lender: 'Axis Bank', serviceable: true },
+          ],
+          sample: true,
+        },
+        '401202',
+      ),
+    );
+    expect(pincode.rows.map((row) => row.text)).toEqual([
+      'Not serviceable · your list',
+      'Serviceable',
+      'Serviceable',
+    ]);
+    const company = companyCheckRows(
+      t,
+      parseCompanyCheck(
+        {
+          query: 'Konkan Softworks',
+          match: null,
+          categories: [
+            {
+              lender_id: 'hdfc_bank',
+              lender: 'HDFC Bank',
+              category: 'CAT B',
+              listed: true,
+              accepted: true,
+              foir: 0.55,
+              multiplier: 16,
+              source: 'dsa_list',
+            },
+            {
+              lender_id: 'icici_bank',
+              lender: 'ICICI Bank',
+              category: null,
+              listed: false,
+              accepted: false,
+              foir: null,
+              multiplier: null,
+              source: 'dsa_list',
+            },
+          ],
+          suggestions: [],
+          sample: true,
+        },
+        'Konkan Softworks',
+      ),
+    );
+    expect(company.rows.map((row) => row.text)).toEqual([
+      'CAT B · FOIR 55%, multiplier 16 · your list',
+      'Unlisted: not accepted · your list',
+    ]);
+  });
+
+  it("shows a FOIR grid lender's FOIR range by salary slab", () => {
+    const t = i18n.t.bind(i18n);
+    const company = companyCheckRows(
+      t,
+      parseCompanyCheck(
+        {
+          query: 'Konkan Softworks',
+          match: null,
+          categories: [
+            {
+              lender_id: 'hdfc_bank',
+              lender: 'HDFC Bank',
+              category: 'CAT A',
+              listed: true,
+              accepted: true,
+              foir: 0.6,
+              multiplier: 20,
+              foir_range: [0.6, 0.75],
+            },
+            {
+              lender_id: 'icici_bank',
+              lender: 'ICICI Bank',
+              category: 'CAT A',
+              listed: true,
+              accepted: true,
+              foir: 0.7,
+              multiplier: 21,
+              foir_range: null,
+            },
+          ],
+          suggestions: [],
+          sample: true,
+        },
+        'Konkan Softworks',
+      ),
+    );
+    expect(company.rows.map((row) => row.text)).toEqual([
+      'CAT A · FOIR 60%–75% by net salary slab, multiplier 20',
+      'CAT A · FOIR 70%, multiplier 21',
+    ]);
+  });
 });
 
 describe('File check entry point', () => {
@@ -601,5 +722,151 @@ describe('EligibilityPanel', () => {
     );
     expect(html).toContain('data-testid="draft-notes"');
     expect(html).toContain('data-testid="profile-net-income"');
+  });
+});
+
+describe('Lenders tab: nearest branches and what is still needed', () => {
+  const state = (
+    drafts: EligibilityState['drafts'],
+    lenders: EligibilityState['lenders'] = null,
+  ): EligibilityState => ({
+    lenders,
+    lendersLoading: false,
+    lendersError: null,
+    loadLenders: async () => undefined,
+    drafts,
+    load: async () => undefined,
+    edit: noop,
+    save: async () => true,
+    calculate: async () => null,
+    login: async () => ({ kind: 'ignored' }),
+    checkPincode: async () => {
+      throw new Error('not used');
+    },
+    checkCompany: async () => {
+      throw new Error('not used');
+    },
+    forget: noop,
+  });
+  const saved = () => {
+    const parsed = parseInputsResponse(SAVED_INPUTS_RESPONSE, SNEHA);
+    return {
+      ...newDraft('CKRPK7314M'),
+      loaded: true,
+      inputs: parsed.inputs,
+      savedKey: inputsKey(parsed.inputs),
+      saved: true,
+    };
+  };
+  const policy = (name: string) => ({
+    id: name.toLowerCase().replace(/\W+/g, '_'),
+    name,
+    product: null,
+    roi: null,
+    min_tenure_months: null,
+  });
+
+  it('looks up the eligible lenders, the best first', () => {
+    // ICICI and HDFC are eligible; Axis is not serviceable, Bajaj not eligible.
+    expect(RESULT?.best_lender).toBe('ICICI Bank');
+    expect(branchLendersOf(RESULT, [])).toEqual(['ICICI Bank', 'HDFC Bank']);
+    const hdfcBest = RESULT && { ...RESULT, best_lender: 'HDFC Bank' };
+    expect(branchLendersOf(hdfcBest, [])).toEqual(['HDFC Bank', 'ICICI Bank']);
+    const none = RESULT && {
+      ...RESULT,
+      best_lender: null,
+      per_lender: RESULT.per_lender.map((row) => ({
+        ...row,
+        status: 'not_eligible',
+      })),
+    };
+    expect(branchLendersOf(none, [])).toEqual([]);
+  });
+
+  it('looks up every lender of the policies before a calculation', () => {
+    const lenders = [policy('HDFC Bank'), policy('Bajaj Finance')];
+    expect(
+      branchLendersOf(null, lenders as Parameters<typeof branchLendersOf>[1]),
+    ).toEqual(['HDFC Bank', 'Bajaj Finance']);
+    expect(branchLendersOf(null, undefined)).toEqual([]);
+  });
+
+  it('shows the branch finder under the lenders table of a project', () => {
+    const draft = {
+      ...saved(),
+      result: RESULT,
+      resultKey: saved().savedKey,
+    };
+    const panel = (projectId?: string, initialTab?: 'profile' | 'lenders') =>
+      render(
+        <EligibilityPanel
+          state={state({ CKRPK7314M: draft })}
+          projectId={projectId}
+          applicant="CKRPK7314M"
+          name={SNEHA}
+          pan="CKRPK7314M"
+          onBack={noop}
+          onClose={noop}
+          initialTab={initialTab}
+        />,
+      );
+    const html = panel('proj-1', 'lenders');
+    expect(draft.inputs.profile.pincode).toBe('401303');
+    expect(html).toContain('data-testid="branch-finder"');
+    expect(plain(html)).toContain('Nearest branches');
+    expect(html.indexOf('data-testid="lenders-table"')).toBeLessThan(
+      html.indexOf('data-testid="branch-finder"'),
+    );
+    expect(panel(undefined, 'lenders')).not.toContain(
+      'data-testid="branch-finder"',
+    );
+    expect(panel('proj-1', 'profile')).not.toContain(
+      'data-testid="branch-finder"',
+    );
+  });
+
+  it('shows the branch finder before a calculation once the lenders load', () => {
+    const panel = (lenders: EligibilityState['lenders']) =>
+      render(
+        <EligibilityPanel
+          state={state({ CKRPK7314M: saved() }, lenders)}
+          projectId="proj-1"
+          applicant="CKRPK7314M"
+          name={SNEHA}
+          pan="CKRPK7314M"
+          onBack={noop}
+          onClose={noop}
+          initialTab="lenders"
+        />,
+      );
+    expect(panel(null)).not.toContain('data-testid="branch-finder"');
+    const loaded = {
+      sample: true,
+      label: null,
+      lenders: [policy('HDFC Bank')],
+      disclaimers: [],
+    } as unknown as EligibilityState['lenders'];
+    expect(panel(loaded)).toContain('data-testid="branch-finder"');
+  });
+
+  it('lists what is still needed before the first calculation', () => {
+    const draft = saved();
+    draft.inputs = {
+      ...draft.inputs,
+      cibil: { ...draft.inputs.cibil, score: null },
+    };
+    const html = render(
+      <EligibilityPanel
+        state={state({ CKRPK7314M: draft })}
+        applicant="CKRPK7314M"
+        name={SNEHA}
+        pan="CKRPK7314M"
+        onBack={noop}
+        onClose={noop}
+        initialTab="lenders"
+      />,
+    );
+    expect(html).toContain('data-testid="still-needed"');
+    expect(plain(html)).toContain('Still needed before Check eligibility');
   });
 });

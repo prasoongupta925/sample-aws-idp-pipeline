@@ -3,7 +3,7 @@
 //   GET  .../lenders              SAMPLE lender policies and the form's choices
 //   GET  .../pincodes/{pincode}   "Check availability": the lenders serving a pincode
 //   GET  .../companies?name=      "Check category": a company's category per lender
-//   GET  .../inputs?applicant=    saved inputs, else a draft pre-filled from the file check
+//   GET  .../inputs?applicant=    saved inputs, else a draft filled from the documents
 //   PUT  .../inputs               save an applicant's inputs (deleted by TTL after 7 days)
 //   POST .../calculate            eligibility at every lender (app/eligibility.py)
 //   POST .../login                record a login request, notify the CRM webhook
@@ -11,9 +11,65 @@
 // them as returned. Every lender policy, pincode list and company category is
 // SAMPLE data. Choices are sent and returned as ids (private_limited, bt).
 
+// ------------------------------------------------------------------ sources
+
+/** A document a value was read from: "from <file>, page N". */
+export interface DocumentRef {
+  document_id: string | null;
+  /** The file name, e.g. 01_loan_application_form.pdf */
+  file: string;
+  /** 1-based; null when the facts record does not say. */
+  page: number | null;
+  doc_type: string | null;
+}
+
+/**
+ * Where a value of the form came from (GET .../inputs): `value` is what the
+ * documents give, and the field shows the source while it holds that value
+ * (typed values always win). Never sent back.
+ */
+export interface FieldSource {
+  /** document = From Document (the files below); table = From Table (the company list). */
+  source: 'document' | 'table';
+  value: unknown;
+  documents: DocumentRef[];
+  /** e.g. "verified: salary slips, median net pay" */
+  detail: string | null;
+  /** An amount the facts check did not find in the document's text. */
+  unverified: boolean;
+}
+
+/**
+ * The legend of the panel: the sheet's From Policy (grey), Formula
+ * Calculation (yellow) and From Table (green), and From Document (blue).
+ */
+export type SourceKind = 'document' | 'table' | 'policy' | 'formula';
+
+/**
+ * "Still needed before Check eligibility": a field no document filled and
+ * nobody typed, or a loan a lender cannot count yet.
+ */
+export interface StillNeeded {
+  /** e.g. "pincode", "score", "enquiries.d90", "tradelines.2.emi" (1-based loan). */
+  field: string;
+  /** Every lender's check needs it (else a field of the sheet left empty). */
+  required: boolean;
+  /** A document holds a value for it that the inputs do not have. */
+  fromDocuments: boolean;
+  /** The tab the field is on. */
+  tab: 'profile' | 'cibil';
+  /** tradelines.N.*: the loan's number, lender and type. */
+  loan?: { number: number; lender: string | null; loanType: LoanType | null };
+}
+
 // ------------------------------------------------------------------ profile
 
-export type HouseOwnership = 'owned' | 'rented';
+/** The documents also give parental and company-provided homes. */
+export type HouseOwnership =
+  | 'owned'
+  | 'rented'
+  | 'parental'
+  | 'company_provided';
 
 /** The client's "Employement Type" list. */
 export type EmploymentType =
@@ -47,6 +103,8 @@ export interface OtherIncome {
   frequency?: IncomeFrequency | null;
   /** Rented income only (without it the backend counts notary). */
   agreement?: RentAgreement | null;
+  /** The document row it came from (GET .../inputs); never sent. */
+  document?: FieldSource | null;
 }
 
 export interface EligibilityProfile {
@@ -97,8 +155,15 @@ export type TradelineStatus =
   | 'wilful_default'
   | 'restructured';
 
-/** Who filled a tradeline: by hand, a bureau pull, or the bank statement (pre-fill). */
-export type TradelineSource = 'manual' | 'bureau' | 'bank_statement';
+/**
+ * Who filled a tradeline: by hand, a bureau pull, the uploaded credit report,
+ * or the bank statement (a suggestion of the pre-fill).
+ */
+export type TradelineSource =
+  | 'manual'
+  | 'bureau'
+  | 'credit_report'
+  | 'bank_statement';
 
 export interface Tradeline {
   /** Row key in the form; never sent. */
@@ -122,6 +187,8 @@ export interface Tradeline {
   action: TradelineAction;
   /** Kept as received (a bureau pull or the pre-fill sets it); default manual. */
   source?: TradelineSource | null;
+  /** The document row it came from (GET .../inputs); never sent. */
+  document?: FieldSource | null;
 }
 
 /** Cumulative enquiries in the last 30 / 60 / 90 / 120 days. */
@@ -132,8 +199,22 @@ export interface CibilEnquiries {
   d120: number | null;
 }
 
-/** Who filled the CIBIL block: manual now, bureau when a CIBIL pull fills it. */
-export type CibilSource = 'manual' | 'bureau';
+/** Who filled the CIBIL block: by hand, the uploaded credit report, or a bureau pull. */
+export type CibilSource = 'manual' | 'bureau' | 'credit_report';
+
+/** What the documents give the CIBIL block (GET .../inputs). */
+export interface CibilSources {
+  score?: FieldSource;
+  /** value: {d30, d60, d90, d120} */
+  enquiries?: FieldSource;
+  /** value: the report's date; detail: "CIBIL report"; documents: the report. */
+  report?: FieldSource;
+  /**
+   * The documents' loans (the credit report's, and the bank statement's other
+   * loan EMIs as suggestions), each with its `document`, saved or not.
+   */
+  tradelines?: Tradeline[];
+}
 
 export interface EligibilityCibil {
   score: number | null;
@@ -141,8 +222,10 @@ export interface EligibilityCibil {
   tradelines: Tradeline[];
   /** Kept as received; default manual. */
   source?: CibilSource | null;
-  /** YYYY-MM-DD of the bureau report, when a pull fills it. */
+  /** YYYY-MM-DD of the credit report or bureau pull. */
   report_date?: string | null;
+  /** What the documents give this block (GET .../inputs); never sent. */
+  sources?: CibilSources | null;
 }
 
 export interface EligibilityLoan {
@@ -162,20 +245,42 @@ export interface EligibilityInputsRequest extends EligibilityInputs {
   applicant: string;
 }
 
-/**
- * Fields a draft took from the documents: name, pan, company,
- * employment_type, net_income, dob, loan_amount, tenure_months, tradelines.
- */
+/** Fields a document can fill, in the order of the client's sheets. */
 export type PrefillField =
   | 'name'
   | 'pan'
+  | 'mobile'
+  | 'dob'
+  | 'house_ownership'
+  | 'pincode'
+  | 'current_address'
+  | 'permanent_address'
   | 'company'
   | 'employment_type'
   | 'net_income'
-  | 'dob'
+  | 'other_income'
   | 'loan_amount'
   | 'tenure_months'
+  | 'score'
+  | 'enquiries'
   | 'tradelines';
+
+/** A field holding one value (the rows, other income and tradelines, have their own sources). */
+export type SourcedField = Exclude<PrefillField, 'other_income' | 'tradelines'>;
+
+/**
+ * GET .../inputs `sources`: per field (and `report`, the credit report), what
+ * the documents give it.
+ */
+export type FieldSources = Partial<
+  Record<SourcedField | 'report', FieldSource>
+>;
+
+/** GET .../inputs `document_rows`: the documents' rows, each with its `document`. */
+export interface DocumentRows {
+  other_income: OtherIncome[];
+  tradelines: Tradeline[];
+}
 
 /** How a draft was pre-filled from the file check (GET .../inputs). */
 export interface EligibilityPrefill {
@@ -184,16 +289,25 @@ export interface EligibilityPrefill {
   /** e.g. "verified: salary slips, median net pay" */
   income_source: string | null;
   suggested_tradelines: number;
+  /** The credit report the CIBIL block was read from. */
+  credit_report: string | null;
   documents: number;
 }
 
 /** GET / PUT .../inputs (normalized by lib/eligibility.parseInputsResponse). */
 export interface EligibilityInputsResponse {
   applicant: string;
+  /** Each row carries its `document`, the CIBIL block its `sources`. */
   inputs: EligibilityInputs;
   /** Fields the draft took from the applicant's documents. */
   fromDocuments: PrefillField[];
   prefill: EligibilityPrefill | null;
+  /** What the documents give each field (saved inputs too: typed values win). */
+  sources: FieldSources;
+  /** The documents' rows, in the inputs or not. */
+  documentRows: DocumentRows;
+  /** The API's "Still needed before Check eligibility" for the inputs returned. */
+  stillNeeded: StillNeeded[];
   /** The inputs were saved (else a draft, pre-filled when possible). */
   saved: boolean;
   /** When the saved inputs are deleted (DynamoDB TTL), ISO. */
@@ -251,9 +365,18 @@ export interface PincodeCheck {
   pincode: string;
   /** The SAMPLE region the pincode is in, if any. */
   region: string | null;
-  lenders: { lender_id: string; lender: string; serviceable: boolean }[];
+  lenders: {
+    lender_id: string;
+    lender: string;
+    serviceable: boolean;
+    /** dsa_list: the DSA's uploaded serviceability list; sample: the SAMPLE list. */
+    source?: CheckSource;
+  }[];
   sample: boolean;
 }
+
+/** Where a check's answer came from: the DSA's uploaded list, or the SAMPLE list. */
+export type CheckSource = 'dsa_list' | 'sample';
 
 /** One lender's answer in GET .../companies?name= */
 export interface CompanyCategory {
@@ -266,6 +389,13 @@ export interface CompanyCategory {
   accepted: boolean;
   foir: number | null;
   multiplier: number | null;
+  /**
+   * A lender with a FOIR grid: the category's lowest and highest FOIR over
+   * the net salary slabs (foir is the lowest slab's).
+   */
+  foir_range?: [number, number] | null;
+  /** dsa_list: the DSA's uploaded company list; sample: the SAMPLE list. */
+  source?: CheckSource;
 }
 
 /** GET .../companies?name= */
@@ -318,7 +448,10 @@ export interface LenderEligibility {
   computed_amount: number | null;
   /** The lender's max tenure: the EMI is shown at it. */
   tenure_months: number | null;
-  /** The per-lakh EMI's tenure: requested, within the lender's limits. */
+  /**
+   * The per-lakh EMI's tenure: the lender's calculation tenure, or a shorter
+   * requested tenure (at least the lender's min).
+   */
   calculation_tenure_months: number | null;
   roi: number | null;
   /** At the lender's max tenure; 0 unless eligible. */
@@ -392,10 +525,21 @@ export interface EligibilityResult {
   best_lender_reason: string | null;
   /** The policies are SAMPLE data. */
   sample: boolean;
-  /** Whether the file check's verified figures were used, and why not. */
-  file_check: { used: boolean; detail: string | null } | null;
+  /** Whether the file check's verified figures were used (and why not), and its verdict. */
+  file_check: EligibilityFileCheck | null;
   notes: string[];
   disclaimers: string[];
+}
+
+/** The file check behind a calculation. */
+export interface EligibilityFileCheck {
+  used: boolean;
+  detail: string | null;
+  /** READY or NOT READY; null without the file check. */
+  verdict: string | null;
+  ready: boolean | null;
+  /** The file check's reasons for NOT READY, in order. */
+  issues: string[];
 }
 
 // ------------------------------------------------------------------ login
@@ -404,6 +548,8 @@ export interface EligibilityResult {
 export interface EligibilityLoginRequest {
   applicant: string;
   lender: string;
+  /** The user saw the open issues of a NOT READY file and logs it in anyway (else 428). */
+  confirm_not_ready?: boolean;
 }
 
 /** The CRM webhook delivery made for a login. */
@@ -436,4 +582,7 @@ export interface EligibilityLoginResponse {
   webhook_detail: string | null;
   /** The CRM webhook delivery; null when none was attempted. */
   delivery: LoginDelivery | null;
+  /** The file check's verdict at login: false = logged in NOT READY (confirmed). */
+  file_ready: boolean | null;
+  open_issues: number;
 }

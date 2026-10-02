@@ -3,8 +3,9 @@ import type { CompanyCheck, PincodeCheck } from '../../types/eligibility';
 import { formatFoir } from '../../lib/eligibility';
 
 // "Check availability" and "Check category" per lender, as the backend's
-// SAMPLE pincode and company lists answer them
-// (GET .../eligibility/pincodes/{pincode}, GET .../eligibility/companies).
+// SAMPLE pincode and company lists answer them, or the DSA's uploaded list
+// for a lender it has (GET .../eligibility/pincodes/{pincode},
+// GET .../eligibility/companies).
 
 /** One lender's answer to "Check availability" / "Check category". */
 export interface PolicyCheckRow {
@@ -44,24 +45,46 @@ export function pincodeCheckRows(
     rows: check.lenders.map((l) => ({
       lender: l.lender,
       ok: l.serviceable,
-      text: l.serviceable
-        ? t('eligibility.profile.serviceable')
-        : t('eligibility.profile.notServiceable'),
+      text: fromList(
+        t,
+        l.source,
+        l.serviceable
+          ? t('eligibility.profile.serviceable')
+          : t('eligibility.profile.notServiceable'),
+      ),
     })),
   };
+}
+
+/** `text`, marked when the DSA's uploaded list gave it. */
+function fromList(
+  t: TFunction,
+  source: string | undefined,
+  text: string,
+): string {
+  return source === 'dsa_list'
+    ? `${text} · ${t('eligibility.profile.fromYourList')}`
+    : text;
 }
 
 function terms(
   t: TFunction,
   foir: number | null,
   multiplier: number | null,
+  foirRange?: [number, number] | null,
 ): string {
-  return foir !== null && multiplier !== null
-    ? t('eligibility.profile.categoryTerms', {
-        foir: formatFoir(foir),
+  if (foir === null || multiplier === null) return '';
+  // A FOIR grid: the FOIR depends on the net salary's slab.
+  return foirRange
+    ? t('eligibility.profile.categoryTermsGrid', {
+        from: formatFoir(foirRange[0]),
+        to: formatFoir(foirRange[1]),
         multiplier,
       })
-    : '';
+    : t('eligibility.profile.categoryTerms', {
+        foir: formatFoir(foir),
+        multiplier,
+      });
 }
 
 /**
@@ -79,26 +102,38 @@ export function companyCheckRows(
       : t('eligibility.profile.companyNoMatch'),
     suggestions: check.suggestions,
     rows: check.categories.map((c) => {
-      const detail = terms(t, c.foir, c.multiplier);
+      const detail = terms(t, c.foir, c.multiplier, c.foir_range);
       if (c.listed && c.category) {
         return {
           lender: c.lender,
           ok: true,
-          text: detail ? `${c.category} · ${detail}` : c.category,
+          text: fromList(
+            t,
+            c.source,
+            detail ? `${c.category} · ${detail}` : c.category,
+          ),
         };
       }
       return c.accepted
         ? {
             lender: c.lender,
             ok: null,
-            text: detail
-              ? `${t('eligibility.profile.unlistedAccepted')} · ${detail}`
-              : t('eligibility.profile.unlistedAccepted'),
+            text: fromList(
+              t,
+              c.source,
+              detail
+                ? `${t('eligibility.profile.unlistedAccepted')} · ${detail}`
+                : t('eligibility.profile.unlistedAccepted'),
+            ),
           }
         : {
             lender: c.lender,
             ok: false,
-            text: t('eligibility.profile.unlistedRejected'),
+            text: fromList(
+              t,
+              c.source,
+              t('eligibility.profile.unlistedRejected'),
+            ),
           };
     }),
   };
