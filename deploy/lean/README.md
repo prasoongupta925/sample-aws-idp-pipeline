@@ -8,7 +8,8 @@ by default, no WAF. Everything left is pay per use, so the stack costs about $3 
 ## Fresh deploy (the normal path)
 
 1. Push the branch. The build clones it from GitHub (`--repo`, default the fork), not from this working copy.
-2. Run `deploy/lean/deploy.sh`. It creates the CodeBuild project the first time, bootstraps CDK when the region
+2. Run `deploy/lean/deploy.sh`. It creates the CodeBuild project the first time (later runs apply changes of
+   `deploy-codebuild.yml`, such as the Bedrock model deny of its role), bootstraps CDK when the region
    has no bootstrap yet and deploys the 15 stacks. The admin user (`ADMIN_USER_EMAIL`) gets its temporary
    password by email.
 3. Seed the demo data (logins, sample loan files) with the demo seed script. It is kept outside this repository

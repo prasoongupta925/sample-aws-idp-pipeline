@@ -16,7 +16,7 @@ import * as fs from 'fs';
 import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import {
-  BLOCKED_BEDROCK_MODEL_RESOURCES,
+  bedrockModelInvokeResources,
   getRegionConfig,
   PADDLEOCR_ENDPOINT_NAME_VALUE,
   SSM_KEYS,
@@ -325,13 +325,31 @@ export class WorkflowStack extends Stack {
     // Lambda Functions
     // ========================================
 
-    // Cross-region model settings (ap-south-1 has no Amazon embedding model)
+    // Region settings (region-config.ts): the embedding model's Region.
     const regionConfig = getRegionConfig(this);
 
     // Bedrock service tier of the background pipeline calls (segment analysis,
     // page descriptions, summary, facts): Flex is half the standard price for
     // work nobody waits on. '' = the standard tier.
     const pipelineServiceTier = 'flex';
+
+    // The models the workflow Lambdas call (models.json; the embeddings run in
+    // the LanceDB service). Their roles may invoke these, in this Region, and
+    // nothing else; an empty id (no video model in the Mumbai build) gets no
+    // grant.
+    const pipelineModels = bedrockModelInvokeResources(
+      [
+        models.analysis,
+        models.videoAnalysis,
+        models.scriptExtractor,
+        models.describer,
+        models.docSummarizer,
+        models.facts,
+        models.extractor,
+        models.entityNormalizer,
+      ],
+      this.region,
+    );
 
     const commonLambdaProps = {
       runtime: lambda.Runtime.PYTHON_3_14,
@@ -425,13 +443,14 @@ export class WorkflowStack extends Stack {
       },
     );
     // S3 (doc bucket) + DDB grants come from the allFunctions loop below.
+    // Bedrock: its reference-doc model (DATASET_REFERENCE_MODEL_ID), in-Region.
     datasetProcess.addToRolePolicy(
       new iam.PolicyStatement({
         actions: [
           'bedrock:InvokeModel',
           'bedrock:InvokeModelWithResponseStream',
         ],
-        resources: ['*'],
+        resources: bedrockModelInvokeResources(models.analysis, this.region),
       }),
     );
     lancedbService.grantInvoke(datasetProcess);
@@ -1917,27 +1936,17 @@ export class WorkflowStack extends Stack {
         }),
       );
 
-      // Bedrock permissions
+      // Bedrock permissions: the pipeline models, in this Region only. The
+      // App's BedrockModelGuard adds the deny statements (AWS-sold models
+      // only, no model call outside the Region; common-constructs
+      // core/bedrock-model-guard.ts).
       fn.addToRolePolicy(
         new iam.PolicyStatement({
           actions: [
             'bedrock:InvokeModel',
             'bedrock:InvokeModelWithResponseStream',
           ],
-          resources: ['*'],
-        }),
-      );
-
-      // AWS-sold models only: deny Marketplace / third-party-billed providers
-      fn.addToRolePolicy(
-        new iam.PolicyStatement({
-          sid: 'DenyNonAwsSoldModels',
-          effect: iam.Effect.DENY,
-          actions: [
-            'bedrock:InvokeModel',
-            'bedrock:InvokeModelWithResponseStream',
-          ],
-          resources: BLOCKED_BEDROCK_MODEL_RESOURCES,
+          resources: pipelineModels,
         }),
       );
     }

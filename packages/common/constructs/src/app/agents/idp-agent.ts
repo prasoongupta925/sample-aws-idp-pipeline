@@ -3,7 +3,7 @@ import { ArnFormat, Stack } from 'aws-cdk-lib';
 import { Platform } from 'aws-cdk-lib/aws-ecr-assets';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { SSM_KEYS } from '../../constants/ssm-keys.js';
-import { BLOCKED_BEDROCK_MODEL_RESOURCES } from '../../constants/bedrock.js';
+import { bedrockModelInvokeResources } from '../../constants/bedrock.js';
 import { IBucket } from 'aws-cdk-lib/aws-s3';
 import { ITable } from 'aws-cdk-lib/aws-dynamodb';
 import { IQueue } from 'aws-cdk-lib/aws-sqs';
@@ -21,6 +21,16 @@ export interface IdpAgentProps {
   backendTable: ITable;
   gateway?: Gateway;
   bedrockModelId?: string;
+  /**
+   * Bedrock models the runtime may invoke besides its BEDROCK_MODEL_ID (e.g.
+   * the chat models a user may pick). In-Region model ids only: the role may
+   * invoke these models in the stack's Region and nothing else.
+   */
+  modelIds?: readonly string[];
+  /** Read the chat model catalog parameter (the agent that validates model ids). */
+  chatModelCatalog?: boolean;
+  /** AgentCore Browser permissions (the web crawler). */
+  browserAccess?: boolean;
   agentStorageBucket?: IBucket;
   /** Document storage bucket for reading/writing documents */
   documentBucket?: IBucket;
@@ -46,6 +56,9 @@ export class IdpAgent extends Construct {
       backendTable,
       gateway,
       bedrockModelId,
+      modelIds = [],
+      chatModelCatalog = false,
+      browserAccess = false,
       agentStorageBucket,
       documentBucket,
       websocketMessageQueue,
@@ -59,33 +72,35 @@ export class IdpAgent extends Construct {
       platform: Platform.LINUX_ARM64,
     });
 
+    const environmentVariables: Record<string, string> = {
+      SESSION_STORAGE_BUCKET_NAME: sessionStorageBucket.bucketName,
+      BACKEND_TABLE_NAME: backendTable.tableName,
+      ...(gateway?.gatewayUrl && { MCP_GATEWAY_URL: gateway.gatewayUrl }),
+      ...(bedrockModelId && { BEDROCK_MODEL_ID: bedrockModelId }),
+      ...(agentStorageBucket && {
+        AGENT_STORAGE_BUCKET_NAME: agentStorageBucket.bucketName,
+      }),
+      ...(documentBucket && {
+        DOCUMENT_BUCKET_NAME: documentBucket.bucketName,
+      }),
+      ...(websocketMessageQueue && {
+        WEBSOCKET_MESSAGE_QUEUE_URL: websocketMessageQueue.queueUrl,
+      }),
+      ...(codeInterpreterIdentifier && {
+        CODE_INTERPRETER_IDENTIFIER: codeInterpreterIdentifier,
+      }),
+      ...(backendUrl && { BACKEND_URL: backendUrl }),
+      ...(chatAgentRuntimeArn && {
+        CHAT_AGENT_RUNTIME_ARN: chatAgentRuntimeArn,
+      }),
+      ...extraEnvironment,
+    };
+
     this.runtime = new Runtime(this, 'Runtime', {
       runtimeName: agentName,
       protocolConfiguration: ProtocolType.HTTP,
       agentRuntimeArtifact: dockerImage,
-      environmentVariables: {
-        SESSION_STORAGE_BUCKET_NAME: sessionStorageBucket.bucketName,
-        BACKEND_TABLE_NAME: backendTable.tableName,
-        ...(gateway?.gatewayUrl && { MCP_GATEWAY_URL: gateway.gatewayUrl }),
-        ...(bedrockModelId && { BEDROCK_MODEL_ID: bedrockModelId }),
-        ...(agentStorageBucket && {
-          AGENT_STORAGE_BUCKET_NAME: agentStorageBucket.bucketName,
-        }),
-        ...(documentBucket && {
-          DOCUMENT_BUCKET_NAME: documentBucket.bucketName,
-        }),
-        ...(websocketMessageQueue && {
-          WEBSOCKET_MESSAGE_QUEUE_URL: websocketMessageQueue.queueUrl,
-        }),
-        ...(codeInterpreterIdentifier && {
-          CODE_INTERPRETER_IDENTIFIER: codeInterpreterIdentifier,
-        }),
-        ...(backendUrl && { BACKEND_URL: backendUrl }),
-        ...(chatAgentRuntimeArn && {
-          CHAT_AGENT_RUNTIME_ARN: chatAgentRuntimeArn,
-        }),
-        ...extraEnvironment,
-      },
+      environmentVariables,
     });
 
     if (gateway) {
@@ -113,71 +128,70 @@ export class IdpAgent extends Construct {
     // Grant DynamoDB read/write access for backend table
     backendTable.grantReadWriteData(this.runtime.role);
 
-    // Add Bedrock model invocation permissions
-    this.runtime.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: [
-          'bedrock:InvokeModel',
-          'bedrock:InvokeModelWithResponseStream',
-          'bedrock:Rerank',
-        ],
-        resources: ['*'],
-      }),
+    // Bedrock: only the models this runtime calls (its BEDROCK_MODEL_ID and
+    // modelIds), in-Region foundation models only. The App's BedrockModelGuard
+    // adds the deny statements (core/bedrock-model-guard.ts: AWS-sold models
+    // only, nothing outside the stack's Region); no AWS Marketplace access is
+    // granted. Search re-ranking runs in the search MCP Lambda, not here.
+    const defaultModelId = environmentVariables.BEDROCK_MODEL_ID;
+    const models = bedrockModelInvokeResources(
+      [...(defaultModelId ? [defaultModelId] : []), ...modelIds],
+      Stack.of(this).region,
     );
-
-    // Only AWS-sold models: explicitly deny non-AWS-sold model providers
-    // (no AWS Marketplace access is granted either).
-    this.runtime.addToRolePolicy(
-      new iam.PolicyStatement({
-        sid: 'DenyNonAwsSoldModels',
-        effect: iam.Effect.DENY,
-        actions: [
-          'bedrock:InvokeModel',
-          'bedrock:InvokeModelWithResponseStream',
-        ],
-        resources: BLOCKED_BEDROCK_MODEL_RESOURCES,
-      }),
-    );
+    if (models.length > 0) {
+      this.runtime.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: [
+            'bedrock:InvokeModel',
+            'bedrock:InvokeModelWithResponseStream',
+          ],
+          resources: models,
+        }),
+      );
+    }
 
     // Read the chat model catalog (created by CDK in AgentStack) to validate a
-    // requested model_id against the allowlist (defense beyond the broad
-    // InvokeModel grant).
-    this.runtime.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ['ssm:GetParameter'],
-        resources: [
-          Stack.of(this).formatArn({
-            service: 'ssm',
-            resource: 'parameter',
-            resourceName: SSM_KEYS.CHAT_MODEL_CATALOG.replace(/^\//, ''),
-            arnFormat: ArnFormat.SLASH_RESOURCE_NAME,
-          }),
-        ],
-      }),
-    );
+    // requested model_id against the allowlist.
+    if (chatModelCatalog) {
+      this.runtime.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['ssm:GetParameter'],
+          resources: [
+            Stack.of(this).formatArn({
+              service: 'ssm',
+              resource: 'parameter',
+              resourceName: SSM_KEYS.CHAT_MODEL_CATALOG.replace(/^\//, ''),
+              arnFormat: ArnFormat.SLASH_RESOURCE_NAME,
+            }),
+          ],
+        }),
+      );
+    }
 
-    // Add AgentCore Browser permissions (complete set for browser automation)
-    this.runtime.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: [
-          // Browser instance management
-          'bedrock-agentcore:CreateBrowser',
-          'bedrock-agentcore:DeleteBrowser',
-          'bedrock-agentcore:GetBrowser',
-          'bedrock-agentcore:ListBrowsers',
-          // Browser session management
-          'bedrock-agentcore:StartBrowserSession',
-          'bedrock-agentcore:StopBrowserSession',
-          'bedrock-agentcore:GetBrowserSession',
-          'bedrock-agentcore:ListBrowserSessions',
-          // Browser streaming
-          'bedrock-agentcore:UpdateBrowserStream',
-          'bedrock-agentcore:ConnectBrowserAutomationStream',
-          'bedrock-agentcore:ConnectBrowserLiveViewStream',
-        ],
-        resources: ['*'],
-      }),
-    );
+    // AgentCore Browser permissions (complete set for browser automation)
+    if (browserAccess) {
+      this.runtime.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: [
+            // Browser instance management
+            'bedrock-agentcore:CreateBrowser',
+            'bedrock-agentcore:DeleteBrowser',
+            'bedrock-agentcore:GetBrowser',
+            'bedrock-agentcore:ListBrowsers',
+            // Browser session management
+            'bedrock-agentcore:StartBrowserSession',
+            'bedrock-agentcore:StopBrowserSession',
+            'bedrock-agentcore:GetBrowserSession',
+            'bedrock-agentcore:ListBrowserSessions',
+            // Browser streaming
+            'bedrock-agentcore:UpdateBrowserStream',
+            'bedrock-agentcore:ConnectBrowserAutomationStream',
+            'bedrock-agentcore:ConnectBrowserLiveViewStream',
+          ],
+          resources: ['*'],
+        }),
+      );
+    }
 
     // Add API Gateway invoke permissions for backend API
     if (backendUrl) {

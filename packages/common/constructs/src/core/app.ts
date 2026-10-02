@@ -1,11 +1,24 @@
-import { App as _App, AppProps, Aspects, IAspect, Stack } from 'aws-cdk-lib';
+import {
+  App as _App,
+  AppProps,
+  AspectPriority,
+  Aspects,
+  IAspect,
+  Stack,
+} from 'aws-cdk-lib';
 import { IConstruct } from 'constructs';
+import { BedrockModelGuard } from './bedrock-model-guard.js';
 
 export class App extends _App {
   constructor(props?: AppProps) {
     super(props);
 
     Aspects.of(this).add(new MetricsAspect());
+    // AWS-sold models only: every policy that allows a Bedrock model call gets
+    // the deny statements (core/bedrock-model-guard.ts).
+    Aspects.of(this).add(new BedrockModelGuard(), {
+      priority: AspectPriority.MUTATING,
+    });
   }
 }
 
