@@ -157,12 +157,14 @@ def compact_verdict(verdict: Any) -> Any:
 
 
 def facts_view(record: dict[str, Any]) -> dict[str, Any]:
-    """The parts of a facts record the answer may use."""
+    """The parts of a facts record the answer may use (fields without a value left out: a record
+    has a key for every field of every document type)."""
     grounding = record.get("grounding") if isinstance(record.get("grounding"), dict) else {}
+    fields = record.get("fields") if isinstance(record.get("fields"), dict) else {}
     return {
         "document_name": record.get("document_name"),
         "doc_type": record.get("doc_type"),
-        "fields": record.get("fields") or {},
+        "fields": {k: v for k, v in fields.items() if v is not None and v != [] and v != {} and v != ""},
         "unverified_fields": grounding.get("unverified_fields") or [],
         "grounded": grounding.get("grounded"),
     }

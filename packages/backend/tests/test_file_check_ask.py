@@ -652,6 +652,35 @@ def test_cost_math():
     assert cost_usd(12000, 1024) == pytest.approx(0.0042 + 0.0030208, abs=1e-12)
 
 
+def test_facts_view_leaves_out_fields_without_a_value():
+    """A record has a key for every field of every document type: only the values are sent."""
+    record = {
+        "document_name": "08_credit_report.pdf",
+        "doc_type": "credit_report",
+        "fields": {
+            "credit_score": 771,
+            "enquiries_30d": 0,
+            "tradelines": [{"lender": "Mulshi Auto Finance", "account_last4": "4512"}],
+            "mobile": None,
+            "salary_credits": [],
+            "employer": "",
+        },
+        "grounding": {"grounded": True, "unverified_fields": ["credit_score"]},
+    }
+    assert facts_view(record) == {
+        "document_name": "08_credit_report.pdf",
+        "doc_type": "credit_report",
+        "fields": {
+            "credit_score": 771,
+            "enquiries_30d": 0,
+            "tradelines": [{"lender": "Mulshi Auto Finance", "account_last4": "4512"}],
+        },
+        "unverified_fields": ["credit_score"],
+        "grounded": True,
+    }
+    assert facts_view({"fields": None})["fields"] == {}
+
+
 def test_page_text_prefers_machine_text():
     machine = "Salary slip for August 2026, net pay 82,500, printed by the employer."
     assert page_text({"format_parser": machine, "ai_analysis": [{"content": "vision"}]}) == machine
