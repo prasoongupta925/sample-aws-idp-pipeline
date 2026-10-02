@@ -15,12 +15,14 @@ from shared.ddb_client import (
     get_project_language,
     StepName,
 )
+from shared.model_text import agent_answer_text
 from shared.s3_analysis import get_all_segment_analyses, save_summary
 
 BATCH_SIZE = 150
 BATCH_OVERLAP = 30
-# Output cap of each summary call: summaries average ~500 tokens; the model
-# default may be lower and Gemma 3 12B allows at most 8K.
+# Output cap of each summary call: summaries average ~500 tokens. The model
+# (models.json docSummarizer, gpt-oss-20b) reasons first, and its reasoning
+# counts against this cap too.
 MAX_OUTPUT_TOKENS = 8000
 PROMPTS = None
 
@@ -116,7 +118,8 @@ def generate_document_summary(model_id, region, language, page_descriptions, tot
         try:
             agent = Agent(model=bedrock_model, system_prompt=system_prompt, callback_handler=None)
             result = agent(user_text)
-            return str(result).strip()
+            # Text blocks only: gpt-oss reasoning is never part of a summary.
+            return agent_answer_text(result)
         except Exception as e:
             print(f'Document summary failed: {e}')
             return ''
@@ -136,7 +139,7 @@ def generate_document_summary(model_id, region, language, page_descriptions, tot
         try:
             batch_model = build_model(model_id, region)
             agent = Agent(model=batch_model, system_prompt=system_prompt, callback_handler=None)
-            partial = str(agent(user_text)).strip()
+            partial = agent_answer_text(agent(user_text))
             if partial:
                 return batch_idx, f'[Pages {batch_page_nums[0]}-{batch_page_nums[-1]}]\n{partial}'
         except Exception as e:
@@ -174,7 +177,7 @@ def generate_document_summary(model_id, region, language, page_descriptions, tot
 
     try:
         agent = Agent(model=bedrock_model, system_prompt=system_prompt, callback_handler=None)
-        return str(agent(merge_user)).strip()
+        return agent_answer_text(agent(merge_user))
     except Exception as e:
         print(f'Document summary merge failed: {e}')
         return '\n\n'.join(partial_summaries)

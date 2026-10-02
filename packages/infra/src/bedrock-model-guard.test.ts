@@ -63,18 +63,18 @@ const OPTIONAL_FEATURES = {
 
 /**
  * The models the app may invoke, all AWS-sold and offered in-Region in
- * ap-south-1 (research mumbai-build.md, section 1): page reading (Kimi K2.5),
- * facts, the Ask and search summaries (gpt-oss-120b), page descriptions,
- * document summaries and chat names (Gemma 3 12B), chat (GLM-5 and the other
+ * ap-south-1 (research mumbai-build.md, section 1): page reading and the Ask
+ * (Kimi K2.5), facts and search summaries (gpt-oss-120b), page descriptions,
+ * document summaries and chat names (gpt-oss-20b), chat (GLM-5 and the other
  * chat-models.json entries) and search embeddings (Titan Text Embeddings V2).
  * A new model must be checked (AWS-sold, In-Region in Mumbai) before it joins.
  */
 const MUMBAI_MODELS = [
   'amazon.titan-embed-text-v2:0',
   'deepseek.v3.2',
-  'google.gemma-3-12b-it',
   'moonshotai.kimi-k2.5',
   'openai.gpt-oss-120b-1:0',
+  'openai.gpt-oss-20b-1:0',
   'zai.glm-5',
 ];
 

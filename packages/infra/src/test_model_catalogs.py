@@ -66,6 +66,9 @@ AWS_SOLD_PIPELINE_PREFIXES = (
 # cross-Region profiles): the video steps get no model, and video is refused.
 NO_MODEL_KEYS = ('videoAnalysis', 'scriptExtractor')
 GPT_OSS_120B = 'openai.gpt-oss-120b-1:0'
+# Page descriptions, document summaries and chat names: gpt-oss-20b on Flex
+# (Gemma 3 12B, the model before it, is Legacy: end of life 30 Mar 2027).
+GPT_OSS_20B = 'openai.gpt-oss-20b-1:0'
 KIMI_K2_5 = 'moonshotai.kimi-k2.5'
 TITAN_EMBED_V2 = 'amazon.titan-embed-text-v2:0'
 
@@ -180,7 +183,8 @@ def test_pipeline_model_choices():
     # entity steps are never called, but none may name a cross-Region model.
     for key in ('facts', 'extractor', 'entityNormalizer', 'summarizer', 'webcrawler'):
         assert models[key] == GPT_OSS_120B, key
-    assert models['describer'] == models['docSummarizer'] == 'google.gemma-3-12b-it'
+    assert models['describer'] == models['docSummarizer'] == GPT_OSS_20B
+    assert 'google.gemma-3-12b-it' not in models.values()  # Legacy model
     # Search embeddings: Titan Text Embeddings V2 (in-Region, 1024 dimensions).
     assert models['embedding'] == TITAN_EMBED_V2
 
@@ -197,6 +201,7 @@ def test_model_catalogs_name_in_region_models_only():
     'model_id',
     [
         GPT_OSS_120B,
+        GPT_OSS_20B,
         'google.gemma-3-12b-it',
         'qwen.qwen3-235b-a22b-2507-v1:0',
         KIMI_K2_5,
@@ -433,9 +438,13 @@ def test_session_name_model_is_the_one_the_worker_may_invoke():
     worker = re.search(pattern, SESSION_NAME_TS.read_text(encoding='utf-8'))
     cdk = re.search(pattern, BEDROCK_TS.read_text(encoding='utf-8'))
     assert worker and cdk
-    assert worker.group(1) == cdk.group(1)
+    assert worker.group(1) == cdk.group(1) == GPT_OSS_20B
     assert worker.group(1).startswith(AWS_SOLD_PIPELINE_PREFIXES), worker.group(1)
     assert not CROSS_REGION_MODEL_ID.search(worker.group(1)), worker.group(1)
+    # A chat name is not urgent: the worker asks on the half-price Flex tier.
+    source = SESSION_NAME_TS.read_text(encoding='utf-8')
+    assert "export const SESSION_NAME_SERVICE_TIER = 'flex';" in source
+    assert 'serviceTier: { type: SESSION_NAME_SERVICE_TIER }' in source
 
 
 def test_webcrawler_fallback_is_its_models_json_model():

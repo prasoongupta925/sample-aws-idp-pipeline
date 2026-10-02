@@ -137,10 +137,11 @@ export const FILE_CHECK_ASK_MODEL_ID = 'moonshotai.kimi-k2.5';
 /**
  * Model of the chat names the session worker generates
  * (lambda/session_workers/src/message_process/generate-session-name.ts, which
- * names it itself): Google Gemma 3 12B, in-Region. The worker may invoke only
- * this model (app/workers/message-process.ts).
+ * names it itself, on the Flex tier): OpenAI gpt-oss-20b, AWS-sold and
+ * in-Region (Gemma 3 12B is Legacy, end of life 30 Mar 2027). The worker may
+ * invoke only this model (app/workers/message-process.ts).
  */
-export const SESSION_NAME_MODEL_ID = 'google.gemma-3-12b-it';
+export const SESSION_NAME_MODEL_ID = 'openai.gpt-oss-20b-1:0';
 
 /**
  * Model of the built-in voice chat (agents/bidi-agent/config.py

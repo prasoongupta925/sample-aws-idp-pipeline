@@ -10,6 +10,7 @@ import yaml
 from strands import Agent
 from strands.models import BedrockModel
 
+from shared.model_text import agent_answer_text
 from shared.s3_analysis import (
     get_segment_analysis,
     update_segment_analysis,
@@ -18,8 +19,9 @@ from shared.s3_analysis import (
 PAGE_DESCRIPTION_MODEL_ID = os.environ.get('PAGE_DESCRIPTION_MODEL_ID', '')
 # Bedrock service tier ('flex' for this background step); unset = standard.
 SERVICE_TIER = os.environ.get('BEDROCK_SERVICE_TIER', '')
-# Output cap: a description is one paragraph (~330 tokens on average); the
-# model default may be lower and Gemma 3 12B allows at most 8K.
+# Output cap: a description is one paragraph (~330 tokens on average). The
+# model (models.json describer, gpt-oss-20b) reasons first, and its reasoning
+# counts against this cap too.
 MAX_OUTPUT_TOKENS = 4096
 PROMPTS = None
 
@@ -87,7 +89,8 @@ def generate_page_description(segment_data: dict, page_number: int, language: st
         )
         agent = Agent(model=model, system_prompt=system_text, callback_handler=None)
         result = agent(user_text)
-        description = str(result).strip()
+        # Text blocks only: gpt-oss reasoning is never part of the description.
+        description = agent_answer_text(result)
         print(f'Page {page_number}: generated description ({len(description)} chars)')
         return description
     except Exception as e:

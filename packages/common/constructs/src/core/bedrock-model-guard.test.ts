@@ -535,6 +535,7 @@ describe('deny list (constants/bedrock.ts)', () => {
       foundationModel('ap-south-1', 'amazon', 'titan-embed-text-v2:0'),
       foundationModel('ap-northeast-1', 'amazon', 'rerank-v1:0'),
       foundationModel('ap-south-1', 'openai', 'gpt-oss-120b-1:0'),
+      foundationModel('ap-south-1', 'openai', 'gpt-oss-20b-1:0'),
       foundationModel('ap-south-1', 'google', 'gemma-3-12b-it'),
       foundationModel('ap-south-1', 'zai', 'glm-5'),
       foundationModel('ap-south-1', 'moonshotai', 'kimi-k2.5'),

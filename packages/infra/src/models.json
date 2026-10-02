@@ -1,8 +1,8 @@
 {
   "analysis": "moonshotai.kimi-k2.5",
-  "docSummarizer": "google.gemma-3-12b-it",
+  "docSummarizer": "openai.gpt-oss-20b-1:0",
   "summarizer": "openai.gpt-oss-120b-1:0",
-  "describer": "google.gemma-3-12b-it",
+  "describer": "openai.gpt-oss-20b-1:0",
   "extractor": "openai.gpt-oss-120b-1:0",
   "entityNormalizer": "openai.gpt-oss-120b-1:0",
   "embedding": "amazon.titan-embed-text-v2:0",
