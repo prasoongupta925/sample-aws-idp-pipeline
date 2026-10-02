@@ -51,18 +51,31 @@ def invoke_lambda(function_name: str, payload: dict) -> dict:
         InvocationType='RequestResponse',
         Payload=json.dumps(payload)
     )
-    return json.loads(response['Payload'].read().decode('utf-8'))
+    result = json.loads(response['Payload'].read().decode('utf-8'))
+    if response.get('FunctionError') and isinstance(result, dict):
+        result.setdefault('statusCode', 500)
+    return result
 
 
 def delete_lancedb_records(project_id: str, workflow_id: str):
-    """Delete all LanceDB records for a workflow."""
-    return invoke_lambda(LANCEDB_FUNCTION_NAME, {
-        'action': 'delete_record',
+    """Delete all LanceDB records for a workflow (search index), before they are written again.
+
+    delete_by_workflow, as the backend's document delete: the service's
+    delete_record needs a segment index, so it never ran here and a Re-analyze
+    left the old rows next to the new ones (every search hit twice). A delete
+    that fails stops the re-analysis before any analysis is cleared.
+    """
+    result = invoke_lambda(LANCEDB_FUNCTION_NAME, {
+        'action': 'delete_by_workflow',
         'params': {
             'project_id': project_id,
             'workflow_id': workflow_id,
         }
     })
+    if not isinstance(result, dict) or result.get('statusCode') != 200:
+        status = result.get('statusCode') if isinstance(result, dict) else None
+        raise RuntimeError(f'LanceDB delete_by_workflow failed (statusCode={status})')
+    return result
 
 
 def delete_graph_data(project_id: str, workflow_id: str):

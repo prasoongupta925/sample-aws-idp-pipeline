@@ -1625,19 +1625,21 @@ export class WorkflowStack extends Stack {
     webcrawlerWait.next(webcrawlerCheckTask);
     webcrawlerCheckTask.next(webcrawlerStatusChoice);
 
+    const skipWebCrawler = new sfn.Pass(this, 'SkipWebCrawler', {
+      comment: 'Not a web document, skip web crawling',
+    });
+    // A Choice that reads a missing field fails the whole execution
+    // (States.Runtime, which no Catch handles): check presence first.
     const webcrawlerBranch = new sfn.Choice(this, 'ShouldRunWebCrawler', {
       comment:
-        'Check processing_type: if "web", invoke web crawler then poll for completion; otherwise skip',
+        'Check processing_type: if "web", invoke web crawler then poll for completion; otherwise (or when missing) skip',
     })
+      .when(sfn.Condition.isNotPresent('$.processing_type'), skipWebCrawler)
       .when(
         sfn.Condition.stringEquals('$.processing_type', 'web'),
         webcrawlerInvokeTask.next(webcrawlerWait),
       )
-      .otherwise(
-        new sfn.Pass(this, 'SkipWebCrawler', {
-          comment: 'Not a web document, skip web crawling',
-        }),
-      );
+      .otherwise(skipWebCrawler);
 
     // ========================================
     // Analysis Throttle Loop
@@ -1745,11 +1747,18 @@ export class WorkflowStack extends Stack {
     // ReanalysisPrep → Map(Analyze) → Summarize
     reanalysisPrepTask.next(parallelSegmentProcessing);
 
-    // Choice at workflow start: check if this is a re-analysis request
+    // Choice at workflow start: check if this is a re-analysis request. The
+    // entry Choices check a field's presence before its value: reading a
+    // missing field fails the execution with States.Runtime, which no Catch
+    // handles (Re-analyze started without processing_type failed that way).
     const isReanalysisChoice = new sfn.Choice(this, 'IsReanalysis', {
       comment:
-        'Entry point: if is_reanalysis=true, skip all preprocessing and go directly to ReanalysisPrep; otherwise run full preprocessing pipeline',
+        'Entry point: if is_reanalysis=true, skip all preprocessing and go directly to ReanalysisPrep; otherwise (or when missing) run full preprocessing pipeline',
     })
+      .when(
+        sfn.Condition.isNotPresent('$.is_reanalysis'),
+        parallelPreprocessing,
+      )
       .when(
         sfn.Condition.booleanEquals('$.is_reanalysis', true),
         reanalysisPrepTask,
@@ -1767,11 +1776,14 @@ export class WorkflowStack extends Stack {
     });
     datasetProcessTask.addCatch(errorHandlerTask, catchConfig);
 
-    // Entry Choice: route structured datasets before the document pipeline.
+    // Entry Choice: route structured datasets before the document pipeline. An
+    // input without processing_type is a document (the first rule matches, so
+    // the comparison never reads the missing field).
     const isDatasetChoice = new sfn.Choice(this, 'IsDataset', {
       comment:
-        "Entry point: if processing_type='dataset' (xlsx/csv), run the structured dataset branch; otherwise fall through to the document pipeline.",
+        "Entry point: if processing_type='dataset' (xlsx/csv), run the structured dataset branch; otherwise (or when missing) fall through to the document pipeline.",
     })
+      .when(sfn.Condition.isNotPresent('$.processing_type'), isReanalysisChoice)
       .when(
         sfn.Condition.stringEquals('$.processing_type', 'dataset'),
         datasetProcessTask,
@@ -1811,13 +1823,19 @@ export class WorkflowStack extends Stack {
             __dirname,
             '../functions/step-functions/workflow-failure-catcher',
           ),
+          { exclude: ['test_*.py', '__pycache__', '.pytest_cache'] },
         ),
         layers: [sharedLayer],
       },
     );
 
-    // Grant describe execution permission
-    this.stateMachine.grant(workflowFailureCatcher, 'states:DescribeExecution');
+    // DescribeExecution (the execution input, when the event leaves it out)
+    // is authorized on the executions (execution:<state machine>:*), not on
+    // the state machine: grant() on the state machine ARN was AccessDenied.
+    this.stateMachine.grantExecution(
+      workflowFailureCatcher,
+      'states:DescribeExecution',
+    );
     backendTable.grantReadWriteData(workflowFailureCatcher);
     (this.documentBucket as s3.Bucket).grantRead(workflowFailureCatcher);
 

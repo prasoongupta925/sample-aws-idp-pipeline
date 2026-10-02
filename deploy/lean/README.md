@@ -37,6 +37,8 @@ the idp-v2 tables, buckets and parameters. It also will not start while another 
 | Destroy everything (keeps the CDK bootstrap) | `deploy/lean/destroy.sh` | - |
 | Destroy including CodeBuild project + bootstrap | `deploy/lean/destroy.sh --all` | - |
 | CloudFront WAF back on | `deploy/lean/deploy.sh --waf`, on every later deploy too | us-east-1 bootstrap (done by the build) |
+| Reset documents stuck on "reanalyzing" / "in_progress" whose run has ended | `deploy/lean/unstick.sh` (dry run; `--project "<name>"`, `--apply` to write) | jq |
+| Re-index every document after an embedding-model change (drops the LanceDB tables, re-analyzes all) | `uv run deploy/lean/reindex.py` (dry run; `--apply` to act) | uv, the new build deployed |
 
 A deploy without `--waf` detaches the WAF from CloudFront, but its us-east-1 stack stays (and bills) until
 `destroy.sh` removes it.
