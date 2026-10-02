@@ -1639,5 +1639,12 @@
         "enquiries_d120": "Enquiries (120 days)"
       }
     }
+  },
+  "crm": {
+    "leadId": "CRM lead ID",
+    "leadIdPlaceholder": "e.g. SD-LEAD-0042",
+    "leadIdHint": "The Smart Dial lead this project belongs to. Sent with every webhook; the CRM launch link opens this project.",
+    "leadIdInvalid": "Use 1-64 letters, digits or . _ : - (no spaces).",
+    "saveFailed": "The project could not be saved. Try again."
   }
 }

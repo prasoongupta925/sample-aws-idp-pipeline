@@ -85,6 +85,22 @@ def test_module_is_a_copy_of_the_backend_module():
 
 
 # ------------------------------------------------------------------ fakes
+
+
+def project(item, expression, names=None):
+    """DynamoDB projection of `item`: top-level names and one-level paths (#data.crm_lead_id)."""
+    out = {}
+    for path in (p.strip() for p in expression.split(",")):
+        parts = [(names or {}).get(part, part) for part in path.split(".")]
+        if parts[0] not in item:
+            continue
+        if len(parts) == 1:
+            out[parts[0]] = item[parts[0]]
+        elif isinstance(item[parts[0]], dict) and parts[1] in item[parts[0]]:
+            out.setdefault(parts[0], {})[parts[1]] = item[parts[0]][parts[1]]
+    return out
+
+
 class FakeTable:
     def __init__(self, items=(), fail_put=False):
         self.items = {(i["PK"], i["SK"]): copy.deepcopy(i) for i in items}
@@ -92,14 +108,13 @@ class FakeTable:
         self.puts = []
         self.fail_put = fail_put
 
-    def get_item(self, Key, ProjectionExpression=None, ConsistentRead=None):
+    def get_item(self, Key, ProjectionExpression=None, ConsistentRead=None, ExpressionAttributeNames=None):
         self.gets.append({"Key": Key, "ProjectionExpression": ProjectionExpression, "ConsistentRead": ConsistentRead})
         item = self.items.get((Key["PK"], Key["SK"]))
         if item is None:
             return {}
         if ProjectionExpression:
-            names = [n.strip() for n in ProjectionExpression.split(",")]
-            item = {n: item[n] for n in names if n in item}
+            item = project(item, ProjectionExpression, ExpressionAttributeNames)
         return {"Item": copy.deepcopy(item)}
 
     def put_item(self, Item):
@@ -358,6 +373,48 @@ def test_delivers_signed_payload_for_the_documents_applicant(env, capsys):
     assert "t0k3n" not in logs and "/hooks/idp" not in logs
     assert "Sneha" not in logs and "salaried_personal_loan" not in logs
     assert "host=crm.example.com" in logs
+
+
+def with_lead(lead):
+    item = meta()
+    item["data"]["crm_lead_id"] = lead
+    return FakeTable([item])
+
+
+@pytest.mark.parametrize("event", [doc_event("s-01"), {"project_id": PROJECT_ID, "event": "test"}])
+def test_payload_carries_the_projects_crm_lead_id(env, monkeypatch, event):
+    use(monkeypatch, env, table=with_lead("SD-LEAD-0042"))
+    result = wh.handler(event, None)
+
+    assert result["status"] == "delivered"
+    (call,) = env["post"].calls
+    assert json.loads(call["body"])["crm_lead_id"] == "SD-LEAD-0042"
+    # Signed exactly as before: the signature covers the body with the lead id in it.
+    assert ws.verify_signature(SECRET, call["headers"]["X-SmartDial-Signature"], call["body"], now=1_790_000_000)
+    # Read with the reserved word "data" behind a placeholder.
+    get = env["table"].gets[0]
+    assert "#data.crm_lead_id" in get["ProjectionExpression"]
+
+
+def test_login_payload_carries_the_crm_lead_id(env, monkeypatch):
+    use(monkeypatch, env, table=with_lead("SD-77"))
+    login = {
+        "applicant": "Asha Verma",
+        "lender": "HDFC Bank",
+        "eligible_amount": 500000,
+        "emi": 11122.22,
+        "tenure_months": 60,
+        "roi": 12.0,
+    }
+    wh.handler({"project_id": PROJECT_ID, "event": "file_login.requested", "login": login}, None)
+    assert json.loads(env["post"].calls[0]["body"])["crm_lead_id"] == "SD-77"
+
+
+@pytest.mark.parametrize("lead", [None, "", "bad lead id", "x" * 65, 42])
+def test_no_or_malformed_lead_id_is_left_out(env, monkeypatch, lead):
+    use(monkeypatch, env, table=with_lead(lead))
+    wh.handler(doc_event("s-01"), None)
+    assert "crm_lead_id" not in json.loads(env["post"].calls[0]["body"])
 
 
 def test_ready_applicant_summary_has_no_issue_list(env):

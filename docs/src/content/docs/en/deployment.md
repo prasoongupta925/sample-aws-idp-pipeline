@@ -112,6 +112,15 @@ to private resources); deploy it with the rest (`--all`) or before
   results: [{applicant, verdict, summary, missing, checklist_id}]}` for the
   applicant(s) of that document (every applicant when the check cannot tell;
   one entry with `applicant: null` when there is none).
+- CRM lead id: a project can carry `crm_lead_id` (1-64 of `A-Z a-z 0-9 . _ : -`),
+  set in the project settings, by the signed launch link
+  ([crm-launch-link.md](../../../../crm-launch-link.md)) or with
+  `POST /projects` / `PUT /projects/{id}` `{"crm_lead_id": "SD-LEAD-0042"}`
+  (`""` removes it; a lead links to one project only, 409 otherwise). Every
+  delivery of such a project (`file_check.completed`, `file_login.requested`
+  and `test`) has a top-level `"crm_lead_id": "SD-LEAD-0042"`; projects without
+  one send the payload unchanged. The signature scheme is unchanged: the field
+  is part of the signed body.
 - Headers: `X-SmartDial-Event`, `X-SmartDial-Delivery` (retries reuse it:
   deduplicate on it) and `X-SmartDial-Signature: t=<unix>,v1=<hex>`, the
   HMAC-SHA256 of `<t>.<raw body>` keyed with the secret. The receiver verifies

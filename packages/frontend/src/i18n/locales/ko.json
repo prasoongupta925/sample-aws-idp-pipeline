@@ -1502,5 +1502,12 @@
         "enquiries_d120": "Enquiries (120 days)"
       }
     }
+  },
+  "crm": {
+    "leadId": "CRM 리드 ID",
+    "leadIdPlaceholder": "예: SD-LEAD-0042",
+    "leadIdHint": "이 프로젝트가 속한 Smart Dial 리드입니다. 모든 웹훅에 포함되며, CRM 실행 링크가 이 프로젝트를 엽니다.",
+    "leadIdInvalid": "영문자, 숫자 또는 . _ : - 1-64자를 사용하세요(공백 불가).",
+    "saveFailed": "프로젝트를 저장하지 못했습니다. 다시 시도하세요."
   }
 }

@@ -325,6 +325,7 @@ function ProjectsPage() {
     language: string;
     color: number;
     document_prompt: string;
+    crm_lead_id?: string;
   }) => {
     if (editingProject) {
       await fetchApi<Project>(`projects/${editingProject.project_id}`, {
