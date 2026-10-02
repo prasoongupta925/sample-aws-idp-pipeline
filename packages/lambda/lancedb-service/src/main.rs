@@ -24,8 +24,8 @@ async fn main() -> Result<(), Error> {
 
     let aws_config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
     let lambda_client = aws_sdk_lambda::Client::new(&aws_config);
-    // Amazon embedding models are not offered in every region (e.g. ap-south-1):
-    // call Bedrock in EMBEDDING_REGION when set, else in the Lambda's own region.
+    // Embeddings (client/bedrock.rs): Bedrock in EMBEDDING_REGION when set (the
+    // stack passes its own Region), else in the Lambda's own region.
     let bedrock_client = match std::env::var("EMBEDDING_REGION") {
         Ok(region) if !region.is_empty() => {
             let conf = aws_sdk_bedrockruntime::config::Builder::from(&aws_config)

@@ -1,4 +1,3 @@
-import json
 import os
 from datetime import datetime
 from typing import Any, List, Optional
@@ -9,7 +8,14 @@ from lancedb.embeddings import TextEmbeddingFunction, register
 from lancedb.pydantic import LanceModel, Vector
 from pydantic import PrivateAttr
 
-from .embeddings import EMBEDDING_MODEL_ID, strip_markup
+from .embeddings import (
+    EMBEDDING_DIMENSION,
+    EMBEDDING_MODEL_ID,
+    bedrock_runtime_client,
+    strip_markup,
+    titan_embedding,
+    titan_request_body,
+)
 
 LANCEDB_BUCKET_SSM_KEY = '/idp-v2/lancedb/storage/bucket-name'
 LANCEDB_LOCK_TABLE_SSM_KEY = '/idp-v2/lancedb/lock/table-name'
@@ -35,56 +41,41 @@ def get_lancedb_connection():
     return _db_connection
 
 
-@register('bedrock-nova')
+@register('bedrock-titan-v2')
 class BedrockEmbeddingFunction(TextEmbeddingFunction):
+    """Amazon Titan Text Embeddings V2 (1024 dimensions, normalized)."""
+
     model_id: str = EMBEDDING_MODEL_ID
-    region_name: str = 'us-east-1'
 
     _client: Any = PrivateAttr()
     _ndims: int = PrivateAttr()
 
     def __init__(self, **data):
         super().__init__(**data)
-        # Amazon embedding models are not offered in every region (e.g.
-        # ap-south-1): EMBEDDING_REGION (CDK config) wins over the Lambda region.
-        self._client = boto3.client(
-            'bedrock-runtime',
-            region_name=os.environ.get('EMBEDDING_REGION')
-            or os.environ.get('AWS_REGION', 'us-east-1'),
-        )
-        self._ndims = 1024
+        # EMBEDDING_REGION (CDK region config, the stack region by default)
+        # wins over the Lambda region; throttled calls are retried.
+        self._client = bedrock_runtime_client()
+        self._ndims = EMBEDDING_DIMENSION
 
     def ndims(self) -> int:
         return self._ndims
 
     def generate_embeddings(self, texts: List[str]) -> List[List[float]]:
+        """One Titan V2 vector per text; zeros for empty text. Bedrock errors
+        are raised (LanceDB retries them), never stored as zero vectors."""
         embeddings = []
         for text in texts:
             clean_text = strip_markup(text or '')
             if not clean_text:
                 embeddings.append([0.0] * self._ndims)
                 continue
-            try:
-                response = self._client.invoke_model(
-                    modelId=self.model_id,
-                    body=json.dumps(
-                        {
-                            'taskType': 'SINGLE_EMBEDDING',
-                            'singleEmbeddingParams': {
-                                'embeddingPurpose': 'GENERIC_INDEX',
-                                'embeddingDimension': 1024,
-                                'text': {'truncationMode': 'END', 'value': clean_text},
-                            },
-                        }
-                    ),
-                    contentType='application/json',
-                )
-                result = json.loads(response['body'].read())
-                embedding = result['embeddings'][0]['embedding']
-                embeddings.append(embedding)
-            except Exception as e:
-                print(f'Error generating embedding: {e}')
-                embeddings.append([0.0] * self._ndims)
+            response = self._client.invoke_model(
+                modelId=self.model_id,
+                body=titan_request_body(clean_text),
+                contentType='application/json',
+                accept='application/json',
+            )
+            embeddings.append(titan_embedding(response))
 
         return embeddings
 
