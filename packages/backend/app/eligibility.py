@@ -3,20 +3,24 @@
 Implements the client's "Cibil Page Function" sheet (Data Entry, CAM, Eligibility)
 for every lender of the policy file:
 
-    calculation tenure     = requested tenure capped at the lender's max tenure
-                             (raised to its min tenure; its max tenure when none is requested)
+    calculation tenure     = the lender's calculation tenure (From Policy; its max tenure when
+                             the policy sets none), or the requested tenure when that is shorter
+                             (raised to the lender's min tenure), so the EMI fits the FOIR at
+                             the tenure the customer takes
     per-lakh EMI           = EMI(1,00,000, ROI / 12, calculation tenure)
     FOIR eligibility       = (income x FOIR - obligations) / per-lakh EMI x 1,00,000
     multiplier eligibility = income x multiplier
     eligible amount        = min(FOIR eligibility, multiplier eligibility, lender max amount)
                              (the sheet's MIN: exact, rounded to the paisa only for display)
-    EMI                    = EMI(eligible amount, ROI / 12, lender max tenure)
+    EMI                    = EMI(eligible amount, ROI / 12, lender max tenure), as the sheet
+                             shows it (also given over the calculation tenure)
 
 where EMI(P, r, n) = P r (1 + r)^n / ((1 + r)^n - 1), Excel's PMT. The sheet's worked
-example (income 98,000, FOIR 0.70, multiplier 21, obligations 15,000, 60 months at 11%)
-gives a per-lakh EMI of 2,174.24, FOIR eligibility 24,65,226.61 and multiplier eligibility
-20,58,000, so ICICI Bank offers 20,58,000 (EMI 39,172.13 over its max 72 months); HDFC
-Bank's cap gives 15,00,000 (EMI 33,366.67 over 60 months at 12%).
+example (income 98,000, FOIR 0.70, multiplier 21, obligations 15,000; ICICI Bank at 11%
+with a calculation tenure of 60 months and a max tenure of 72) gives a per-lakh EMI of
+2,174.24, FOIR eligibility 24,65,226.61 and multiplier eligibility 20,58,000, so ICICI
+Bank offers 20,58,000 (EMI 39,172.13 over its max 72 months); HDFC Bank's cap gives
+15,00,000 (EMI 33,366.67 over 60 months at 12%).
 
 Income considered = net monthly salary (verified by the file check when it is available,
 else as entered) + every other income normalised to a month (yearly / 12, half-yearly / 6,
@@ -38,6 +42,16 @@ obligations; at least the lender's minimum amount; the BT amount covered. Any fa
 the lender "not_eligible" with every reason; its eligible amount and EMI are then 0 and
 `computed_amount` keeps what the formulas gave.
 
+A lender may instead price a listed company's FOIR by a grid of net monthly salary slabs and
+company categories (`foir_grid`, HDFC Bank's SAMPLE one), as the sheet's
+=INDEX(grid, MATCH(salary, slab_starts, 1), MATCH(category, categories, 0)) does: the row is
+the largest slab start at or below the net monthly salary (verified, else entered; other
+income is not part of it), the column the company's category, matched exactly. A salary
+below the first slab start is below the lender's minimum income, and a category the grid has
+no column for gets no FOIR: either makes the lender "not_eligible" (the category's own FOIR is
+kept for `computed_amount`). The slab and category that set the FOIR are noted ("FOIR 65% ·
+slab 50,000–74,999 · CAT A · From Policy"); the multiplier still comes from the category.
+
 Parameter sources follow the sheet's legend: "policy" (From Policy: the lender policy),
 "formula" (Formula Calculation) and "table" (From Table: the data entered or read from the
 documents, and the company and pincode lists).
@@ -46,16 +60,26 @@ Money is kept exact (Decimal, 34 digits) through the maths and rounded to the pa
 (half up) only in the output. Every lender policy, pincode list and company category in
 app/data is SAMPLE data, labelled "sample policy — replace with your lender grid" wherever
 it is shown, and every result is indicative: the lender decides.
+
+Standard library only. This file ships twice, each copy with the same data/ folder, and the
+copies must stay byte-identical (the backend and the Lambda test suites both compare them):
+
+- packages/backend/app/eligibility.py: the eligibility API (app/routers/eligibility.py);
+- packages/lambda/file-check-mcp/eligibility.py: the chat's loan_eligibility tool.
+
+The backend image and the Lambda asset are packaged from different folders, so the module
+is copied instead of imported across packages.
 """
 
 import json
+import math
 import re
+from collections.abc import Callable, Collection
+from dataclasses import MISSING, dataclass, field, fields, replace
 from decimal import ROUND_HALF_UP, Decimal, localcontext
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
-
-from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 POLICY_FILE = "lender_policies.json"
@@ -243,6 +267,14 @@ def money(value: Any) -> float | None:
     return float(dec(value).quantize(PAISA, rounding=ROUND_HALF_UP))
 
 
+def _grouped(digits: str) -> str:
+    """Indian digit grouping of whole rupees: '2058000' -> '20,58,000'."""
+    if len(digits) <= 3:
+        return digits
+    head, tail = digits[:-3], digits[-3:]
+    return ",".join(re.findall(r"\d{1,2}", head[::-1]))[::-1] + f",{tail}"
+
+
 def inr(value: Any) -> str:
     """Indian digit grouping for messages: 2058000 -> Rs 20,58,000 (paise only when not zero)."""
     if value is None:
@@ -250,11 +282,7 @@ def inr(value: Any) -> str:
     d = dec(value).quantize(PAISA, rounding=ROUND_HALF_UP)
     sign = "-" if d < 0 else ""
     whole, _, frac = f"{abs(d):.2f}".partition(".")
-    if len(whole) > 3:
-        head, tail = whole[:-3], whole[-3:]
-        head = ",".join(re.findall(r"\d{1,2}", head[::-1]))[::-1]
-        whole = f"{head},{tail}"
-    return f"{sign}₹{whole}" + (f".{frac}" if frac != "00" else "")
+    return f"{sign}₹{_grouped(whole)}" + (f".{frac}" if frac != "00" else "")
 
 
 def _pct(fraction: Decimal) -> str:
@@ -267,114 +295,308 @@ def _number(value: Decimal) -> str:
 
 
 # ------------------------------------------------------------------ SAMPLE data files
-class _Data(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+# Frozen records, every field checked when one is made: a bad value is a ValueError naming
+# where it is ("PolicyFile: lenders[1]: roi: must be at most 60") and a file with an unknown
+# key is refused. model_validate / model_dump / model_copy work as in pydantic, which the
+# file-check Lambda does not have.
+Check = Callable[[Any, str], Any]
 
 
+def _invalid(where: str, problem: str) -> ValueError:
+    return ValueError(f"{where}: {problem}")
+
+
+def _real(*, gt: float | None = None, ge: float | None = None, le: float | None = None) -> Check:
+    def check(value: Any, where: str) -> float:
+        if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+            raise _invalid(where, "must be a number")
+        if gt is not None and value <= gt:
+            raise _invalid(where, f"must be more than {gt:g}")
+        if ge is not None and value < ge:
+            raise _invalid(where, f"must be at least {ge:g}")
+        if le is not None and value > le:
+            raise _invalid(where, f"must be at most {le:g}")
+        return float(value)
+
+    return check
+
+
+def _whole(*, ge: int | None = None, le: int | None = None) -> Check:
+    def check(value: Any, where: str) -> int:
+        if isinstance(value, float) and value.is_integer():
+            value = int(value)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise _invalid(where, "must be a whole number")
+        if ge is not None and value < ge:
+            raise _invalid(where, f"must be at least {ge}")
+        if le is not None and value > le:
+            raise _invalid(where, f"must be at most {le}")
+        return value
+
+    return check
+
+
+def _text(*, pattern: str | None = None, min_length: int = 0, max_length: int | None = None) -> Check:
+    def check(value: Any, where: str) -> str:
+        if not isinstance(value, str):
+            raise _invalid(where, "must be a string")
+        if len(value) < min_length:
+            raise _invalid(where, f"must have at least {min_length} character(s)")
+        if max_length is not None and len(value) > max_length:
+            raise _invalid(where, f"must have at most {max_length} characters")
+        if pattern is not None and not re.fullmatch(pattern, value):
+            raise _invalid(where, f"must match {pattern}")
+        return value
+
+    return check
+
+
+def _flag(value: Any, where: str) -> bool:
+    if not isinstance(value, bool):
+        raise _invalid(where, "must be true or false")
+    return value
+
+
+def _optional(check: Check) -> Check:
+    return lambda value, where: None if value is None else check(value, where)
+
+
+def _items(check: Check, *, min_length: int = 0, length: int | None = None) -> Check:
+    def items(value: Any, where: str) -> tuple:
+        if not isinstance(value, list | tuple):
+            raise _invalid(where, "must be a list")
+        if length is not None and len(value) != length:
+            raise _invalid(where, f"must have {length} items")
+        if len(value) < min_length:
+            raise _invalid(where, f"must have at least {min_length} item(s)")
+        return tuple(check(v, f"{where}[{i}]") for i, v in enumerate(value))
+
+    return items
+
+
+def _mapping(check: Check) -> Check:
+    def mapping(value: Any, where: str) -> dict:
+        if not isinstance(value, dict) or not all(isinstance(k, str) for k in value):
+            raise _invalid(where, "must be an object")
+        return {k: check(v, f"{where}.{k}") for k, v in value.items()}
+
+    return mapping
+
+
+def _record(model: type["_Data"]) -> Check:
+    return lambda value, where: model.model_validate(value, where=where)
+
+
+def _spec(check: Check, default: Any = MISSING) -> Any:
+    """A record field: how its value is checked, and its default when a file leaves it out."""
+    return field(default=default, metadata={"check": check})
+
+
+def _dump(value: Any, mode: str) -> Any:
+    if isinstance(value, _Data):
+        return value.model_dump(mode=mode)
+    if isinstance(value, list | tuple):
+        items = [_dump(v, mode) for v in value]
+        return items if mode == "json" else tuple(items)
+    if isinstance(value, dict):
+        return {k: _dump(v, mode) for k, v in value.items()}
+    return value
+
+
+class _Data:
+    """Base of the records below (frozen dataclasses whose fields are `_spec`s)."""
+
+    def __post_init__(self) -> None:
+        for spec in fields(self):
+            object.__setattr__(self, spec.name, spec.metadata["check"](getattr(self, spec.name), spec.name))
+        self._consistent()
+
+    def _consistent(self) -> None:
+        """Rules across fields (none by default); raise ValueError."""
+
+    @classmethod
+    def model_validate(cls, data: Any, *, where: str = "") -> Any:
+        """The record of `data`, a dict as read from JSON (a record is returned as it is)."""
+        if isinstance(data, cls):
+            return data
+        where = where or cls.__name__
+        if not isinstance(data, dict):
+            raise _invalid(where, "must be an object")
+        names = [spec.name for spec in fields(cls)]
+        unknown = sorted(str(key) for key in data if key not in names)
+        if unknown:
+            raise _invalid(where, f"unknown field(s) {', '.join(unknown)}")
+        missing = [spec.name for spec in fields(cls) if spec.default is MISSING and spec.name not in data]
+        if missing:
+            raise _invalid(where, f"missing field(s) {', '.join(missing)}")
+        try:
+            return cls(**data)
+        except ValueError as e:
+            raise _invalid(where, str(e)) from None
+
+    def model_dump(self, *, exclude: Collection[str] = (), mode: str = "python") -> dict[str, Any]:
+        """The record as plain values: dicts, and tuples (lists in mode "json")."""
+        return {spec.name: _dump(getattr(self, spec.name), mode) for spec in fields(self) if spec.name not in exclude}
+
+    def model_copy(self, *, update: dict[str, Any] | None = None) -> Any:
+        return replace(self, **(update or {}))
+
+
+@dataclass(frozen=True, kw_only=True)
 class CategoryPolicy(_Data):
-    foir: float = Field(gt=0, le=1)
-    multiplier: float = Field(gt=0, le=100)
+    foir: float = _spec(_real(gt=0, le=1))
+    multiplier: float = _spec(_real(gt=0, le=100))
 
 
+@dataclass(frozen=True, kw_only=True)
 class UnlistedCompanyPolicy(_Data):
-    accepted: bool
-    foir: float | None = Field(default=None, gt=0, le=1)
-    multiplier: float | None = Field(default=None, gt=0, le=100)
+    accepted: bool = _spec(_flag)
+    foir: float | None = _spec(_optional(_real(gt=0, le=1)), None)
+    multiplier: float | None = _spec(_optional(_real(gt=0, le=100)), None)
 
-    @model_validator(mode="after")
-    def _values_when_accepted(self):
+    def _consistent(self) -> None:
         if self.accepted and (self.foir is None or self.multiplier is None):
             raise ValueError("an accepted unlisted company needs foir and multiplier")
-        return self
 
 
+@dataclass(frozen=True, kw_only=True)
 class IncomeConsideration(_Data):
     """Percent of each other income (normalised to a month) the lender counts."""
 
-    rented_notary: float = Field(ge=0, le=100)
-    rented_registered: float = Field(ge=0, le=100)
-    bonus: float = Field(ge=0, le=100)
-    incentive: float = Field(ge=0, le=100)
-    pension: float = Field(ge=0, le=100)
+    rented_notary: float = _spec(_real(ge=0, le=100))
+    rented_registered: float = _spec(_real(ge=0, le=100))
+    bonus: float = _spec(_real(ge=0, le=100))
+    incentive: float = _spec(_real(ge=0, le=100))
+    pension: float = _spec(_real(ge=0, le=100))
 
 
+@dataclass(frozen=True, kw_only=True)
+class FoirGrid(_Data):
+    """FOIR by net monthly salary slab (rows) and company category (columns): one FOIR per slab
+    in each category's list, the slabs starting at `slab_starts` (rupees a month)."""
+
+    label: str | None = _spec(_optional(_text()), None)
+    slab_starts: tuple[int, ...] = _spec(_items(_whole(ge=1), min_length=1))
+    categories: dict[str, tuple[float, ...]] = _spec(_mapping(_items(_real(gt=0, le=1))))
+
+    def _consistent(self) -> None:
+        if list(self.slab_starts) != sorted(set(self.slab_starts)):
+            raise ValueError("slab_starts must increase")
+        if not self.categories:
+            raise ValueError("a FOIR grid needs at least one category")
+        for name, column in self.categories.items():
+            if len(column) != len(self.slab_starts):
+                raise ValueError(f"{name} needs one FOIR per slab ({len(self.slab_starts)})")
+
+    def slab(self, salary: Any) -> int | None:
+        """MATCH(salary, slab_starts, 1): the index of the largest slab start at or below `salary`;
+        None below the first."""
+        below = [i for i, start in enumerate(self.slab_starts) if start <= dec(salary)]
+        return below[-1] if below else None
+
+    def slab_text(self, index: int) -> str:
+        """'50,000–74,999'; the last slab '1,00,000 and above'."""
+        start = _grouped(str(self.slab_starts[index]))
+        if index + 1 == len(self.slab_starts):
+            return f"{start} and above"
+        return f"{start}–{_grouped(str(self.slab_starts[index + 1] - 1))}"
+
+
+@dataclass(frozen=True, kw_only=True)
 class LenderPolicy(_Data):
-    id: str = Field(pattern=r"^[a-z0-9_]{1,64}$")
-    name: str = Field(min_length=1, max_length=100)
-    product: str | None = None
-    roi: float = Field(ge=0, le=60, description="Annual rate of interest, percent")
-    foir: float = Field(gt=0, le=1)
-    multiplier: float = Field(gt=0, le=100)
-    min_tenure_months: int = Field(default=1, ge=1, le=480)
-    max_tenure_months: int = Field(ge=1, le=480)
-    min_amount: float = Field(default=0, ge=0)
-    max_amount: float = Field(gt=0)
-    min_cibil_score: int = Field(ge=300, le=900)
-    max_enquiries_90d: int = Field(ge=0)
-    employment_types: tuple[str, ...]
-    company_categories: dict[str, CategoryPolicy]
-    unlisted_company: UnlistedCompanyPolicy
-    income_consideration_pct: IncomeConsideration
+    id: str = _spec(_text(pattern=r"[a-z0-9_]{1,64}"))
+    name: str = _spec(_text(min_length=1, max_length=100))
+    product: str | None = _spec(_optional(_text()), None)
+    roi: float = _spec(_real(ge=0, le=60))  # annual rate of interest, percent
+    foir: float = _spec(_real(gt=0, le=1))
+    multiplier: float = _spec(_real(gt=0, le=100))
+    # The FOIR of a listed company by net salary slab and category, instead of its category's FOIR.
+    foir_grid: FoirGrid | None = _spec(_optional(_record(FoirGrid)), None)
+    min_tenure_months: int = _spec(_whole(ge=1, le=480), 1)
+    max_tenure_months: int = _spec(_whole(ge=1, le=480))
+    # The sheet's "Tenure Calculation" (From Policy): the per-lakh EMI's tenure; the max tenure if not set.
+    calculation_tenure_months: int | None = _spec(_optional(_whole(ge=1, le=480)), None)
+    min_amount: float = _spec(_real(ge=0), 0.0)
+    max_amount: float = _spec(_real(gt=0))
+    min_cibil_score: int = _spec(_whole(ge=300, le=900))
+    max_enquiries_90d: int = _spec(_whole(ge=0))
+    employment_types: tuple[str, ...] = _spec(_items(_text()))
+    company_categories: dict[str, CategoryPolicy] = _spec(_mapping(_record(CategoryPolicy)))
+    unlisted_company: UnlistedCompanyPolicy = _spec(_record(UnlistedCompanyPolicy))
+    income_consideration_pct: IncomeConsideration = _spec(_record(IncomeConsideration))
 
-    @model_validator(mode="after")
-    def _consistent(self):
+    def _consistent(self) -> None:
         unknown = [t for t in self.employment_types if t not in EMPLOYMENT_TYPES]
         if unknown:
             raise ValueError(f"unknown employment types {unknown}")
         if self.min_tenure_months > self.max_tenure_months:
             raise ValueError("min_tenure_months is more than max_tenure_months")
+        if not self.min_tenure_months <= self.calculation_tenure <= self.max_tenure_months:
+            raise ValueError("calculation_tenure_months is outside min_tenure_months to max_tenure_months")
         if self.min_amount > self.max_amount:
             raise ValueError("min_amount is more than max_amount")
-        return self
+        if self.foir_grid is not None:
+            # The multiplier of a grid category comes from its company category.
+            unknown = [c for c in self.foir_grid.categories if c not in self.company_categories]
+            if unknown:
+                raise ValueError(f"foir_grid categories {unknown} are not company categories")
+
+    @property
+    def calculation_tenure(self) -> int:
+        """The per-lakh EMI's tenure by policy: calculation_tenure_months, else the max tenure."""
+        return self.calculation_tenure_months or self.max_tenure_months
 
 
+@dataclass(frozen=True, kw_only=True)
 class PolicyFile(_Data):
-    sample: bool
-    label: str | None = None
-    version: str
-    note: str | None = None
-    lenders: tuple[LenderPolicy, ...] = Field(min_length=1)
+    sample: bool = _spec(_flag)
+    label: str | None = _spec(_optional(_text()), None)
+    version: str = _spec(_text())
+    note: str | None = _spec(_optional(_text()), None)
+    lenders: tuple[LenderPolicy, ...] = _spec(_items(_record(LenderPolicy), min_length=1))
 
 
+@dataclass(frozen=True, kw_only=True)
 class Region(_Data):
-    id: str = Field(pattern=r"^[a-z0-9_]{1,64}$")
-    name: str
-    ranges: tuple[tuple[int, int], ...] = Field(min_length=1)
+    id: str = _spec(_text(pattern=r"[a-z0-9_]{1,64}"))
+    name: str = _spec(_text())
+    ranges: tuple[tuple[int, int], ...] = _spec(_items(_items(_whole(), length=2), min_length=1))
 
-    @model_validator(mode="after")
-    def _six_digit_ranges(self):
+    def _consistent(self) -> None:
         for low, high in self.ranges:
             if not 100000 <= low <= high <= 999999:
                 raise ValueError(f"bad pincode range {low}-{high}")
-        return self
 
     def contains(self, pincode: int) -> bool:
         return any(low <= pincode <= high for low, high in self.ranges)
 
 
+@dataclass(frozen=True, kw_only=True)
 class PincodeFile(_Data):
-    sample: bool
-    label: str | None = None
-    version: str
-    note: str | None = None
-    regions: tuple[Region, ...] = Field(min_length=1)
-    lenders: dict[str, tuple[str, ...]]
+    sample: bool = _spec(_flag)
+    label: str | None = _spec(_optional(_text()), None)
+    version: str = _spec(_text())
+    note: str | None = _spec(_optional(_text()), None)
+    regions: tuple[Region, ...] = _spec(_items(_record(Region), min_length=1))
+    lenders: dict[str, tuple[str, ...]] = _spec(_mapping(_items(_text())))
 
 
+@dataclass(frozen=True, kw_only=True)
 class Company(_Data):
-    name: str = Field(min_length=1, max_length=200)
-    aliases: tuple[str, ...] = ()
-    employment_type: str | None = None
-    synthetic: bool = False
-    categories: dict[str, str]
+    name: str = _spec(_text(min_length=1, max_length=200))
+    aliases: tuple[str, ...] = _spec(_items(_text()), ())
+    employment_type: str | None = _spec(_optional(_text()), None)
+    synthetic: bool = _spec(_flag, False)
+    categories: dict[str, str] = _spec(_mapping(_text()))
 
 
+@dataclass(frozen=True, kw_only=True)
 class CompanyFile(_Data):
-    sample: bool
-    label: str | None = None
-    version: str
-    note: str | None = None
-    companies: tuple[Company, ...]
+    sample: bool = _spec(_flag)
+    label: str | None = _spec(_optional(_text()), None)
+    version: str = _spec(_text())
+    note: str | None = _spec(_optional(_text()), None)
+    companies: tuple[Company, ...] = _spec(_items(_record(Company)))
 
 
 _COMPANY_STOP = frozenset(
@@ -478,7 +700,7 @@ class PolicyBook:
         return [company for _, _, company in sorted(scored, key=lambda s: s[:2])][:limit]
 
 
-def _read(name: str, model: type[BaseModel]) -> Any:
+def _read(name: str, model: type[_Data]) -> Any:
     return model.model_validate(json.loads((DATA_DIR / name).read_text(encoding="utf-8")))
 
 
@@ -744,14 +966,23 @@ def _obligations(tradelines: list[dict], bank_emis: list[dict], notes: list[str]
 
 
 def _calculation_tenure(lender: LenderPolicy, requested: int | None, notes: list[str]) -> tuple[int, str]:
-    if requested is None:
-        return lender.max_tenure_months, "policy"
+    """The per-lakh EMI's tenure and its source: the lender's calculation tenure ("policy"), or the
+    requested tenure when that is shorter ("table"), raised to the lender's min tenure ("policy")."""
+    policy = lender.calculation_tenure
+    if requested is None or requested == policy:
+        return policy, "policy"
     if requested > lender.max_tenure_months:
         notes.append(
             f"Requested tenure {requested} months is more than {lender.name}'s max {lender.max_tenure_months}: "
-            f"eligibility is calculated at {lender.max_tenure_months} months"
+            f"the EMI is shown at {lender.max_tenure_months} months and eligibility is calculated at {policy} months"
         )
-        return lender.max_tenure_months, "policy"
+        return policy, "policy"
+    if requested > policy:
+        notes.append(
+            f"{lender.name} calculates eligibility at {policy} months (its calculation tenure), not at the "
+            f"requested {requested}"
+        )
+        return policy, "policy"
     if requested < lender.min_tenure_months:
         notes.append(
             f"Requested tenure {requested} months is less than {lender.name}'s min {lender.min_tenure_months}: "
@@ -759,6 +990,29 @@ def _calculation_tenure(lender: LenderPolicy, requested: int | None, notes: list
         )
         return lender.min_tenure_months, "policy"
     return requested, "table"
+
+
+def _grid_foir(
+    lender: LenderPolicy, category: str, salary: Decimal, foir: Decimal, reasons: list[str], notes: list[str]
+) -> Decimal:
+    """The FOIR of the lender's grid for a listed company's category at this net monthly salary,
+    noted with its slab; else `foir` (the category's own), with why the lender is not eligible."""
+    grid = lender.foir_grid
+    slab = grid.slab(salary)
+    if slab is None:
+        reasons.append(
+            f"Net monthly salary {inr(salary)} is below {lender.name}'s minimum income of "
+            f"{inr(grid.slab_starts[0])} (the first slab of its FOIR grid)"
+        )
+        return foir
+    column = grid.categories.get(category)
+    if column is None:
+        reasons.append(f"{lender.name}'s FOIR grid has no FOIR for {category} (it covers {', '.join(grid.categories)})")
+        return foir
+    value = dec(column[slab])
+    label = f" ({grid.label})" if grid.label else ""
+    notes.append(f"FOIR {_pct(value)} · slab {grid.slab_text(slab)} · {category} · {SOURCE_LABELS['policy']}{label}")
+    return value
 
 
 def _lender_result(
@@ -814,6 +1068,8 @@ def _lender_result(
             reasons.append(
                 f"'{shown}' is not in {lender.name}'s company list and {lender.name} does not accept unlisted companies"
             )
+    if lender.foir_grid is not None and category is not None and income["net"] is not None:
+        foir = _grid_foir(lender, category, income["net"], foir, reasons, notes)
 
     score = cibil.get("score")
     if score is None:

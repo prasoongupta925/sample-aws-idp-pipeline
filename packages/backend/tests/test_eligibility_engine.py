@@ -1,14 +1,19 @@
 """Tests for the eligibility engine (app/eligibility.py) and its SAMPLE data files (no AWS, no model).
 
 The worked example is the client's "Cibil Page Function" sheet: income 98,000, FOIR 0.70,
-multiplier 21, obligations 15,000, 60 months at 11% -> per-lakh EMI 2,174.24, FOIR eligibility
-24,65,226.61, multiplier eligibility 20,58,000; ICICI Bank 20,58,000 over 72 months (EMI
-39,172.13); HDFC Bank capped at 15,00,000 over 60 months at 12% (EMI 33,366.67). Applicants and
-values are synthetic.
+multiplier 21, obligations 15,000; ICICI Bank at 11% with a calculation tenure of 60 months (From
+Policy) and a max tenure of 72 -> per-lakh EMI 2,174.24, FOIR eligibility 24,65,226.61, multiplier
+eligibility 20,58,000; ICICI Bank 20,58,000 over 72 months (EMI 39,172.13); HDFC Bank capped at
+15,00,000 over 60 months at 12% (EMI 33,366.67). Applicants and values are synthetic.
 """
 
+import ast
 import copy
-from decimal import Decimal
+import dataclasses
+import json
+import sys
+from decimal import ROUND_HALF_UP, Decimal
+from pathlib import Path
 
 import pytest
 
@@ -65,6 +70,11 @@ def tradeline(**fields):
     return {**base, **fields}
 
 
+def rupees(value):
+    """To the rupee, half up: how the sheet shows its figures (2,174.24 -> 2,174)."""
+    return int(Decimal(str(value)).quantize(Decimal(1), rounding=ROUND_HALF_UP))
+
+
 # ------------------------------------------------------------------ the worked example
 class TestWorkedExample:
     def test_per_lakh_emi_is_excel_pmt(self):
@@ -90,10 +100,31 @@ class TestWorkedExample:
         assert icici["computed_amount"] == 2058000.0
         assert (icici["tenure_months"], icici["roi"], icici["emi"]) == (72, 11.0, 39172.13)
         assert icici["calculation_tenure_months"] == 60
+        assert icici["sources"]["calculation_tenure_months"] == "policy"  # the sheet's grey "Tenure Calculation"
         assert icici["emi_at_calculation_tenure"] == el.money(el.emi(2058000, 11, 60))
         assert (icici["foir"], icici["multiplier"], icici["company_category"]) == (0.7, 21.0, "CAT A")
         assert (icici["income_considered"], icici["obligations"], icici["bt_amount"]) == (98000.0, 15000.0, 0.0)
         assert icici["label"] == "sample policy — replace with your lender grid"
+
+    def test_the_sheets_figures_to_the_rupee(self):
+        """The sheet shows ICICI Bank's 2,174 / 24,65,227 / 20,58,000 / 20,58,000 / 39,172."""
+        icici = at(el.calculate(example()), "icici_bank")
+
+        figures = ("per_lakh_emi", "foir_eligibility", "multiplier_eligibility", "eligible_amount", "emi")
+        assert [rupees(icici[f]) for f in figures] == [2174, 2465227, 2058000, 2058000, 39172]
+
+    def test_the_policy_alone_gives_the_sheets_numbers(self):
+        """No tenure requested: the per-lakh EMI uses ICICI Bank's calculation tenure (60), the EMI its max (72)."""
+        icici = at(el.calculate(example(loan__tenure_months=None)), "icici_bank")
+
+        assert (icici["calculation_tenure_months"], icici["tenure_months"]) == (60, 72)
+        assert (icici["per_lakh_emi"], icici["foir_eligibility"], icici["eligible_amount"], icici["emi"]) == (
+            2174.24,
+            2465226.61,
+            2058000.0,
+            39172.13,
+        )
+        assert icici["notes"] == []
 
     def test_hdfc_bank_is_capped_at_its_max_amount(self):
         hdfc = at(el.calculate(example()), "hdfc_bank")
@@ -119,7 +150,7 @@ class TestWorkedExample:
             "roi": "policy",
             "tenure_months": "policy",
             "max_amount": "policy",
-            "calculation_tenure_months": "table",
+            "calculation_tenure_months": "policy",
             "per_lakh_emi": "formula",
             "foir_eligibility": "formula",
             "multiplier_eligibility": "formula",
@@ -548,8 +579,8 @@ class TestReasons:
         icici = at(result, "icici_bank")
         assert (icici["company_category"], icici["foir"], icici["multiplier"]) == ("CAT B", 0.65, 18.0)
         assert icici["multiplier_eligibility"] == 98000 * 18
-        hdfc = at(result, "hdfc_bank")
-        assert (hdfc["company_category"], hdfc["foir"], hdfc["multiplier"]) == ("CAT B", 0.6, 16.0)
+        hdfc = at(result, "hdfc_bank")  # its FOIR from its salary-slab grid's CAT B column
+        assert (hdfc["company_category"], hdfc["foir"], hdfc["multiplier"]) == ("CAT B", 0.55, 16.0)
 
     def test_all_reasons_are_listed(self):
         row = at(el.calculate(example(cibil__score=700, profile__employment_type="grade_4")), "hdfc_bank")
@@ -560,8 +591,222 @@ class TestReasons:
         ]
 
 
+# ------------------------------------------------------------------ FOIR grid
+def with_hdfc(category=None, grid=None):
+    """BOOK with the example's employer (Konkan Softworks) in `category` at HDFC Bank, and/or HDFC
+    Bank's FOIR grid replaced by `grid` (False: no grid)."""
+    companies = BOOK.companies
+    if category is not None:
+        rows = tuple(
+            c.model_copy(update={"categories": {**c.categories, "hdfc_bank": category}})
+            if c.name == "Konkan Softworks Pvt Ltd"
+            else c
+            for c in BOOK.companies.companies
+        )
+        companies = companies.model_copy(update={"companies": rows})
+    policies = BOOK.policies
+    if grid is not None:
+        hdfc = BOOK.lender("hdfc_bank").model_copy(update={"foir_grid": grid or None})
+        policies = policies.model_copy(
+            update={"lenders": tuple(hdfc if lender.id == "hdfc_bank" else lender for lender in BOOK.lenders)}
+        )
+    return el.PolicyBook(policies, BOOK.pincodes, companies)
+
+
+def hdfc_at(salary, book=None, **changes):
+    """HDFC Bank's row for the example (no obligations) at a net monthly salary."""
+    inputs = example(profile__net_income=salary, cibil__tradelines=[], **changes)
+    return at(el.calculate(inputs, book=book), "hdfc_bank")
+
+
+class TestFoirGrid:
+    """HDFC Bank's SAMPLE grid: =INDEX(grid, MATCH(salary, slab_starts, 1), MATCH(category, categories, 0))."""
+
+    def test_the_sample_grid(self):
+        grid = BOOK.lender("hdfc_bank").foir_grid
+
+        assert grid.label == "SAMPLE: confirm with Smart Solutions' HDFC grid"
+        assert grid.slab_starts == (35000, 50000, 75000, 100000)
+        assert grid.categories == {
+            "Super CAT A": (0.6, 0.65, 0.7, 0.75),  # the sample company list's extra category, as CAT A
+            "CAT A": (0.6, 0.65, 0.7, 0.75),
+            "CAT B": (0.55, 0.55, 0.55, 0.55),
+            "CAT C": (0.5, 0.5, 0.5, 0.5),
+            "CAT D": (0.45, 0.45, 0.45, 0.45),
+        }
+        assert [grid.slab_text(i) for i in range(4)] == [
+            "35,000–49,999",
+            "50,000–74,999",
+            "75,000–99,999",
+            "1,00,000 and above",
+        ]
+        assert [lender.id for lender in BOOK.lenders if lender.foir_grid] == ["hdfc_bank"]
+
+    @pytest.mark.parametrize(
+        ("salary", "foir", "slab"),
+        [
+            (35000, 0.6, "35,000–49,999"),
+            (49999, 0.6, "35,000–49,999"),
+            (50000, 0.65, "50,000–74,999"),
+            (74999, 0.65, "50,000–74,999"),
+            (75000, 0.7, "75,000–99,999"),
+            (99999, 0.7, "75,000–99,999"),
+            (99999.99, 0.7, "75,000–99,999"),
+            (100000, 0.75, "1,00,000 and above"),
+            (350000, 0.75, "1,00,000 and above"),
+        ],
+    )
+    def test_each_slab_boundary(self, salary, foir, slab):
+        hdfc = hdfc_at(salary)
+
+        assert (hdfc["status"], hdfc["foir"], hdfc["company_category"]) == ("eligible", foir, "CAT A")
+        assert hdfc["sources"]["foir"] == "policy"
+        assert hdfc["notes"][0] == (
+            f"FOIR {round(foir * 100)}% · slab {slab} · CAT A · From Policy "
+            "(SAMPLE: confirm with Smart Solutions' HDFC grid)"
+        )
+        assert hdfc["foir_eligibility"] == el.money(el.dec(salary) * el.dec(foir) / el.emi(100000, 12, 60) * 100000)
+        assert hdfc["multiplier"] == 20.0  # the multiplier is still CAT A's
+
+    def test_below_the_first_slab_is_below_the_minimum_income(self):
+        hdfc = hdfc_at(34999)
+
+        assert hdfc["status"] == "not_eligible"
+        assert hdfc["reasons"] == [
+            "Net monthly salary ₹34,999 is below HDFC Bank's minimum income of ₹35,000 "
+            "(the first slab of its FOIR grid)"
+        ]
+        assert (hdfc["eligible_amount"], hdfc["emi"]) == (0.0, 0.0)
+        # The formulas keep CAT A's own FOIR, the grid's lowest.
+        assert hdfc["foir"] == 0.6 and hdfc["computed_amount"] > 0
+        assert not any(n.startswith("FOIR ") for n in hdfc["notes"])
+
+    @pytest.mark.parametrize(
+        ("category", "foir", "multiplier"),
+        [
+            ("Super CAT A", 0.65, 22.0),
+            ("CAT A", 0.65, 20.0),
+            ("CAT B", 0.55, 16.0),
+            ("CAT C", 0.5, 12.0),
+            ("CAT D", 0.45, 10.0),
+        ],
+    )
+    def test_each_category(self, category, foir, multiplier):
+        hdfc = hdfc_at(60000, book=with_hdfc(category))
+
+        assert (hdfc["company_category"], hdfc["foir"], hdfc["multiplier"]) == (category, foir, multiplier)
+        assert hdfc["notes"][0].startswith(f"FOIR {round(foir * 100)}% · slab 50,000–74,999 · {category} · From Policy")
+
+    @pytest.mark.parametrize(("category", "foir"), [("CAT B", 0.55), ("CAT C", 0.5), ("CAT D", 0.45)])
+    @pytest.mark.parametrize("salary", [35000, 60000, 80000, 150000])
+    def test_cat_b_c_and_d_are_one_foir_in_every_slab(self, category, foir, salary):
+        assert hdfc_at(salary, book=with_hdfc(category))["foir"] == foir
+
+    def test_a_category_the_grid_has_no_foir_for(self):
+        grid = BOOK.lender("hdfc_bank").foir_grid
+        no_cat_b = grid.model_copy(update={"categories": {k: v for k, v in grid.categories.items() if k != "CAT B"}})
+
+        hdfc = hdfc_at(60000, book=with_hdfc("CAT B", grid=no_cat_b))
+
+        assert hdfc["status"] == "not_eligible"
+        assert hdfc["reasons"] == [
+            "HDFC Bank's FOIR grid has no FOIR for CAT B (it covers Super CAT A, CAT A, CAT C, CAT D)"
+        ]
+        assert (hdfc["foir"], hdfc["company_category"]) == (0.55, "CAT B")  # CAT B's own FOIR for the formulas
+        assert hdfc["eligible_amount"] == 0.0
+
+    def test_the_salary_slab_is_the_net_salary(self):
+        """Verified salary wins over the entered one; other income does not move the slab."""
+        verified = el.calculate(
+            example(profile__net_income=80000, cibil__tradelines=[]),
+            verified_income={"amount": 58000, "source": "salary slips, median net pay"},
+        )
+        bonus = hdfc_at(49000, profile__other_income=[{"type": "bonus", "amount": 240000, "frequency": "yearly"}])
+
+        assert at(verified, "hdfc_bank")["foir"] == 0.65  # 58,000: slab 50,000–74,999, not 75,000–99,999
+        assert (bonus["foir"], bonus["income_considered"]) == (0.6, 59000.0)  # slab 35,000–49,999
+
+    def test_no_salary_no_grid(self):
+        hdfc = hdfc_at(None)
+
+        assert "Net monthly income not entered" in hdfc["reasons"]
+        assert hdfc["foir"] == 0.6 and not any(n.startswith("FOIR ") for n in hdfc["notes"])
+
+    def test_an_unlisted_company_gets_the_unlisted_policy_not_the_grid(self):
+        hdfc = BOOK.lender("hdfc_bank")
+        accepting = hdfc.model_copy(
+            update={"unlisted_company": el.UnlistedCompanyPolicy(accepted=True, foir=0.5, multiplier=10)}
+        )
+        policies = BOOK.policies.model_copy(
+            update={"lenders": tuple(accepting if lender.id == "hdfc_bank" else lender for lender in BOOK.lenders)}
+        )
+        book = el.PolicyBook(policies, BOOK.pincodes, BOOK.companies)
+
+        row = hdfc_at(80000, book=book, profile__company="Sample Unlisted Traders Pvt Ltd")
+
+        assert (row["status"], row["company_policy"], row["foir"]) == ("eligible", "unlisted", 0.5)
+        assert not any(n.startswith("FOIR ") for n in row["notes"])
+
+    @pytest.mark.parametrize("salary", [30000, 34999, 35000, 50000, 99999, 100000, 250000])
+    def test_lenders_without_a_grid_are_unchanged(self, salary):
+        """Without its grid HDFC Bank prices CAT A at the category's FOIR again; every other lender's
+        row is the same with or without HDFC Bank's grid."""
+        inputs = example(profile__net_income=salary, cibil__tradelines=[])
+        with_grid = el.calculate(inputs)
+        without = el.calculate(inputs, book=with_hdfc(grid=False))
+
+        assert [r for r in with_grid["per_lender"] if r["lender_id"] != "hdfc_bank"] == [
+            r for r in without["per_lender"] if r["lender_id"] != "hdfc_bank"
+        ]
+        plain = at(without, "hdfc_bank")
+        assert plain["foir"] == BOOK.lender("hdfc_bank").company_categories["CAT A"].foir
+        assert not any(n.startswith("FOIR ") for n in plain["notes"])
+        assert not any("minimum income" in r for r in plain["reasons"])
+        for row in with_grid["per_lender"]:
+            if row["lender_id"] != "hdfc_bank":
+                lender = BOOK.lender(row["lender_id"])
+                assert row["foir"] == lender.company_categories[row["company_category"]].foir
+                assert not any(n.startswith("FOIR ") for n in row["notes"])
+
+    @pytest.mark.parametrize(
+        ("change", "problem"),
+        [
+            ({"slab_starts": [35000, 35000, 75000, 100000]}, "slab_starts must increase"),
+            ({"slab_starts": [50000, 35000, 75000, 100000]}, "slab_starts must increase"),
+            ({"slab_starts": [0, 50000, 75000, 100000]}, r"slab_starts\[0\]: must be at least 1"),
+            ({"categories": {}}, "a FOIR grid needs at least one category"),
+            ({"categories": {"CAT A": [0.6, 0.65, 0.7]}}, r"CAT A needs one FOIR per slab \(4\)"),
+            ({"categories": {"CAT A": [0.6, 0.65, 0.7, 1.2]}}, r"categories.CAT A\[3\]: must be at most 1"),
+            ({"categories": {"CAT Z": [0.6, 0.65, 0.7, 0.75]}}, r"foir_grid categories \['CAT Z'\] are not company"),
+            ({"rows": []}, r"unknown field\(s\) rows"),
+        ],
+    )
+    def test_the_grid_is_checked(self, change, problem):
+        policy = BOOK.lender("hdfc_bank").model_dump(mode="json")
+        policy["foir_grid"] = {**policy["foir_grid"], **change}
+
+        with pytest.raises(ValueError, match=problem):
+            el.LenderPolicy.model_validate(policy)
+
+
 # ------------------------------------------------------------------ tenure and requested amount
 class TestTenure:
+    def test_each_lender_calculates_at_its_calculation_tenure(self):
+        """The SAMPLE policies: ICICI Bank 60 of 72 months (the sheet), Bajaj Finance 72 of 84."""
+        result = el.calculate(example(loan__tenure_months=None))
+
+        tenures = {r["lender_id"]: (r["calculation_tenure_months"], r["tenure_months"]) for r in result["per_lender"]}
+        assert tenures == {
+            "hdfc_bank": (60, 60),
+            "icici_bank": (60, 72),
+            "axis_bank": (60, 60),
+            "bajaj_finance": (72, 84),
+            "tata_capital": (60, 72),
+        }
+        for row in result["per_lender"]:
+            assert row["sources"]["calculation_tenure_months"] == "policy"
+            assert row["per_lakh_emi"] == el.money(el.emi(100000, row["roi"], row["calculation_tenure_months"]))
+
     def test_requested_tenure_is_capped_at_the_lenders_max(self):
         result = el.calculate(example(loan__tenure_months=84))
 
@@ -569,22 +814,59 @@ class TestTenure:
         assert hdfc["calculation_tenure_months"] == 60
         assert hdfc["sources"]["calculation_tenure_months"] == "policy"
         assert any("Requested tenure 84 months is more than HDFC Bank's max 60" in n for n in hdfc["notes"])
-        assert at(result, "bajaj_finance")["calculation_tenure_months"] == 84
+        icici = at(result, "icici_bank")
+        assert (icici["calculation_tenure_months"], icici["tenure_months"], icici["emi"]) == (60, 72, 39172.13)
+        assert icici["notes"] == [
+            "Requested tenure 84 months is more than ICICI Bank's max 72: the EMI is shown at 72 months and "
+            "eligibility is calculated at 60 months"
+        ]
+        # A long request never raises the calculation tenure.
+        assert at(result, "bajaj_finance")["calculation_tenure_months"] == 72
 
-    def test_short_tenure_is_raised_to_the_min_and_none_means_the_max(self):
+    def test_a_requested_tenure_beyond_the_calculation_tenure_is_noted(self):
+        icici = at(el.calculate(example(loan__tenure_months=66)), "icici_bank")
+
+        assert (icici["calculation_tenure_months"], icici["tenure_months"], icici["emi"]) == (60, 72, 39172.13)
+        assert icici["sources"]["calculation_tenure_months"] == "policy"
+        assert icici["notes"] == [
+            "ICICI Bank calculates eligibility at 60 months (its calculation tenure), not at the requested 66"
+        ]
+
+    def test_short_tenure_is_raised_to_the_min(self):
         short = at(el.calculate(example(loan__tenure_months=6)), "icici_bank")
-        none = at(el.calculate(example(loan__tenure_months=None)), "icici_bank")
 
         assert short["calculation_tenure_months"] == 12
-        assert none["calculation_tenure_months"] == 72
-        assert none["per_lakh_emi"] == el.money(el.emi(100000, 11, 72))
+        assert short["sources"]["calculation_tenure_months"] == "policy"
+        assert any("Requested tenure 6 months is less than ICICI Bank's min 12" in n for n in short["notes"])
 
     def test_a_shorter_requested_tenure_is_used(self):
+        """The EMI must fit the FOIR at the tenure the customer takes: 36 months, not ICICI Bank's 60."""
         icici = at(el.calculate(example(loan__tenure_months=36)), "icici_bank")
 
         assert icici["calculation_tenure_months"] == 36
+        assert icici["sources"]["calculation_tenure_months"] == "table"
         assert icici["per_lakh_emi"] == el.money(el.emi(100000, 11, 36))
         assert icici["tenure_months"] == 72  # the EMI is still shown at the max tenure
+        assert icici["notes"] == []
+
+    def test_a_policy_without_a_calculation_tenure_calculates_at_its_max(self):
+        policy = BOOK.lender("icici_bank").model_dump()
+        del policy["calculation_tenure_months"]
+        icici = el.LenderPolicy.model_validate(policy)
+        lenders = tuple(icici if lender.id == "icici_bank" else lender for lender in BOOK.lenders)
+        book = el.PolicyBook(BOOK.policies.model_copy(update={"lenders": lenders}), BOOK.pincodes, BOOK.companies)
+
+        row = at(el.calculate(example(loan__tenure_months=None), book=book), "icici_bank")
+
+        assert (icici.calculation_tenure_months, icici.calculation_tenure) == (None, 72)
+        assert (row["calculation_tenure_months"], row["per_lakh_emi"]) == (72, el.money(el.emi(100000, 11, 72)))
+
+    @pytest.mark.parametrize("months", [6, 84])
+    def test_a_calculation_tenure_outside_the_lenders_limits_is_refused(self, months):
+        policy = {**BOOK.lender("icici_bank").model_dump(), "calculation_tenure_months": months}
+
+        with pytest.raises(ValueError, match="calculation_tenure_months is outside min_tenure_months"):
+            el.LenderPolicy.model_validate(policy)
 
     def test_less_than_requested_is_noted(self):
         result = el.calculate(example(loan__amount=1800000))
@@ -643,6 +925,7 @@ class TestDataFiles:
         hdfc, icici = BOOK.lender("hdfc_bank"), BOOK.lender("ICICI Bank")
 
         assert (icici.roi, icici.max_tenure_months, icici.foir, icici.multiplier) == (11.0, 72, 0.7, 21.0)
+        assert icici.calculation_tenure_months == 60  # the sheet's "Tenure Calculation"
         assert icici.company_categories["CAT A"].model_dump() == {"foir": 0.7, "multiplier": 21.0}
         assert (hdfc.roi, hdfc.max_tenure_months, hdfc.max_amount) == (12.0, 60, 1500000.0)
 
@@ -707,6 +990,43 @@ class TestDataFiles:
         assert names[:3] == ["Tata Consultancy Services Ltd", "Tata Motors Ltd", "Tata Steel Ltd"]
         assert BOOK.company_suggestions("") == []
 
+    def test_records_are_checked_field_by_field(self):
+        policies = BOOK.policies.model_dump(mode="json")
+        json.dumps(policies)  # lists, not tuples
+        policies["lenders"][1]["roi"] = 75
+
+        with pytest.raises(ValueError, match=r"lenders\[1\]: roi: must be at most 60"):
+            el.PolicyFile.model_validate(policies)
+        policies["lenders"][1] = {**policies["lenders"][1], "roi": 11, "teaser_rate": 9.5}
+        with pytest.raises(ValueError, match=r"unknown field\(s\) teaser_rate"):
+            el.PolicyFile.model_validate(policies)
+        del policies["lenders"][1]["teaser_rate"]
+        del policies["lenders"][1]["max_amount"]
+        with pytest.raises(ValueError, match=r"missing field\(s\) max_amount"):
+            el.PolicyFile.model_validate(policies)
+        with pytest.raises(ValueError, match="must be a whole number"):
+            el.Region.model_validate({"id": "x", "name": "X", "ranges": [[400001.5, 400100]]})
+        with pytest.raises(ValueError, match="an accepted unlisted company needs foir and multiplier"):
+            el.UnlistedCompanyPolicy(accepted=True)
+
+    def test_records_are_frozen_and_dump_like_pydantic(self):
+        icici = BOOK.lender("icici_bank")
+
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            icici.roi = 9.0
+        dumped = icici.model_dump(exclude={"company_categories", "unlisted_company"})
+        assert dumped["employment_types"][0] == "government" and isinstance(dumped["employment_types"], tuple)
+        assert dumped["income_consideration_pct"] == {
+            "rented_notary": 25.0,
+            "rented_registered": 60.0,
+            "bonus": 50.0,
+            "incentive": 60.0,
+            "pension": 80.0,
+        }
+        assert "company_categories" not in dumped
+        assert el.LenderPolicy.model_validate(icici.model_dump()) == icici
+        assert icici.model_copy(update={"roi": 10.5}).roi == 10.5 and icici.roi == 11.0
+
     def test_broken_references_are_refused(self):
         companies = copy.deepcopy(BOOK.companies.model_dump())
         companies["companies"][0]["categories"]["hdfc_bank"] = "CAT Z"
@@ -755,3 +1075,108 @@ class TestVocabulary:
         assert [o["label"] for o in opts["tradeline_actions"]] == ["BT", "Obligate", "Close"]
         assert len(opts["employment_types"]) == 8 and len(opts["loan_types"]) == 8
         assert {o["label"] for o in opts["sources"]} == {"From Policy", "Formula Calculation", "From Table"}
+
+
+# ------------------------------------------------------------------ the seeded demo
+class TestSeededDemo:
+    """The demo's saved inputs (synthetic personas, as the seed script saves them): the calculation
+    tenures do not change their results, as every requested tenure is shorter than the lenders'."""
+
+    RAHUL = {
+        "profile": {
+            "name": "Rahul Vijay Deshmukh",
+            "pincode": "411014",
+            "company": "Konkan Softworks Pvt Ltd",
+            "employment_type": "private_limited",
+            "net_income": 82500,
+            "other_income": [{"type": "bonus", "amount": 60000, "frequency": "yearly"}],
+        },
+        "cibil": {
+            "score": 771,
+            "enquiries": {"d30": 0, "d60": 1, "d90": 1, "d120": 2},
+            "tradelines": [tradeline(loan_type="car", lender="Mulshi Auto Finance Ltd", outstanding=176000, emi=8200)],
+        },
+        "loan": {"amount": 600000, "tenure_months": 48},
+    }
+    SNEHA = {
+        "profile": {
+            "name": "Sneha Anil Kulkarni",
+            "pincode": "400607",
+            "company": "Deccan Retail Pvt Ltd",
+            "employment_type": "private_limited",
+            "net_income": 65000,
+        },
+        "cibil": {
+            "score": 712,
+            "enquiries": {"d30": 2, "d60": 4, "d90": 6, "d120": 7},
+            "tradelines": [
+                tradeline(
+                    loan_type="consumer", lender="Deccan Consumer Finance", emi=0, status="closed", action="close"
+                )
+            ],
+        },
+        "loan": {"amount": 400000, "tenure_months": 36},
+    }
+    AMIT = {
+        "profile": {
+            "name": "Amit Suresh Patil",
+            "pincode": "401202",
+            "company": "Varad Logistics LLP",
+            "employment_type": "llp",
+            "net_income": 71200,
+            "other_income": [{"type": "rented", "amount": 12000, "frequency": "monthly", "agreement": "notary"}],
+        },
+        "cibil": {
+            "score": 748,
+            "enquiries": {"d30": 0, "d60": 0, "d90": 1, "d120": 1},
+            "tradelines": [
+                tradeline(loan_type="car", lender="Indrayani Motor Finance Ltd", outstanding=48300, emi=3450)
+            ],
+        },
+        "loan": {"amount": 500000, "tenure_months": 36},
+    }
+
+    @pytest.mark.parametrize(
+        ("inputs", "verified", "best", "amount", "emi"),
+        [
+            (RAHUL, None, "icici_bank", 1785000.0, 33975.83),
+            (SNEHA, {"amount": 58000, "source": "salary slips, median net pay"}, "bajaj_finance", 928000.0, 17390.73),
+            (AMIT, None, "icici_bank", 1038800.0, 19772.6),
+        ],
+    )
+    def test_best_lender_and_amount(self, inputs, verified, best, amount, emi):
+        result = el.calculate(inputs, verified_income=verified)
+
+        row = at(result, best)
+        assert result["best_lender_id"] == best
+        assert (row["eligible_amount"], row["emi"]) == (amount, emi)
+        # Multiplier-limited, at the requested (shorter) tenure, as before.
+        assert row["eligible_amount"] == row["multiplier_eligibility"]
+        assert row["calculation_tenure_months"] == inputs["loan"]["tenure_months"]
+        assert row["sources"]["calculation_tenure_months"] == "table"
+
+    @pytest.mark.parametrize(
+        ("inputs", "verified", "status", "foir", "computed"),
+        [
+            # 82,500 is in the 75,000–99,999 slab: CAT A 70%, the old CAT A FOIR.
+            (RAHUL, None, "eligible", 0.7, 1500000.0),
+            # 58,000 (verified) in 50,000–74,999: CAT B 55% (was 60%); still multiplier-limited, and HDFC
+            # Bank is not eligible for her anyway (CIBIL 712, 6 enquiries in 90 days).
+            (SNEHA, {"amount": 58000, "source": "salary slips, median net pay"}, "not_eligible", 0.55, 928000.0),
+            # Varad Logistics is not on HDFC Bank's list, which takes no unlisted company: no grid.
+            (AMIT, None, "not_eligible", 0.7, 1396687.16),
+        ],
+    )
+    def test_hdfc_banks_grid(self, inputs, verified, status, foir, computed):
+        hdfc = at(el.calculate(inputs, verified_income=verified), "hdfc_bank")
+
+        assert (hdfc["status"], hdfc["foir"], hdfc["computed_amount"]) == (status, foir, computed)
+
+
+def test_the_engine_needs_only_the_standard_library():
+    """The file-check Lambda runs a copy of this module, and has no pydantic or other package."""
+    tree = ast.parse(Path(el.__file__).read_text(encoding="utf-8"))
+    imported = {a.name.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.Import) for a in node.names}
+    imported |= {n.module.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module}
+
+    assert imported <= set(sys.stdlib_module_names), imported - set(sys.stdlib_module_names)
