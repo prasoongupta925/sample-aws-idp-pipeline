@@ -576,6 +576,7 @@ function ProjectDetailPage() {
                   {eligibilityTarget && !artifactsHook.selectedArtifact && (
                     <EligibilityPanel
                       state={eligibility}
+                      projectId={projectId}
                       applicant={eligibilityTarget.id}
                       name={eligibilityTarget.name}
                       pan={eligibilityTarget.pan}

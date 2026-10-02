@@ -51,6 +51,9 @@ export default defineConfig(() => ({
     globals: true,
     environment: 'jsdom',
     include: ['{src,tests}/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts,jsx,tsx}'],
+    // The rendering tests take a few seconds each on a busy machine (the
+    // default 5 s made them flaky there).
+    testTimeout: 20000,
     reporters: ['default'],
     coverage: {
       reportsDirectory: './test-output/vitest/coverage',

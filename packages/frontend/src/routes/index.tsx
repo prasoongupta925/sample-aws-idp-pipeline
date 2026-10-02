@@ -12,6 +12,13 @@ import ProjectSettingsModal, {
   LANGUAGES,
   CARD_COLORS,
 } from '../components/ProjectSettingsModal';
+import ProjectTreeView from '../components/ProjectTree';
+import ViewSwitch from '../components/ProjectTree/ViewSwitch';
+import {
+  readProjectsView,
+  writeProjectsView,
+  type ProjectsView,
+} from '../lib/projectTree';
 
 type SortOption =
   | 'created_desc'
@@ -222,10 +229,16 @@ function ProjectsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortOption, setSortOption] =
     useState<SortOption>(getInitialSortOption);
+  const [view, setView] = useState<ProjectsView>(readProjectsView);
 
   const handleSortChange = (newSort: SortOption) => {
     setSortOption(newSort);
     localStorage.setItem(PROJECT_SORT_KEY, newSort);
+  };
+
+  const handleViewChange = (newView: ProjectsView) => {
+    setView(newView);
+    writeProjectsView(newView);
   };
 
   const filteredProjects = useMemo(() => {
@@ -375,83 +388,102 @@ function ProjectsPage() {
                 {t('projects.heroDescription')}
               </p>
             </div>
+            <div className="bento-hero-action md:ml-auto">
+              <ViewSwitch view={view} onChange={handleViewChange} />
+            </div>
           </header>
 
-          {/* Filter Bar */}
-          <div className="flex flex-col sm:flex-row gap-3 mb-6">
-            {/* Search */}
-            <div className="relative flex-1 max-w-md">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 dark:text-slate-400 z-10" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder={t('common.search')}
-                className="w-full pl-10 pr-4 py-2 text-sm bg-white/40 backdrop-blur-sm dark:bg-slate-800 border border-white/50 dark:border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-slate-900 dark:text-white placeholder-slate-500"
-              />
-            </div>
+          {view === 'tree' && (
+            <ProjectTreeView
+              projects={projects}
+              fetchApi={fetchApi}
+              onCreate={openCreateModal}
+              onEdit={openEditModal}
+              onDelete={handleDeleteProject}
+            />
+          )}
 
-            {/* Sort */}
-            <div className="flex items-center gap-2">
-              <ArrowUpDown className="w-4 h-4 text-slate-400" />
-              <select
-                value={sortOption}
-                onChange={(e) => handleSortChange(e.target.value as SortOption)}
-                className="pl-3 pr-7 py-2.5 text-sm bg-white/40 backdrop-blur-sm dark:bg-slate-800 border border-white/50 dark:border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-slate-900 dark:text-white"
-              >
-                <option value="created_desc">
-                  {t('projects.sortCreatedDesc')}
-                </option>
-                <option value="created_asc">
-                  {t('projects.sortCreatedAsc')}
-                </option>
-                <option value="updated_desc">
-                  {t('projects.sortUpdatedDesc')}
-                </option>
-                <option value="updated_asc">
-                  {t('projects.sortUpdatedAsc')}
-                </option>
-              </select>
-            </div>
-          </div>
-
-          <div className="bento-grid">
-            {/* New Project Card */}
-            <button onClick={openCreateModal} className="bento-card-new">
-              <div className="bento-card-new-icon">
-                <svg
-                  className="w-7 h-7"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M12 4v16m8-8H4"
+          {view === 'cards' && (
+            <>
+              {/* Filter Bar */}
+              <div className="flex flex-col sm:flex-row gap-3 mb-6">
+                {/* Search */}
+                <div className="relative flex-1 max-w-md">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 dark:text-slate-400 z-10" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder={t('common.search')}
+                    className="w-full pl-10 pr-4 py-2 text-sm bg-white/40 backdrop-blur-sm dark:bg-slate-800 border border-white/50 dark:border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-slate-900 dark:text-white placeholder-slate-500"
                   />
-                </svg>
-              </div>
-              <span className="bento-card-new-label">
-                {t('projects.newProject')}
-              </span>
-              <span className="bento-card-new-hint">
-                {t('projects.clickToCreate')}
-              </span>
-            </button>
+                </div>
 
-            {filteredProjects.map((project, index) => (
-              <ProjectCard
-                key={project.project_id}
-                project={project}
-                colorIndex={project.color ?? index}
-                onEdit={openEditModal}
-                onDelete={handleDeleteProject}
-                index={index}
-              />
-            ))}
-          </div>
+                {/* Sort */}
+                <div className="flex items-center gap-2">
+                  <ArrowUpDown className="w-4 h-4 text-slate-400" />
+                  <select
+                    value={sortOption}
+                    onChange={(e) =>
+                      handleSortChange(e.target.value as SortOption)
+                    }
+                    className="pl-3 pr-7 py-2.5 text-sm bg-white/40 backdrop-blur-sm dark:bg-slate-800 border border-white/50 dark:border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-slate-900 dark:text-white"
+                  >
+                    <option value="created_desc">
+                      {t('projects.sortCreatedDesc')}
+                    </option>
+                    <option value="created_asc">
+                      {t('projects.sortCreatedAsc')}
+                    </option>
+                    <option value="updated_desc">
+                      {t('projects.sortUpdatedDesc')}
+                    </option>
+                    <option value="updated_asc">
+                      {t('projects.sortUpdatedAsc')}
+                    </option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="bento-grid">
+                {/* New Project Card */}
+                <button onClick={openCreateModal} className="bento-card-new">
+                  <div className="bento-card-new-icon">
+                    <svg
+                      className="w-7 h-7"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M12 4v16m8-8H4"
+                      />
+                    </svg>
+                  </div>
+                  <span className="bento-card-new-label">
+                    {t('projects.newProject')}
+                  </span>
+                  <span className="bento-card-new-hint">
+                    {t('projects.clickToCreate')}
+                  </span>
+                </button>
+
+                {filteredProjects.map((project, index) => (
+                  <ProjectCard
+                    key={project.project_id}
+                    project={project}
+                    colorIndex={project.color ?? index}
+                    onEdit={openEditModal}
+                    onDelete={handleDeleteProject}
+                    index={index}
+                  />
+                ))}
+              </div>
+            </>
+          )}
         </>
       )}
 
