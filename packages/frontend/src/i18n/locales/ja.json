@@ -813,7 +813,7 @@
       "inputLabel": "このファイルについての質問",
       "placeholder": "例: このファイルが準備未完了なのはなぜですか？（Enter で送信、Shift+Enter で改行）",
       "send": "質問",
-      "thinking": "Amazon Nova 2 Lite がファイルを読んでいます…",
+      "thinking": "Kimi K2.5 がファイルを読んでいます…",
       "caption": "入力 {{input}} / 出力 {{output}} トークン · {{cost}}",
       "groundedOn": "{{count}} 件の文書に基づく",
       "groundedOn_one": "{{count}} 件の文書に基づく",
@@ -829,7 +829,7 @@
         "failed": "モデルの呼び出しに失敗しました (HTTP {{status}})。しばらくしてから再試行してください。"
       },
       "meter": {
-        "answeredBy": "Amazon Nova 2 Lite が抽出項目、チェック結果、文書テキストのみで回答",
+        "answeredBy": "Kimi K2.5 が抽出項目、チェック結果、文書テキストのみで回答",
         "model": "モデル {{model}}（{{region}}）",
         "modelNoRegion": "モデル {{model}}",
         "session": "このセッション: 入力 {{input}} + 出力 {{output}} トークン = {{cost}}",

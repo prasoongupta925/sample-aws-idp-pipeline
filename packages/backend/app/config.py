@@ -21,13 +21,15 @@ class Config(BaseSettings):
     graph_delete_queue_url: str = ""
     # Deterministic file-check Lambda (McpStack, idp-v2-file-check-mcp): name or ARN.
     file_check_function_name: str = ""
-    # POST /projects/{id}/file-check/ask: AWS-sold model only (Amazon Nova 2 Lite,
-    # global inference profile), called with Converse in aws_region.
-    file_check_ask_model_id: str = "global.amazon.nova-2-lite-v1:0"
+    # POST /projects/{id}/file-check/ask: AWS-sold model only (Moonshot AI Kimi K2.5,
+    # in-Region), called with Converse in aws_region. It must have a price in
+    # app/file_check_ask.py PRICES_PER_MILLION_USD (the Ask refuses otherwise).
+    file_check_ask_model_id: str = "moonshotai.kimi-k2.5"
     # Hard cap on the estimated input tokens of one Ask call (verdict + facts +
     # page text + history + question); page text is cut first.
     file_check_ask_max_input_tokens: int = 12000
-    file_check_ask_max_output_tokens: int = 1024
+    # Room for a model that reasons before it answers (gpt-oss): reasoning counts as output.
+    file_check_ask_max_output_tokens: int = 2048
     # Days a stored item may live (CDK context retentionDays, default 7): the Ask
     # usage ledger items get expires_at = now + retention_days (DynamoDB TTL).
     retention_days: int = 7

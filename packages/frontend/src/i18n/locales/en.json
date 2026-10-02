@@ -814,7 +814,7 @@
       "inputLabel": "Your question about this file",
       "placeholder": "e.g. Why is this file not ready? (Enter to send, Shift+Enter for a new line)",
       "send": "Ask",
-      "thinking": "Amazon Nova 2 Lite is reading the file…",
+      "thinking": "Kimi K2.5 is reading the file…",
       "caption": "{{input}} in / {{output}} out tokens · {{cost}}",
       "groundedOn": "from {{count}} documents",
       "groundedOn_one": "from {{count}} document",
@@ -830,7 +830,7 @@
         "failed": "The model call failed (HTTP {{status}}). Try again in a moment."
       },
       "meter": {
-        "answeredBy": "Answered by Amazon Nova 2 Lite using ONLY the extracted fields, check results and document text",
+        "answeredBy": "Answered by Kimi K2.5 using ONLY the extracted fields, check results and document text",
         "model": "Model {{model}} ({{region}})",
         "modelNoRegion": "Model {{model}}",
         "session": "This session: {{input}} input + {{output}} output tokens = {{cost}}",

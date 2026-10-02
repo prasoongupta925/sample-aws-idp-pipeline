@@ -5,7 +5,10 @@ import {
   bedrockClient,
 } from './lib/clients.js';
 
-const SUMMARY_MODEL_ID = 'global.amazon.nova-2-lite-v1:0';
+/** In-Region (ap-south-1) and AWS-sold: no cross-Region inference profile. */
+const SUMMARY_MODEL_ID = 'openai.gpt-oss-120b-1:0';
+/** gpt-oss reasons before it answers; the reasoning counts against maxTokens. */
+const MAX_TOKENS = 4096;
 
 export interface GraphTraverseInput {
   project_id: string;
@@ -153,11 +156,15 @@ export async function handler(
   const command = new ConverseCommand({
     modelId: SUMMARY_MODEL_ID,
     messages: [{ role: 'user', content: [{ text: prompt }] }],
-    inferenceConfig: { maxTokens: 2048 },
+    inferenceConfig: { maxTokens: MAX_TOKENS },
   });
 
   const response = await bedrockClient.send(command);
-  const answer = response.output?.message?.content?.[0]?.text ?? '';
+  // gpt-oss answers with a reasoningContent block first: keep the text blocks.
+  const answer = (response.output?.message?.content ?? [])
+    .map((block) => block.text ?? '')
+    .join('')
+    .trim();
 
   const citedSegmentIds = new Set(
     [...answer.matchAll(/segment_id[=:]\s*([^\s,\])\n]+)/g)].map((m) =>

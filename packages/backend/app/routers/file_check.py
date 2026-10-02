@@ -6,7 +6,7 @@ the file-check Lambda (the chat's run_file_check tool); this router validates
 the request, checks the project exists and returns the engine's result.
 
 POST .../file-check/ask answers one question about the file from that verdict
-and the documents' facts and page text only (Amazon Nova 2 Lite), and
+and the documents' facts and page text only (Kimi K2.5, in-Region), and
 GET .../file-check/usage reports the Ask calls' tokens and cost (last 7 days).
 """
 
@@ -26,7 +26,7 @@ from app.file_check import (
     UnknownChecklistError,
     invoke_file_check_tool,
 )
-from app.file_check_ask import USAGE_WINDOW_DAYS, AskModelError, answer_question
+from app.file_check_ask import USAGE_WINDOW_DAYS, AskModelError, AskNotConfiguredError, answer_question
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["file-check"])
 
@@ -162,8 +162,8 @@ class DocumentUsage(BaseModel):
     input_tokens: int
     output_tokens: int
     cost_usd: float = Field(
-        description="USD cost of the call from its tokens, at the Ask feature's prices "
-        "(Amazon Nova 2 Lite: $0.35 / $2.95 per million input / output tokens)"
+        description="USD cost of the call from its tokens, at the facts model's in-Region price for the "
+        "service tier that served it (gpt-oss-120b on Flex: $0.09 / $0.355 per million input / output tokens)"
     )
 
 
@@ -463,10 +463,11 @@ def run_file_check(
 def ask_file_check(project_id: ProjectId, user_id: UserId, request: AskRequest) -> AskResponse:
     """Answer one question from the file-check verdict and the documents' facts and page text.
 
-    The model (Amazon Nova 2 Lite, temperature 0) gets only that material and
-    is told to say "not in the file" instead of using outside knowledge or
-    guessing. The verdict itself is decided by the rules, never by the model.
-    Each call's tokens and cost are recorded for GET .../file-check/usage.
+    The model (default Moonshot AI Kimi K2.5, in-Region, temperature 0) gets only
+    that material and is told to say "not in the file" instead of using outside
+    knowledge or guessing. The verdict itself is decided by the rules, never by
+    the model. Each call's tokens and cost (at that model's price) are recorded
+    for GET .../file-check/usage; a model without a price is never called (503).
     """
     _require_project(project_id)
     arguments: dict[str, Any] = {
@@ -481,6 +482,9 @@ def ask_file_check(project_id: ProjectId, user_id: UserId, request: AskRequest) 
             request.question,
             [turn.model_dump() for turn in request.history],
         )
+    except AskNotConfiguredError as e:
+        print(f"file-check ask not configured user={user_id} project={project_id}: {e}")
+        raise HTTPException(status_code=503, detail=f"Ask is not configured: {e}") from e
     except AskModelError as e:
         print(f"file-check ask failed user={user_id} project={project_id}: {e}")
         raise HTTPException(status_code=502, detail=f"Answer failed: {e}") from e

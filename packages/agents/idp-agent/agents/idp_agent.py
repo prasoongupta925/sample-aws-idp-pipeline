@@ -10,7 +10,7 @@ from strands import Agent, AgentSkills
 from strands.hooks.registry import HookProvider
 from strands.models import BedrockModel
 from strands.session import S3SessionManager
-from strands_tools import calculator, current_time, file_read, http_request, shell, use_llm
+from strands_tools import calculator, current_time, file_read, http_request, shell
 from strands_tools.code_interpreter import AgentCoreCodeInterpreter
 
 from agentcore_mcp_client import AgentCoreGatewayMCPClient
@@ -79,7 +79,7 @@ _MODEL_ALLOWLIST_TTL_SECONDS = 300
 # dropped and fallen back to a model that rejects effort).
 _DEFAULT_MODEL_CATALOG: dict[str, bool] = {
     "zai.glm-5": False,
-    "global.amazon.nova-2-lite-v1:0": False,
+    "openai.gpt-oss-120b-1:0": False,
     "deepseek.v3.2": False,
     "moonshotai.kimi-k2.5": False,
 }
@@ -212,13 +212,15 @@ def get_agent(
         identifier=config.code_interpreter_identifier or None,
     )
 
+    # No strands_tools use_llm: it starts a sub-agent on the Strands SDK's
+    # default model (a global cross-Region profile of a Marketplace provider's
+    # model), which IAM denies, so the tool could only fail.
     tools = [
         calculator,
         current_time,
         http_request,
         file_read,
         shell,
-        use_llm,
         interpreter.code_interpreter,
         create_artifact_path_tool(user_id, project_id),
         render_chart,

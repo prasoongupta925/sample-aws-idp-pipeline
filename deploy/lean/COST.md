@@ -41,6 +41,7 @@ Measured on this account in September: the full edition idles at about **$7.6/da
 
 Flex tier (same model, half price, requests may wait longer): Nova 2 Lite $0.175 / $1.475,
 gpt-oss-120b $0.09 / $0.355, Gemma 3 12B $0.06 / $0.17 per 1 M input / output tokens.
+The all-Mumbai build calls no Nova model: see "All-Mumbai build" below.
 
 The app's cost meter shows the facts-step cost of every document and the cost of every Ask answer.
 Page reading, descriptions and summaries are not in it (81% of the document cost in the seed run
@@ -75,6 +76,27 @@ documents and ~Rs 2,900-3,300 for the month.
 
 The demo PDFs are mostly one page. Real files have multi-page bank statements and Form-16s, and the
 reading cost grows with pages, so expect the document line to be roughly 2-3x higher (est.).
+
+### All-Mumbai build (every model call in ap-south-1, AWS-sold models only)
+
+No Nova model is called any more (Mumbai offers Nova only through cross-Region profiles). Prices are
+ap-south-1 standard / Flex, USD per 1 M input / output tokens:
+
+| Step | Model | Price |
+|---|---|---|
+| Page reading, segment analysis, QA regenerator, dataset reference docs, Ask answers | Kimi K2.5 (`moonshotai.kimi-k2.5`) | $0.72 / $3.60; Flex $0.36 / $1.80 |
+| Facts, search-result summaries, web crawler | gpt-oss-120b | $0.18 / $0.71; Flex $0.09 / $0.355 |
+| Page descriptions, document summaries, chat names | Gemma 3 12B | $0.11 / $0.34; Flex $0.06 / $0.17 |
+| Chat (default; the chat list also has gpt-oss-120b, DeepSeek V3.2, Kimi K2.5) | GLM-5 | $1.20 / $3.84 |
+| Search embeddings | Titan Text Embeddings V2 (1024 dimensions) | $0.024 per 1 M tokens |
+| Re-ranking, video reading, built-in voice chat, BDA | off (not offered in Mumbai, or only cross-Region) | $0 |
+
+Measured in the Mumbai eval (2 Oct 2026, demo files): page reading $0.0054 a page on Flex ($0.0060 a
+document), an Ask answer $0.0082 (Sneha's file, 10.7 K input tokens, standard tier), a multi-tool chat
+prompt $0.0105 on GLM-5. The example month above then becomes about $0.0069 a document (Kimi K2.5
+reading plus the other steps on Flex: ~Rs 2,100 for 3,500 documents) and ~Rs 1,450 for 2,000 Ask
+answers: **~Rs 4,500-4,900 per month (est.)**, the same order as before. The cost meter prices every
+Ask answer at the model and tier that served it.
 
 The same month on the full edition costs ~Rs 20,000 before any use.
 

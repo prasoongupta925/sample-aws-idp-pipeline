@@ -119,7 +119,7 @@ export const DSA_PAIN_POINTS: readonly DsaPainPoint[] = [
     forDsa:
       'Ask a plain question about the file and get an answer from its own documents. Fixed rules give the verdict and the lender still makes the credit call; the model only reads.',
     feature:
-      'Ask about this file: Amazon Nova 2 Lite answers from the extracted fields, check results and document text only, and says when something is not in the file.',
+      'Ask about this file: Kimi K2.5 (in Mumbai) answers from the extracted fields, check results and document text only, and says when something is not in the file.',
     showMe: 'ask',
   },
   {

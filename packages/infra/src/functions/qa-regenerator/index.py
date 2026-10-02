@@ -1,4 +1,3 @@
-import base64
 import io
 import json
 import os
@@ -331,7 +330,7 @@ def handler(event, _context):
         else:
             prompt = f'Answer this question about the document: {question}\n\nRespond in {language_name}.'
 
-        # 6. Call Bedrock Nova vision (Converse) API
+        # 6. Call the page-reading model (BEDROCK_MODEL_ID, models.json analysis) with Converse
         messages_content = []
         if image_data:
             resized = _resize_image_if_needed(image_data)

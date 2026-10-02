@@ -813,7 +813,7 @@
       "inputLabel": "이 파일에 대한 질문",
       "placeholder": "예: 이 파일은 왜 준비되지 않았나요? (Enter 전송, Shift+Enter 줄바꿈)",
       "send": "질문",
-      "thinking": "Amazon Nova 2 Lite가 파일을 읽는 중…",
+      "thinking": "Kimi K2.5가 파일을 읽는 중…",
       "caption": "입력 {{input}} / 출력 {{output}} 토큰 · {{cost}}",
       "groundedOn": "문서 {{count}}건 기반",
       "groundedOn_one": "문서 {{count}}건 기반",
@@ -829,7 +829,7 @@
         "failed": "모델 호출에 실패했습니다 (HTTP {{status}}). 잠시 후 다시 시도하세요."
       },
       "meter": {
-        "answeredBy": "Amazon Nova 2 Lite가 추출된 필드, 점검 결과, 문서 텍스트만으로 답변",
+        "answeredBy": "Kimi K2.5가 추출된 필드, 점검 결과, 문서 텍스트만으로 답변",
         "model": "모델 {{model}} ({{region}})",
         "modelNoRegion": "모델 {{model}}",
         "session": "이번 세션: 입력 {{input}} + 출력 {{output}} 토큰 = {{cost}}",
