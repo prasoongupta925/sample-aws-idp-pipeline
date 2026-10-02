@@ -27,7 +27,9 @@ describe('session names', () => {
   it('never take reasoning that arrives inline in the text', () => {
     expect(
       sessionNameFromContent([
-        { text: '<reasoning>The user asks about EMI.</reasoning>EMI for Rahul' },
+        {
+          text: '<reasoning>The user asks about EMI.</reasoning>EMI for Rahul',
+        },
       ]),
     ).toBe('EMI for Rahul');
     // Cut off at maxTokens inside the reasoning: no title.
