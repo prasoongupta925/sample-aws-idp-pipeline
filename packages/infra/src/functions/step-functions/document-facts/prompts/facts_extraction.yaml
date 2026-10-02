@@ -13,6 +13,15 @@ system_prompt: >-
   withdrawal amount, in every month of the statement; skip everyday spending.
   Loan applications: copy each existing loan / EMI from the existing-obligations section; a credit card paid
   monthly is not an EMI.
+  Loan applications and identity details: also copy the mobile number, date of birth, current and permanent
+  address with their pincodes, house ownership, employment type and company (the employer).
+  Salary slips: bonus and incentive are the amounts paid in that month.
+  Form-16 / ITR: other and rental income are the year's income from other sources and from house property.
+  Rent agreements: the applicant is the landlord; applicant_name and PAN are the landlord's.
+  Pension slips: monthly_pension is the net pension of the month.
+  Credit reports: copy the bureau, report date and score; give an enquiry count only when the report prints the
+  count for that exact window, and list every enquiry with its date; one tradelines entry per account, with only
+  the last 4 characters of its account number.
 
 user_prompt: |-
   <document>

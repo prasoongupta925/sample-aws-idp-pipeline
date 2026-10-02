@@ -20,9 +20,10 @@ import pytest  # noqa: E402
 import extractor  # noqa: E402
 from extractor import (  # noqa: E402
     PRICES_PER_MILLION_USD, NoStructuredOutputError, build_texts, build_user_prompt, call_model, cost_usd,
-    load_prompts, service_tier, usage_record)
+    load_prompts, page_texts, service_tier, usage_record)
 from tool_schema import (  # noqa: E402
-    DEBIT_CATEGORIES, DEBIT_CHANNELS, DOC_TYPES, FIELD_NAMES, LIST_FIELDS, NUMERIC_FIELDS, TOOL_NAME, TOOL_SCHEMA)
+    DEBIT_CATEGORIES, DEBIT_CHANNELS, DOC_TYPE_FIELDS, DOC_TYPES, EMPLOYMENT_TYPES, ENQUIRY_WINDOWS, FIELD_NAMES,
+    LIST_FIELDS, NUMERIC_FIELDS, TOOL_NAME, TOOL_SCHEMA, TRADELINE_AMOUNT_FIELDS)
 
 PLAN_B_SYSTEM_PROMPT = (
     'You extract fields from Indian loan-file documents for a DSA (loan agent) file check. '
@@ -37,6 +38,16 @@ OBLIGATIONS_PROMPT = (
     "own entry with that row's date and withdrawal amount, in every month of the statement; skip "
     'everyday spending. Loan applications: copy each existing loan / EMI from the existing-obligations '
     'section; a credit card paid monthly is not an EMI.'
+)
+CIBIL_PAGE_PROMPT = (
+    ' Loan applications and identity details: also copy the mobile number, date of birth, current and '
+    'permanent address with their pincodes, house ownership, employment type and company (the employer). '
+    'Salary slips: bonus and incentive are the amounts paid in that month. Form-16 / ITR: other and rental '
+    "income are the year's income from other sources and from house property. Rent agreements: the applicant "
+    "is the landlord; applicant_name and PAN are the landlord's. Pension slips: monthly_pension is the net "
+    'pension of the month. Credit reports: copy the bureau, report date and score; give an enquiry count only '
+    'when the report prints the count for that exact window, and list every enquiry with its date; one '
+    'tradelines entry per account, with only the last 4 characters of its account number.'
 )
 
 PDF_TEXT = ('Salary Slip for the month of August 2026 - Konkan Softworks Pvt Ltd - '
@@ -76,23 +87,68 @@ def _types(node):
 
 
 def test_tool_schema_shape():
-    assert DOC_TYPES == ['loan_application', 'identity_details', 'salary_slip',
-                         'bank_statement', 'form16_itr', 'other']
+    assert DOC_TYPES == ['loan_application', 'identity_details', 'salary_slip', 'bank_statement', 'form16_itr',
+                         'credit_report', 'rent_agreement', 'pension_slip', 'other']
     assert TOOL_NAME == 'record_loan_document'
     assert TOOL_SCHEMA['required'] == ['doc_type']
     assert TOOL_SCHEMA['properties']['doc_type']['enum'] == DOC_TYPES
     assert TOOL_SCHEMA['properties']['financial_year']['type'] == 'string'
     assert NUMERIC_FIELDS == ('gross_salary', 'net_salary', 'declared_net_salary',
-                              'declared_total_existing_emi', 'loan_amount', 'loan_tenure_months')
-    assert LIST_FIELDS == ('salary_credits', 'recurring_debits', 'declared_existing_emis')
+                              'declared_total_existing_emi', 'loan_amount', 'loan_tenure_months',
+                              'bonus', 'incentive', 'other_income_annual', 'rental_income_annual',
+                              'monthly_rent', 'monthly_pension', 'credit_score')
+    assert LIST_FIELDS == ('salary_credits', 'recurring_debits', 'declared_existing_emis', 'enquiries', 'tradelines')
     assert FIELD_NAMES == [
         'doc_type', 'applicant_name', 'pan', 'masked_aadhaar_last4', 'employer', 'month',
         'gross_salary', 'net_salary', 'statement_from', 'statement_to', 'salary_credits',
         'recurring_debits', 'declared_net_salary', 'declared_existing_emis',
-        'declared_total_existing_emi', 'loan_amount', 'loan_tenure_months', 'product', 'financial_year']
+        'declared_total_existing_emi', 'loan_amount', 'loan_tenure_months', 'product', 'financial_year',
+        # CIBIL page fields, after the file-check fields
+        'mobile', 'dob', 'current_address', 'current_pincode', 'permanent_address', 'permanent_pincode',
+        'house_ownership', 'employment_type', 'company', 'bonus', 'incentive', 'other_income_annual',
+        'rental_income_annual', 'landlord_name', 'tenant_name', 'monthly_rent', 'registration',
+        'agreement_from', 'agreement_to', 'monthly_pension', 'bureau', 'report_date', 'credit_score',
+        'enquiries_30d', 'enquiries_60d', 'enquiries_90d', 'enquiries_120d', 'enquiries', 'tradelines']
     for t in _types(TOOL_SCHEMA):
         assert isinstance(t, str), f'union type found: {t}'
         assert t != 'null'
+
+
+def test_cibil_page_fields_in_tool_schema():
+    props = TOOL_SCHEMA['properties']
+    # the eligibility page's employment-type ids (packages/backend/app/eligibility.py)
+    assert props['employment_type']['enum'] == EMPLOYMENT_TYPES == [
+        'defence', 'government', 'grade_4', 'llp', 'merchant_navy', 'partnership_proprietorship',
+        'private_limited', 'public_limited']
+    assert props['house_ownership']['enum'] == ['owned', 'rented', 'parental', 'company_provided']
+    assert props['registration']['enum'] == ['notarised', 'registered']
+    assert props['bureau']['enum'] == ['CIBIL', 'Experian', 'Equifax', 'CRIF']
+    assert list(ENQUIRY_WINDOWS) == ['enquiries_30d', 'enquiries_60d', 'enquiries_90d', 'enquiries_120d']
+    assert all(props[k]['type'] == 'number' for k in ENQUIRY_WINDOWS)
+    for k in ('mobile', 'current_pincode', 'permanent_pincode'):
+        assert props[k]['type'] == 'string'  # digits as printed, never a number
+    tradeline = props['tradelines']['items']
+    assert tradeline['required'] == ['loan_type', 'lender']
+    assert list(tradeline['properties']) == [
+        'loan_type', 'lender', 'sanction_amount', 'outstanding', 'emi', 'status', 'account_last4', 'overdue',
+        'emis_paid', 'emis_pending', 'open_date', 'last_payment_date']
+    assert tradeline['properties']['loan_type']['enum'] == [
+        'personal_loan', 'home_loan', 'mortgage_loan', 'car_loan', 'education_loan', 'application_loan',
+        'consumer_loan', 'credit_card', 'other']
+    assert tradeline['properties']['status']['enum'] == ['active', 'closed', 'written_off', 'settled', 'other']
+    assert all(tradeline['properties'][k]['type'] == 'number' for k in TRADELINE_AMOUNT_FIELDS)
+    assert 'account_number' not in tradeline['properties']  # the model is asked for the last 4 only
+    enquiry = props['enquiries']['items']
+    assert set(enquiry['properties']) == {'date', 'lender', 'purpose'} and enquiry['required'] == ['date']
+
+
+def test_every_cibil_page_field_belongs_to_document_types():
+    new_fields = FIELD_NAMES[FIELD_NAMES.index('mobile'):]
+    assert set(DOC_TYPE_FIELDS) == set(new_fields)
+    assert all(set(types) <= set(DOC_TYPES) - {'other'} for types in DOC_TYPE_FIELDS.values())
+    assert DOC_TYPE_FIELDS['mobile'] == ('loan_application', 'identity_details')
+    assert DOC_TYPE_FIELDS['tradelines'] == ('credit_report',)
+    assert DOC_TYPE_FIELDS['monthly_rent'] == ('rent_agreement',)
 
 
 def test_obligation_fields_in_tool_schema():
@@ -203,6 +259,26 @@ def test_no_truncation_when_it_fits():
 
 
 # --------------------------------------------------------------------------- #
+# page_texts (field_pages input)
+# --------------------------------------------------------------------------- #
+def test_page_texts_number_pages_and_skip_media():
+    segs = [
+        _page(1, format_parser='second page', paddleocr='second page OCR'),
+        {'segment_index': 2, 'segment_type': 'VIDEO', 'text_content': 'VIDEO TEXT'},
+        _page(0, format_parser=PDF_TEXT, ai_analysis=[{'analysis_query': 'a', 'content': 'AI-ONLY'}]),
+        _page(3, ai_analysis=[{'analysis_query': 'a', 'content': VISION_TEXT}]),
+    ]
+    assert page_texts(segs) == [(1, PDF_TEXT), (2, 'second page\nsecond page OCR'), (4, '')]
+    assert page_texts(None) == []
+
+
+def test_page_texts_are_the_grounding_text_split_by_page():
+    segs = [_page(0, format_parser=PDF_TEXT), _page(1, paddleocr=OCR_TEXT)]
+    _, grounding_text, _ = build_texts(segs, 60000)
+    assert '\n'.join(t for _, t in page_texts(segs)) == grounding_text
+
+
+# --------------------------------------------------------------------------- #
 # prompts
 # --------------------------------------------------------------------------- #
 def test_prompt_yaml_loads_with_placeholders():
@@ -211,7 +287,7 @@ def test_prompt_yaml_loads_with_placeholders():
     assert '{tool_name}' in prompts['user_prompt']
     assert prompts['system_prompt'] == (
         PLAN_B_SYSTEM_PROMPT + ' The input is the machine-extracted text of one document; '
-        'page markers are not part of the document.' + OBLIGATIONS_PROMPT)
+        'page markers are not part of the document.' + OBLIGATIONS_PROMPT + CIBIL_PAGE_PROMPT)
 
 
 def test_user_prompt_uses_replace_not_format():

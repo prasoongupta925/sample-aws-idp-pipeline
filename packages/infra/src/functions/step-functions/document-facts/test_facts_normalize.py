@@ -20,6 +20,9 @@ import pytest  # noqa: E402
 
 from normalize import normalise_fields, normalise_fy, to_date, to_month, to_number  # noqa: E402
 from normalize import normalise_category, normalise_channel  # noqa: E402
+from normalize import (  # noqa: E402
+    account_last4, enquiry_counts, normalise_employment_type, normalise_house_ownership, normalise_loan_type,
+    normalise_mobile, normalise_pincode, normalise_registration, normalise_tradeline_status, to_count)
 from tool_schema import FIELD_NAMES, LIST_FIELDS  # noqa: E402
 
 
@@ -230,3 +233,263 @@ def test_total_row_copied_as_a_loan_is_moved_to_the_total():
     out = normalise_fields({'doc_type': 'loan_application', 'declared_existing_emis': [
         {'lender': 'Subtotal Finance Ltd', 'amount': 3450}]})
     assert [e['amount'] for e in out['declared_existing_emis']] == [3450.0]
+
+
+# --------------------------------------------------------------------------- #
+# CIBIL page fields (synthetic demo applicants)
+# --------------------------------------------------------------------------- #
+RAHUL_ADDRESS = 'Flat B-702, Sample Heights, Baner Road, Pune, Maharashtra – 411045'
+
+
+def test_application_personal_fields_rahul():
+    out = normalise_fields({
+        'doc_type': 'loan_application',
+        'applicant_name': 'Rahul Vijay Deshmukh',
+        'employer': 'Konkan Softworks Pvt Ltd',
+        'mobile': '+91 90000 00101',
+        'dob': '14-02-1992',
+        'current_address': RAHUL_ADDRESS,
+        'permanent_address': 'House 21, Sample Wadi, Rajarampuri, Kolhapur, Maharashtra – 416008',
+        'permanent_pincode': '416 008',
+        'house_ownership': 'Rented',
+        'employment_type': 'Salaried – Private Limited company',
+    })
+    assert out['mobile'] == '9000000101'
+    assert out['dob'] == '1992-02-14'
+    assert out['current_address'] == RAHUL_ADDRESS
+    assert out['current_pincode'] == '411045'  # read from the address
+    assert out['permanent_pincode'] == '416008'
+    assert out['house_ownership'] == 'rented'
+    assert out['employment_type'] == 'private_limited'
+    assert out['company'] == 'Konkan Softworks Pvt Ltd'  # the employer
+    assert out['employer'] == 'Konkan Softworks Pvt Ltd'
+
+
+def test_permanent_address_same_as_current_amit():
+    address = 'House 18, Sample Nagar Society, Chinchwad, Pune, Maharashtra – 411033'
+    out = normalise_fields({'doc_type': 'loan_application', 'current_address': address,
+                            'current_pincode': 411033, 'permanent_address': 'Same as current address',
+                            'house_ownership': 'Owned', 'employment_type': 'LLP', 'company': 'Varad Logistics LLP'})
+    assert out['permanent_address'] == address
+    assert out['current_pincode'] == out['permanent_pincode'] == '411033'
+    assert out['house_ownership'] == 'owned'
+    assert out['employment_type'] == 'llp'
+    assert out['employer'] == 'Varad Logistics LLP'  # filled from the company
+
+
+@pytest.mark.parametrize('value, expected', [
+    ('+91 90000 00101', '9000000101'), ('9000000101', '9000000101'), ('090000-00101', '9000000101'),
+    ('919000000101', '9000000101'), (9000000101, '9000000101'), (9000000101.0, '9000000101'),
+    ('+91 9XXXX X4421 (masked)', None), ('5000000101', None), ('90000 0010', None), (None, None), ('', None),
+    (True, None)])
+def test_mobile(value, expected):
+    assert normalise_mobile(value) == expected
+
+
+@pytest.mark.parametrize('value, expected', [
+    ('411 045', '411045'), (411045, '411045'), (411045.0, '411045'), ('041104', None), ('4110', None),
+    (None, None), (True, None)])
+def test_pincode(value, expected):
+    assert normalise_pincode(value) == expected
+
+
+def test_pincode_not_found_in_address_stays_empty():
+    out = normalise_fields({'doc_type': 'identity_details', 'current_address': 'Baner Road, Pune'})
+    assert out['current_pincode'] is None and out['permanent_pincode'] is None
+
+
+@pytest.mark.parametrize('value, expected', [
+    ('private_limited', 'private_limited'), ('Private Limited', 'private_limited'),
+    ('Salaried – Pvt. Ltd. company', 'private_limited'), ('Salaried - LLP', 'llp'),
+    ('Limited Liability Partnership', 'llp'), ('Public Limited', 'public_limited'), ('Central Govt', 'government'),
+    ('PSU', 'government'), ('Indian Army', 'defence'), ('Merchant Navy', 'merchant_navy'),
+    ('Grade IV staff', 'grade_4'), ('Partnership/Proprietorship', 'partnership_proprietorship'),
+    ('Proprietorship firm', 'partnership_proprietorship'), ('Salaried – private sector', None),
+    ('Self-employed professional', None), (None, None)])
+def test_employment_type(value, expected):
+    assert normalise_employment_type(value) == expected
+
+
+@pytest.mark.parametrize('value, expected', [
+    ('Rented', 'rented'), ('On rent (leave and licence)', 'rented'), ('Owned', 'owned'), ('Self-owned', 'owned'),
+    ('Owned by parents', 'parental'), ('Parental', 'parental'), ('Company provided', 'company_provided'),
+    ('Company leased flat', 'company_provided'), ('Hostel', None), (None, None)])
+def test_house_ownership(value, expected):
+    assert normalise_house_ownership(value) == expected
+
+
+def test_cibil_page_fields_are_kept_only_on_their_document_types():
+    # a tenant's rent on the loan application is not rental income, a mobile on a slip is not read, ...
+    out = normalise_fields({'doc_type': 'loan_application', 'monthly_rent': 18000, 'bonus': 5000,
+                            'credit_score': 771, 'tradelines': [{'lender': 'X', 'emi': 100}],
+                            'enquiries': [{'date': '2026-09-01'}], 'mobile': '9000000101'})
+    assert out['monthly_rent'] is None and out['bonus'] is None and out['credit_score'] is None
+    assert out['tradelines'] == [] and out['enquiries'] == []
+    assert out['mobile'] == '9000000101'
+    out = normalise_fields({'doc_type': 'salary_slip', 'mobile': '9000000101', 'company': 'Konkan Softworks',
+                            'employer': 'Konkan Softworks Pvt Ltd', 'enquiries_30d': 2})
+    assert out['mobile'] is None and out['company'] is None and out['enquiries_30d'] is None
+    assert out['employer'] == 'Konkan Softworks Pvt Ltd'  # the file-check fields are untouched
+    out = normalise_fields({'doc_type': 'other', 'monthly_pension': 30000, 'landlord_name': 'X'})
+    assert out['monthly_pension'] is None and out['landlord_name'] is None
+
+
+def test_salary_slip_bonus_and_incentive():
+    out = normalise_fields({'doc_type': 'salary_slip', 'month': 'March 2026', 'gross_salary': 115000,
+                            'bonus': '₹15,000', 'incentive': -2500})
+    assert out['bonus'] == 15000.0 and out['incentive'] == 2500.0
+    assert out['month'] == '2026-03'
+
+
+def test_form16_other_and_rental_income():
+    out = normalise_fields({'doc_type': 'form16_itr', 'financial_year': 'FY 2025-26',
+                            'other_income_annual': '18,450', 'rental_income_annual': '1,44,000'})
+    assert out['other_income_annual'] == 18450.0 and out['rental_income_annual'] == 144000.0
+
+
+def test_rent_agreement_landlord_is_the_applicant():
+    out = normalise_fields({'doc_type': 'rent_agreement', 'landlord_name': 'Vasant Ramchandra Joshi',
+                            'tenant_name': 'Rahul Vijay Deshmukh', 'monthly_rent': '₹18,000',
+                            'registration': 'Registered with the Sub-Registrar', 'agreement_from': '01-12-2025',
+                            'agreement_to': '31/10/2026', 'employer': 'Retired'})
+    assert out['applicant_name'] == 'Vasant Ramchandra Joshi'
+    assert out['tenant_name'] == 'Rahul Vijay Deshmukh'
+    assert out['monthly_rent'] == 18000.0
+    assert out['registration'] == 'registered'
+    assert (out['agreement_from'], out['agreement_to']) == ('2025-12-01', '2026-10-31')
+    assert out['employer'] is None
+
+
+@pytest.mark.parametrize('value, expected', [
+    ('notarised', 'notarised'), ('Notarized', 'notarised'), ('Notary', 'notarised'), ('Registered', 'registered'),
+    ('Registered (sub-registrar)', 'registered'), ('Unregistered, notarised', 'notarised'), ('Unregistered', None),
+    ('Oral', None), (None, None)])
+def test_rent_registration(value, expected):
+    assert normalise_registration(value) == expected
+
+
+def test_pension_slip():
+    out = normalise_fields({'doc_type': 'pension_slip', 'applicant_name': 'Vasant Ramchandra Joshi',
+                            'month': 'Aug-2026', 'monthly_pension': '32,400.00',
+                            'employer': 'Sahyadri Urban Co-operative Bank Ltd.'})
+    assert out['month'] == '2026-08' and out['monthly_pension'] == 32400.0
+    assert out['employer'] is None  # the former employer is not the applicant's employer
+
+
+def test_unparseable_cibil_page_dates_are_dropped():
+    out = normalise_fields({'doc_type': 'identity_details', 'dob': 'Feb 1992'})
+    assert out['dob'] is None
+    out = normalise_fields({'doc_type': 'credit_report', 'report_date': 'Sep 18, 2026'})
+    assert out['report_date'] == '2026-09-18'
+
+
+# --------------------------------------------------------------------------- #
+# credit reports
+# --------------------------------------------------------------------------- #
+def test_credit_report_score_and_bureau():
+    out = normalise_fields({'doc_type': 'credit_report', 'applicant_name': 'RAHUL VIJAY DESHMUKH',
+                            'pan': 'BQXPD4821K', 'bureau': 'TransUnion CIBIL', 'report_date': '18-Sep-2026',
+                            'credit_score': '771', 'employer': 'Konkan Softworks'})
+    assert out['bureau'] == 'CIBIL' and out['report_date'] == '2026-09-18' and out['credit_score'] == 771.0
+    assert out['employer'] is None
+    assert normalise_fields({'doc_type': 'credit_report', 'credit_score': -1})['credit_score'] is None
+    assert normalise_fields({'doc_type': 'credit_report', 'bureau': 'CRIF High Mark'})['bureau'] == 'CRIF'
+    assert normalise_fields({'doc_type': 'credit_report', 'bureau': 'Sample bureau'})['bureau'] is None
+
+
+RAHUL_TRADELINES = [
+    {'loan_type': 'Auto loan', 'lender': 'Mulshi Auto Finance Ltd', 'sanction_amount': '4,50,000',
+     'outstanding': '1,65,115', 'emi': 8200, 'status': 'Active', 'account_last4': 'MAF/2022/07/004512',
+     'overdue': 0, 'emis_paid': '50', 'emis_pending': 22.0, 'open_date': '10-07-2022',
+     'last_payment_date': '05-Sep-2026'},
+    {'loan_type': 'credit_card', 'lender': 'Sahyadri Urban Co-op Bank', 'sanction_amount': 150000,
+     'outstanding': 12400, 'status': 'open', 'account_number': '5243 9100 0045 7731'},
+    {'loan_type': '', 'lender': 'n/a'},
+    'not a dict',
+]
+
+
+def test_tradelines_normalised_and_account_numbers_cut_to_last_4():
+    out = normalise_fields({'doc_type': 'credit_report', 'tradelines': RAHUL_TRADELINES})
+    assert out['tradelines'] == [
+        {'loan_type': 'car_loan', 'lender': 'Mulshi Auto Finance Ltd', 'sanction_amount': 450000.0,
+         'outstanding': 165115.0, 'emi': 8200.0, 'status': 'active', 'account_last4': '4512', 'overdue': 0.0,
+         'emis_paid': 50, 'emis_pending': 22, 'open_date': '2022-07-10', 'last_payment_date': '2026-09-05'},
+        {'loan_type': 'credit_card', 'lender': 'Sahyadri Urban Co-op Bank', 'sanction_amount': 150000.0,
+         'outstanding': 12400.0, 'emi': None, 'status': 'active', 'account_last4': '7731', 'overdue': None,
+         'emis_paid': None, 'emis_pending': None, 'open_date': None, 'last_payment_date': None},
+    ]
+    stored = str(out)
+    for full in ('004512', 'MAF', '0045 7731', '5243'):
+        assert full not in stored, f'{full!r} of an account number kept'
+
+
+@pytest.mark.parametrize('value, expected', [
+    ('personal_loan', 'personal_loan'), ('Personal Loan', 'personal_loan'), ('PL', 'personal_loan'),
+    ('car', 'car_loan'), ('Two-wheeler loan', 'car_loan'), ('Housing loan', 'home_loan'),
+    ('Loan against property', 'mortgage_loan'), ('Property loan', 'mortgage_loan'),
+    ('Consumer durable loan', 'consumer_loan'), ('Education loan', 'education_loan'),
+    ('App loan', 'application_loan'), ('Credit Card', 'credit_card'), ('Gold loan', 'other'), (None, None)])
+def test_tradeline_loan_type(value, expected):
+    assert normalise_loan_type(value) == expected
+
+
+@pytest.mark.parametrize('value, expected', [
+    ('Active', 'active'), ('Open', 'active'), ('Current', 'active'), ('Closed', 'closed'), ('Paid', 'closed'),
+    ('Written-off', 'written_off'), ('Post (WO) settled', 'written_off'), ('Settled', 'settled'),
+    ('Suit filed', 'other'), ('', None)])
+def test_tradeline_status(value, expected):
+    assert normalise_tradeline_status(value) == expected
+
+
+@pytest.mark.parametrize('value, expected', [
+    ('XXXXXXXX4821', '4821'), ('****1234', '1234'), ('4821', '4821'), ('LN-00045-ab12', 'AB12'), ('XXXX', None),
+    (5243910000457731, '7731'), (4512.0, '4512'), ('', None), (None, None), (True, None)])
+def test_account_last4(value, expected):
+    assert account_last4(value) == expected
+
+
+SNEHA_ENQUIRIES = [  # report date 2026-09-19
+    {'date': '2026-09-05', 'lender': 'Konkan Finserv Ltd (sample)', 'purpose': 'Personal Loan'},
+    {'date': '2026-08-28', 'lender': 'Godavari Credit Ltd (sample)', 'purpose': 'Personal Loan'},
+    {'date': '2026-08-02', 'lender': 'Sahyadri Urban Co-op Bank', 'purpose': 'Credit Card'},
+    {'date': '01-Aug-2026', 'lender': 'Deccan Consumer Finance (sample)', 'purpose': 'Consumer Loan'},
+    {'date': '2026-07-10', 'lender': 'Konkan Finserv Ltd (sample)', 'purpose': 'Personal Loan'},
+    {'date': '2026-06-25', 'lender': 'Pavana Capital (sample)', 'purpose': 'Personal Loan'},
+    {'date': '2026-05-30', 'lender': 'Godavari Credit Ltd (sample)', 'purpose': 'Personal Loan'},
+    {'date': '2025-11-14', 'lender': 'Sahyadri Urban Co-op Bank', 'purpose': 'Credit Card'},
+    {'lender': None, 'purpose': 'x'},
+]
+
+
+def test_enquiry_counts_are_counted_from_the_listed_enquiries():
+    out = normalise_fields({'doc_type': 'credit_report', 'report_date': '2026-09-19',
+                            'enquiries': SNEHA_ENQUIRIES})
+    assert len(out['enquiries']) == 8  # the entry with no date and no lender is dropped
+    assert out['enquiries'][3] == {'date': '2026-08-01', 'lender': 'Deccan Consumer Finance (sample)',
+                                   'purpose': 'Consumer Loan'}
+    assert [out[k] for k in ('enquiries_30d', 'enquiries_60d', 'enquiries_90d', 'enquiries_120d')] == [2, 4, 6, 7]
+
+
+def test_printed_enquiry_counts_win_and_stay_cumulative():
+    out = normalise_fields({'doc_type': 'credit_report', 'report_date': '2026-09-19', 'enquiries': SNEHA_ENQUIRIES,
+                            'enquiries_30d': 3})
+    assert [out[k] for k in ('enquiries_30d', 'enquiries_60d', 'enquiries_90d', 'enquiries_120d')] == [3, 4, 6, 7]
+    # a longer window never counts fewer enquiries than a shorter one
+    out = normalise_fields({'doc_type': 'credit_report', 'enquiries_30d': 2, 'enquiries_60d': 1,
+                            'enquiries_90d': '0', 'enquiries_120d': 4})
+    assert [out[k] for k in ('enquiries_30d', 'enquiries_60d', 'enquiries_90d', 'enquiries_120d')] == [2, 2, 2, 4]
+
+
+def test_enquiry_counts_need_the_report_date():
+    out = normalise_fields({'doc_type': 'credit_report', 'enquiries': SNEHA_ENQUIRIES})
+    assert all(out[k] is None for k in ('enquiries_30d', 'enquiries_60d', 'enquiries_90d', 'enquiries_120d'))
+    assert enquiry_counts([{'date': None}], '2026-09-19') == {}
+    # an enquiry after the report date is not counted
+    assert enquiry_counts([{'date': '2026-09-20'}], '2026-09-19')['enquiries_120d'] == 0
+
+
+@pytest.mark.parametrize('value, expected', [(2, 2), ('2', 2), (2.0, 2), (0, 0), (2.5, None), (-1, None),
+                                             ('none', None), (None, None), (True, None)])
+def test_to_count(value, expected):
+    assert to_count(value) == expected

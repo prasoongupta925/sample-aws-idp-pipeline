@@ -25,8 +25,9 @@ MIN_MACHINE_CHARS = 50
 # Output budget of the forced tool call. A 6-month statement lists ~40
 # recurring debits (~45 tokens each) plus salary credits, and gpt-oss-120b
 # reasons before the tool call (6.2K output tokens on a 2-page statement), so
-# 8000 is too small; 16000 stays under the model's 16K output limit.
-# FACTS_MAX_OUTPUT_TOKENS overrides it without a code change.
+# 8000 is too small; 16000 stays under the model's 16K output limit. A credit
+# report with 30 tradelines (~110 tokens each) and 40 listed enquiries (~30
+# each) fits too. FACTS_MAX_OUTPUT_TOKENS overrides it without a code change.
 DEFAULT_MAX_OUTPUT_TOKENS = 16000
 
 # Bedrock service tiers a call may request through BEDROCK_SERVICE_TIER (the
@@ -124,6 +125,22 @@ def build_texts(segments, max_chars):
     grounding_text = '\n'.join(grounding_parts)
     stats['text_chars'] = len(grounding_text)
     return ''.join(model_parts), grounding_text, stats
+
+
+def page_texts(segments) -> list:
+    """[(page number, machine text)] of every document page, in page order.
+
+    The text of a page is all its non-empty machine text fields (its share of
+    build_texts' grounding text, never ai_analysis); '' for a page without a
+    text layer. grounding.field_pages finds the page of each value in it.
+    """
+    out = []
+    for seg in sorted(segments or [], key=lambda s: s.get('segment_index', 0) or 0):
+        if seg.get('segment_type') in NON_DOCUMENT_TYPES:
+            continue
+        texts = [t for t in (_as_text(seg.get(k)) for k in MACHINE_TEXT_FIELDS) if t.strip()]
+        out.append(((seg.get('segment_index', 0) or 0) + 1, '\n'.join(texts)))
+    return out
 
 
 def load_prompts() -> dict:

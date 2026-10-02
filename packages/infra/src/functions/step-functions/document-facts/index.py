@@ -3,10 +3,19 @@
 After a document is analysed, extract ONE structured loan-file facts record
 (doc type, applicant, PAN, employer, month/period, salaries, salary credits,
 recurring debits, declared existing EMIs, loan amount / tenure, financial
-year) with the facts model (FACTS_MODEL_ID, gpt-oss-120b), ground identifiers
-and amounts against the document's own machine text, and store the record in S3
-(analysis/facts.json, with model_fields for audit) and DynamoDB
-(PROJ#{pid} / FACTS#{did}, without document text or model_fields).
+year, and the CIBIL page fields: mobile, DOB, addresses, house ownership,
+employment type, other income, rent agreement, pension, credit report score,
+enquiries and tradelines) with the facts model (FACTS_MODEL_ID, gpt-oss-120b),
+ground identifiers and amounts against the document's own machine text, and
+store the record in S3 (analysis/facts.json, with model_fields for audit) and
+DynamoDB (PROJ#{pid} / FACTS#{did}, without document text or model_fields).
+
+The record's `field_pages` names the page each value is printed on
+({'mobile': 1, 'tradelines': 1, 'tradelines[1]': 2, ...}: a list by its first
+row's page; grounding.field_pages), so a value can be shown as "from
+<document_name>, page N"; enquiries and tradelines rows also carry their own
+'page'. Credit-report account numbers are kept as their last 4 characters only
+(normalize.account_last4).
 
 The record's `usage` is the cost of that one model call: {model_id,
 service_tier, input_tokens, output_tokens, cost_usd} at the model's price for the
@@ -32,8 +41,8 @@ from shared.ddb_client import (
 )
 from shared.s3_analysis import get_all_segment_analyses, save_facts
 
-from extractor import MACHINE_TEXT_FIELDS, build_texts, call_model, usage_record
-from grounding import MIN_TEXT_CHARS, ground_fields, unverified_numbers
+from extractor import MACHINE_TEXT_FIELDS, build_texts, call_model, page_texts, usage_record
+from grounding import MIN_TEXT_CHARS, field_pages, ground_fields, unverified_numbers, with_row_pages
 from normalize import normalise_fields
 
 SCHEMA_VERSION = 1
@@ -93,6 +102,7 @@ def _base_record(ctx: dict, status: str) -> dict:
             'truncated': False,
             'output_truncated': False,
         },
+        'field_pages': {},
         'source': SOURCE_NONE,
         'model_id': ctx['model_id'],
         'status': status,
@@ -177,10 +187,11 @@ def handler(event, context):
         if output_truncated:
             notes.append('model output hit the token limit; lists may be incomplete')
 
+        pages = field_pages(fields, page_texts(segments))
         record = _base_record(ctx, 'completed')
         record.update({
             'doc_type': fields['doc_type'],
-            'fields': fields,
+            'fields': with_row_pages(fields, pages),
             'grounding': {
                 'grounded': grounded,
                 'text_chars': stats['text_chars'],
@@ -189,6 +200,7 @@ def handler(event, context):
                 'truncated': stats['truncated'],
                 'output_truncated': output_truncated,
             },
+            'field_pages': pages,
             'source': SOURCE_MODEL,
             'usage': usage,
         })
@@ -201,6 +213,8 @@ def handler(event, context):
               f'grounded={grounded} notes={len(notes)} '
               f'unverified={len(record["grounding"]["unverified_fields"])} '
               f'debits={len(fields["recurring_debits"])} declared_emis={len(fields["declared_existing_emis"])} '
+              f'tradelines={len(fields["tradelines"])} enquiries={len(fields["enquiries"])} '
+              f'pages_found={len(record["field_pages"])} '
               f'input_tokens={usage.get("input_tokens", 0)} output_tokens={usage.get("output_tokens", 0)} '
               f'service_tier={usage.get("service_tier")} cost_usd={usage.get("cost_usd", 0)}')
         return {'workflow_id': workflow_id, 'status': 'completed'}

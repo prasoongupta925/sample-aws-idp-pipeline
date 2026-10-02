@@ -147,6 +147,9 @@ def test_completed_path(env, capsys):
     assert grounding['unverified_fields'] == []
     assert grounding['text_chars'] == len(SLIP_PAGE_TEXT)
     assert any('PAN corrected' in n for n in grounding['notes'])
+    # one page: every value is on page 1
+    assert record['field_pages'] == {'applicant_name': 1, 'pan': 1, 'employer': 1, 'month': 1,
+                                     'gross_salary': 1, 'net_salary': 1}
     assert 'model_fields' not in record
     assert 'Salary slip for the month' not in json.dumps(record), 'DDB copy stores no document text'
 
@@ -254,6 +257,7 @@ def test_media_only_is_skipped(env):
     assert record['source'] == 'none'
     assert all(record['fields'][k] is None for k in FIELD_NAMES if k != 'doc_type' and k not in LIST_FIELDS)
     assert all(record['fields'][k] == [] for k in LIST_FIELDS)
+    assert record['field_pages'] == {}
     (_, s3_record), _ = _only_call(env['save_facts'])
     assert s3_record['status'] == 'skipped'
 
@@ -409,3 +413,104 @@ def test_usage_is_logged_as_counts_only(env, capsys):
     assert 'input_tokens=900 output_tokens=120 service_tier=flex cost_usd=0.0001236' in out
     for secret in ('Rahul', 'BQXPD4821K', '82500', DOC_NAME):
         assert secret not in out
+
+
+# --------------------------------------------------------------------------- #
+# credit report: CIBIL page fields, pages, account numbers (synthetic)
+# --------------------------------------------------------------------------- #
+CREDIT_PAGE_1 = (
+    'Sample credit report (synthetic, for demo only)\n'
+    'Bureau CIBIL (sample format) Report date 18-Sep-2026\n'
+    'Name RAHUL VIJAY DESHMUKH Date of birth 14-02-1992 PAN BQXPD4821K\n'
+    'Credit score 771 (range 300-900)\n'
+    'ACCOUNTS\nCar loan Mulshi Auto Finance Ltd MAF2022070004512 4,50,000 1,65,115 8,200 0 Active 50 22 '
+    '10-07-2022 05-Sep-2026\n'
+)
+CREDIT_PAGE_2 = (
+    'Credit card Sahyadri Urban Co-op Bank 5243910000457731 1,50,000 12,400 – 0 Active 14-03-2019 16-Aug-2026\n'
+    'ENQUIRIES\n02-Aug-2026 Konkan Finserv Ltd (sample) Credit Card\n'
+    '14-Jun-2026 Godavari Credit Ltd (sample) Personal Loan\n11-Nov-2025 Sahyadri Urban Co-op Bank Credit Card\n'
+)
+CREDIT_RAW = {
+    'doc_type': 'credit_report', 'applicant_name': 'RAHUL VIJAY DESHMUKH', 'pan': 'BQXPD4821K',
+    'bureau': 'CIBIL', 'report_date': '2026-09-18', 'credit_score': 771, 'dob': '1992-02-14',
+    'enquiries': [{'date': '2026-08-02', 'lender': 'Konkan Finserv Ltd (sample)', 'purpose': 'Credit Card'},
+                  {'date': '2026-06-14', 'lender': 'Godavari Credit Ltd (sample)', 'purpose': 'Personal Loan'},
+                  {'date': '2025-11-11', 'lender': 'Sahyadri Urban Co-op Bank', 'purpose': 'Credit Card'}],
+    'tradelines': [
+        # the model copied the whole account numbers despite the schema
+        {'loan_type': 'car_loan', 'lender': 'Mulshi Auto Finance Ltd', 'sanction_amount': 450000,
+         'outstanding': 165115, 'emi': 820, 'status': 'active', 'account_last4': 'MAF2022070004512',
+         'overdue': 0, 'emis_paid': 50, 'emis_pending': 22, 'open_date': '2022-07-10',
+         'last_payment_date': '2026-09-05'},
+        {'loan_type': 'credit_card', 'lender': 'Sahyadri Urban Co-op Bank', 'sanction_amount': 150000,
+         'outstanding': 12400, 'status': 'active', 'account_number': '5243910000457731', 'overdue': 0,
+         'open_date': '2019-03-14', 'last_payment_date': '2026-08-16'},
+    ],
+}
+
+
+def test_credit_report_is_stored_with_pages_and_last_4_only(env, capsys):
+    env['get_all_segment_analyses'].result = [
+        {'segment_index': 0, 'segment_type': 'PAGE', 'format_parser': CREDIT_PAGE_1, 'ai_analysis': []},
+        {'segment_index': 1, 'segment_type': 'PAGE', 'format_parser': CREDIT_PAGE_2, 'ai_analysis': []},
+    ]
+    env['call_model'].result = (CREDIT_RAW, usage_record(MODEL_ID, 3000, 900, 'flex'))
+    assert index.handler(dict(EVENT, segment_count=2), None)['status'] == 'completed'
+    (_, _, record), _ = _only_call(env['save_document_facts'])
+    fields = record['fields']
+    assert record['doc_type'] == 'credit_report'
+    assert (fields['bureau'], fields['report_date'], fields['credit_score']) == ('CIBIL', '2026-09-18', 771.0)
+    assert fields['dob'] is None  # read from the application / identity details only
+    assert [fields[k] for k in ('enquiries_30d', 'enquiries_60d', 'enquiries_90d', 'enquiries_120d')] == [0, 1, 1, 2]
+    assert [t['account_last4'] for t in fields['tradelines']] == ['4512', '7731']
+    assert [t['page'] for t in fields['tradelines']] == [1, 2]  # each row carries its page
+    assert [e['page'] for e in fields['enquiries']] == [2, 2, 2]
+    assert fields['tradelines'][0]['emi'] == 8200.0  # grounded: the model dropped a digit
+    assert record['grounding']['unverified_fields'] == []
+    assert record['field_pages'] == {
+        'applicant_name': 1, 'pan': 1, 'bureau': 1, 'report_date': 1, 'credit_score': 1,
+        'enquiries_30d': 2, 'enquiries_60d': 2, 'enquiries_90d': 2, 'enquiries_120d': 2, 'enquiries': 2,
+        'tradelines': 1, 'enquiries[0]': 2, 'enquiries[1]': 2, 'enquiries[2]': 2, 'tradelines[0]': 1,
+        'tradelines[1]': 2}
+    (_, s3_record), _ = _only_call(env['save_facts'])
+    assert 'page' not in s3_record['model_fields']['tradelines'][0]  # the model's fields, as normalised
+    for stored in (record, s3_record):  # the audit copy (model_fields) is normalised too
+        text = json.dumps(stored)
+        for full in ('MAF2022070004512', '5243910000457731', '0004512', '000045'):
+            assert full not in text, f'{full!r} of an account number stored'
+    out = capsys.readouterr().out
+    assert 'doc_type=credit_report' in out and 'tradelines=2 enquiries=3 pages_found=16' in out
+    for secret in ('RAHUL', 'BQXPD4821K', 'Mulshi', '4512', '7731', '771', '165115', '1,65,115'):
+        assert secret not in out, f'{secret!r} leaked into logs'
+
+
+def test_application_cibil_page_fields_are_stored(env):
+    page = (
+        'PERSONAL LOAN APPLICATION FORM\nFull name Rahul Vijay Deshmukh PAN BQXPD4821K\n'
+        'Mobile +91 90000 00101 Date of birth 14-02-1992\n'
+        'Current address Flat B-702, Sample Heights, Baner Road, Pune, Maharashtra – 411045\n'
+        'Permanent address House 21, Sample Wadi, Rajarampuri, Kolhapur, Maharashtra – 416008\n'
+        'House ownership Rented Monthly rent ₹18,000\n'
+        'Employment type Salaried – Private Limited company Employer name Konkan Softworks Pvt Ltd\n'
+    )
+    env['get_all_segment_analyses'].result = [
+        {'segment_index': 0, 'segment_type': 'PAGE', 'format_parser': page, 'ai_analysis': []}]
+    env['call_model'].result = ({
+        'doc_type': 'loan_application', 'applicant_name': 'Rahul Vijay Deshmukh', 'pan': 'BQXPD4821K',
+        'employer': 'Konkan Softworks Pvt Ltd', 'mobile': '+91 90000 00101', 'dob': '14-02-1992',
+        'current_address': 'Flat B-702, Sample Heights, Baner Road, Pune, Maharashtra – 411045',
+        'permanent_address': 'House 21, Sample Wadi, Rajarampuri, Kolhapur, Maharashtra – 416008',
+        'house_ownership': 'rented', 'employment_type': 'private_limited',
+        'monthly_rent': 18000,  # the tenant's rent: not rental income
+    }, usage_record(MODEL_ID, 1500, 300, 'flex'))
+    assert index.handler(dict(EVENT), None)['status'] == 'completed'
+    (_, _, record), _ = _only_call(env['save_document_facts'])
+    fields = record['fields']
+    assert fields['mobile'] == '9000000101' and fields['dob'] == '1992-02-14'
+    assert (fields['current_pincode'], fields['permanent_pincode']) == ('411045', '416008')
+    assert (fields['house_ownership'], fields['employment_type']) == ('rented', 'private_limited')
+    assert fields['company'] == 'Konkan Softworks Pvt Ltd'
+    assert fields['monthly_rent'] is None
+    assert record['grounding']['unverified_fields'] == []
+    assert record['field_pages']['mobile'] == 1 and record['field_pages']['permanent_address'] == 1
