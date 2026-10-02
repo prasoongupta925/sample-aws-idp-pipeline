@@ -6,6 +6,7 @@ from app.routers import (
     agents,
     applicants,
     artifacts,
+    branches,
     chat,
     datasets,
     documents,
@@ -57,6 +58,7 @@ app.add_middleware(
 app.include_router(agents.router)
 app.include_router(applicants.router)
 app.include_router(artifacts.router)
+app.include_router(branches.router)
 app.include_router(chat.router)
 app.include_router(datasets.router)
 app.include_router(documents.router)
