@@ -2,6 +2,7 @@ import {
   useRef,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useState,
   useCallback,
 } from 'react';
@@ -16,6 +17,12 @@ import ChatInputBox from './ChatInputBox';
 import VoiceChatPanel from './VoiceChatPanel';
 import MessageList from './MessageList';
 import WelcomeScreen from './WelcomeScreen';
+import SuggestionChips from './SuggestionChips';
+import {
+  applySuggestion,
+  chatSuggestions,
+  type ChatSuggestion,
+} from './suggestions';
 import type {
   ChatPanelProps,
   AttachedFile,
@@ -326,6 +333,42 @@ export default function ChatPanel({
 
   const hasMessages = messages.length > 0 || sending;
 
+  // Suggestion chips on the welcome screen: a chip selects its agent and puts
+  // its question in the input. They stay while the input is empty or holds
+  // the picked question unchanged, so another chip can still be chosen.
+  const selectedAgentId = selectedAgent?.agent_id ?? null;
+  const voiceChatAvailable = !!voiceChat?.available;
+  const suggestions = useMemo(
+    () =>
+      chatSuggestions({
+        agents,
+        documents,
+        voiceChatAvailable,
+        selectedAgentId,
+        canSelectAgent: !!onAgentSelect,
+        t,
+      }),
+    [agents, documents, voiceChatAvailable, selectedAgentId, onAgentSelect, t],
+  );
+  const [pickedSuggestion, setPickedSuggestion] =
+    useState<ChatSuggestion | null>(null);
+  const handlePickSuggestion = useCallback(
+    (suggestion: ChatSuggestion) => {
+      applySuggestion(suggestion, {
+        selectedAgentId,
+        onAgentSelect,
+        onInputChange,
+        input: inputRef.current,
+      });
+      setPickedSuggestion(suggestion);
+    },
+    [selectedAgentId, onAgentSelect, onInputChange],
+  );
+  const pickedInInput =
+    !!pickedSuggestion && inputMessage === pickedSuggestion.prompt;
+  const showSuggestions =
+    !voiceChatMode && (inputMessage.trim() === '' || pickedInInput);
+
   // Keep focus on input when view changes
   useEffect(() => {
     if (hasMessages && inputRef.current) {
@@ -423,6 +466,20 @@ export default function ChatPanel({
           <WelcomeScreen
             voiceChatPanel={voiceChatPanel}
             inputBox={inputBox}
+            suggestions={
+              showSuggestions && (
+                <SuggestionChips
+                  suggestions={suggestions}
+                  activeId={
+                    pickedInInput &&
+                    pickedSuggestion.agentId === selectedAgentId
+                      ? pickedSuggestion.id
+                      : null
+                  }
+                  onPick={handlePickSuggestion}
+                />
+              )
+            }
             projectName={projectName}
             projectColor={projectColor}
           />

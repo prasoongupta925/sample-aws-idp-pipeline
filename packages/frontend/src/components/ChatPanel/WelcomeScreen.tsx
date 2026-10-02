@@ -5,6 +5,8 @@ import { CARD_COLORS } from '../ProjectSettingsModal';
 interface WelcomeScreenProps {
   voiceChatPanel: React.ReactNode;
   inputBox: React.ReactNode;
+  /** Suggestion chips under the input, shown until the user types. */
+  suggestions?: React.ReactNode;
   projectName?: string;
   projectColor?: number;
 }
@@ -12,6 +14,7 @@ interface WelcomeScreenProps {
 export default function WelcomeScreen({
   voiceChatPanel,
   inputBox,
+  suggestions,
   projectName,
   projectColor = 0,
 }: WelcomeScreenProps) {
@@ -145,6 +148,7 @@ export default function WelcomeScreen({
         <p className="text-xs text-slate-400 dark:text-slate-500 text-center mt-3">
           {t('chat.enterToSend')}
         </p>
+        {suggestions}
       </div>
 
       <div className="flex-[5]" />
