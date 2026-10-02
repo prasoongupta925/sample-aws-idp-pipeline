@@ -505,8 +505,27 @@ export class WorkflowStack extends Stack {
       layers: [sharedLayer],
     });
 
-    // BDA permissions
+    // BDA permissions. Bedrock Data Automation runs only through a geographic
+    // cross-Region profile (bda-start: us./eu./apac.data-automation-v1), so
+    // where every call must stay in the Region (region config bdaEnabled,
+    // false in ap-south-1) its roles get no BDA grant but an explicit deny,
+    // and bda-start skips the step (BDA_ENABLED).
+    bdaStart.addEnvironment('BDA_ENABLED', String(regionConfig.bdaEnabled));
     for (const fn of [bdaStart, bdaCheck]) {
+      if (!regionConfig.bdaEnabled) {
+        fn.addToRolePolicy(
+          new iam.PolicyStatement({
+            sid: 'DenyBedrockDataAutomation',
+            effect: iam.Effect.DENY,
+            actions: [
+              'bedrock:InvokeDataAutomation*',
+              'bedrock:CreateDataAutomationProject',
+            ],
+            resources: ['*'],
+          }),
+        );
+        continue;
+      }
       fn.addToRolePolicy(
         new iam.PolicyStatement({
           actions: [

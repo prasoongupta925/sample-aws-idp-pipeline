@@ -50,6 +50,12 @@ export interface UseVoiceChatOptions {
 }
 
 export interface UseVoiceChatReturn {
+  /**
+   * The build has a voice chat runtime (runtime config bidiAgentRuntimeArn).
+   * The Mumbai build has none (Nova Sonic is not offered in ap-south-1): the
+   * mic and the Voice Chat item stay hidden and connect() does nothing.
+   */
+  available: boolean;
   state: VoiceChatState;
   connect: (modelConfig?: VoiceModelConfig) => Promise<void>;
   disconnect: () => void;
@@ -155,8 +161,9 @@ export function useVoiceChat(options: UseVoiceChatOptions): UseVoiceChatReturn {
     async (modelConfig?: VoiceModelConfig) => {
       console.log('[VoiceChat] connect called, arn:', bidiAgentRuntimeArn);
       if (!bidiAgentRuntimeArn) {
-        console.log('[VoiceChat] ERROR: no bidiAgentRuntimeArn');
-        setState((s) => ({ ...s, status: 'error' }));
+        // No voice chat in this build: nothing to connect to, and no error to
+        // show (the UI offers no voice chat then).
+        console.log('[VoiceChat] voice chat is not available in this build');
         return;
       }
 
@@ -497,6 +504,7 @@ export function useVoiceChat(options: UseVoiceChatOptions): UseVoiceChatReturn {
   }, []);
 
   return {
+    available: Boolean(bidiAgentRuntimeArn),
     state,
     connect,
     disconnect,

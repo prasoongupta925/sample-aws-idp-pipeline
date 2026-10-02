@@ -2,6 +2,10 @@
 
 Starts a Bedrock Data Automation async job. Called by Step Functions.
 Returns the invocation ARN for status checking.
+
+BDA runs only through a geographic cross-Region profile (_bda_profile_id), so
+a build where every call stays in its Region (BDA_ENABLED=false, region config
+bdaEnabled: ap-south-1) skips the step: the document is read without BDA.
 """
 import json
 import os
@@ -20,6 +24,12 @@ from shared.ddb_client import (
 
 BDA_PROJECT_NAME = os.environ.get('BDA_PROJECT_NAME', 'idp-v2-bda-project')
 BDA_OUTPUT_BUCKET = os.environ.get('BDA_OUTPUT_BUCKET', '')
+BDA_DISABLED_REASON = 'Bedrock Data Automation is off in this deployment: it runs through a cross-Region profile'
+
+
+def bda_enabled() -> bool:
+    """False when the build keeps every call in its Region (CDK sets BDA_ENABLED)."""
+    return os.environ.get('BDA_ENABLED', 'true').strip().lower() != 'false'
 
 SUPPORTED_MIME_TYPES = {
     'application/pdf',
@@ -133,6 +143,18 @@ def handler(event, context):
     project_id = event.get('project_id')
     file_uri = event.get('file_uri')
     file_type = event.get('file_type')
+
+    if not bda_enabled():
+        print('Skipping BDA: off in this deployment (cross-Region profile)')
+        update_preprocess_status(
+            document_id=document_id,
+            workflow_id=workflow_id,
+            processor=PreprocessType.BDA,
+            status=PreprocessStatus.SKIPPED,
+            reason=BDA_DISABLED_REASON
+        )
+        record_step_skipped(workflow_id, StepName.BDA_PROCESSOR, BDA_DISABLED_REASON)
+        return {**event, 'bda_status': 'SKIPPED'}
 
     # Check if file type is supported
     if file_type not in SUPPORTED_MIME_TYPES:

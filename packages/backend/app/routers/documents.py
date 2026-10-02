@@ -274,9 +274,15 @@ def create_document_upload(
     """
     config = get_config()
 
-    # File name, type (the pipeline's supported extensions) and size (1 byte to 500MB)
+    # File name, type (the pipeline's supported extensions; video only in a build
+    # with a video model) and size (1 byte to 500MB)
     try:
-        ext = check_upload(request.file_name, request.content_type, request.file_size)
+        ext = check_upload(
+            request.file_name,
+            request.content_type,
+            request.file_size,
+            video_allowed=config.video_uploads_enabled,
+        )
     except PresignError as e:
         raise HTTPException(status_code=e.status, detail=e.detail) from None
 

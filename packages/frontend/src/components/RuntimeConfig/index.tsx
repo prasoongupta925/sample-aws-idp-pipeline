@@ -17,7 +17,15 @@ export interface IRuntimeConfig {
   apis?: Record<string, unknown>;
   documentStorageBucketName?: string;
   agentRuntimeArn?: string;
+  /** Built-in voice chat runtime; absent when the build has no voice chat. */
   bidiAgentRuntimeArn?: string;
+  /** false when the build has no model that reads video (uploads refused). */
+  videoUploadsEnabled?: boolean;
+  /**
+   * false when the build has no Bedrock Data Automation (it runs through a
+   * cross-Region profile, so the Mumbai build is without): no BDA option.
+   */
+  bdaEnabled?: boolean;
   websocketUrl?: string;
 }
 

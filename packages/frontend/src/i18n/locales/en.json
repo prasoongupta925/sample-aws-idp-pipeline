@@ -92,6 +92,8 @@
     "uploading": "Uploading...",
     "orClick": "or click to select",
     "supportedFormats": "Supports documents (PDF, DOC, PPT, TXT), images (PNG, JPG, GIF, TIFF), videos (MP4, MOV, AVI), and audio files (MP3, WAV, FLAC) up to 500MB",
+    "supportedFormatsNoVideo": "Supports documents (PDF, DOC, PPT, TXT), images (PNG, JPG, GIF, TIFF) and audio files (MP3, WAV, FLAC) up to 500MB. Video is not supported in this deployment.",
+    "videoNotSupported": "Video is not supported in this deployment: no AI model in its AWS Region can read video. Upload the audio track instead (MP3, WAV or FLAC). Not added: {{files}}",
     "processing": "Processing",
     "in_progress": "Analyzing",
     "reanalyzing": "Re-analyzing",

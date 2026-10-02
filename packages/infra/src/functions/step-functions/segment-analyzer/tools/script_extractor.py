@@ -76,7 +76,7 @@ def create_script_extractor_tool(
     bucket_owner_account_id: str = '',
     language: str = 'English'
 ):
-    """Create a video script extractor tool using Nova 2 Lite.
+    """Create a video script extractor tool (a video-capable model: NOVA_LITE_MODEL_ID).
 
     Args:
         video_uri_getter: Function to get video S3 URI
@@ -87,7 +87,9 @@ def create_script_extractor_tool(
         bucket_owner_account_id: AWS account ID that owns the S3 bucket
         language: Target language for analysis output
     """
-    model_id = os.environ.get('NOVA_LITE_MODEL_ID', 'global.amazon.nova-2-lite-v1:0')
+    # models.json scriptExtractor. Empty: this Region has no in-Region model that
+    # reads video (ap-south-1), so no video is ever sent to a model.
+    model_id = os.environ.get('NOVA_LITE_MODEL_ID', '')
     max_reasoning_effort = os.environ.get('MAX_REASONING_EFFORT', 'low')
 
     @tool
@@ -104,6 +106,8 @@ def create_script_extractor_tool(
         video_uri = video_uri_getter()
         if not video_uri:
             return 'No video available for script extraction.'
+        if not model_id:
+            return 'Video reading is not available in this deployment (no in-Region video model).'
 
         start_timecode, end_timecode = timecode_getter()
 

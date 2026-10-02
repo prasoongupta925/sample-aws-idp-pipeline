@@ -92,6 +92,8 @@
     "uploading": "アップロード中...",
     "orClick": "またはクリックして選択",
     "supportedFormats": "ドキュメント（PDF、DOC、PPT、TXT）、画像（PNG、JPG、GIF、TIFF）、動画（MP4、MOV、AVI）、音声（MP3、WAV、FLAC）最大500MBまで対応",
+    "supportedFormatsNoVideo": "ドキュメント（PDF、DOC、PPT、TXT）、画像（PNG、JPG、GIF、TIFF）、音声（MP3、WAV、FLAC）最大500MBまで対応。この環境では動画は使用できません。",
+    "videoNotSupported": "この環境では動画は使用できません：このAWSリージョンには動画を読めるAIモデルがありません。代わりに音声（MP3、WAV、FLAC）をアップロードしてください。追加されなかったファイル：{{files}}",
     "processing": "処理中",
     "in_progress": "分析中",
     "reanalyzing": "再分析中",

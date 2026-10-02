@@ -1,6 +1,8 @@
 """BDA Check Lambda
 
 Checks the status of a BDA async invocation. Called by Step Functions polling loop.
+A start that skipped BDA (unsupported file type, or BDA off in this deployment)
+has no invocation: the check reports SKIPPED without calling BDA.
 """
 import json
 import os
@@ -35,6 +37,10 @@ def handler(event, context):
     workflow_id = event.get('workflow_id')
     document_id = event.get('document_id')
     invocation_arn = event.get('bda_invocation_arn')
+
+    if event.get('bda_status') == 'SKIPPED' or not invocation_arn:
+        # bda-start skipped the step and recorded why: nothing to poll.
+        return {**event, 'bda_status': 'SKIPPED'}
 
     runtime_client = get_bda_runtime_client()
     response = runtime_client.get_data_automation_status(

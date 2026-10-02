@@ -4,12 +4,14 @@ import {
   RuntimeConfig,
   UserIdentity,
   SSM_KEYS,
+  getRegionConfig,
 } from ':idp-v2/common-constructs';
 import { Stack, StackProps } from 'aws-cdk-lib';
 import { PolicyStatement, Role } from 'aws-cdk-lib/aws-iam';
 import { StringParameter } from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 import { TableV2 } from 'aws-cdk-lib/aws-dynamodb';
+import { VIDEO_ANALYSIS_ENABLED } from '../video-analysis.js';
 
 export class ApplicationStack extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
@@ -31,11 +33,29 @@ export class ApplicationStack extends Stack {
     );
     RuntimeConfig.ensure(this).config.agentRuntimeArn = agentRuntimeArn;
 
-    const bidiAgentRuntimeArn = StringParameter.valueForStringParameter(
-      this,
-      SSM_KEYS.BIDI_AGENT_RUNTIME_ARN,
-    );
-    RuntimeConfig.ensure(this).config.bidiAgentRuntimeArn = bidiAgentRuntimeArn;
+    // The built-in voice chat (BidiAgent) exists only where region config
+    // voiceChatEnabled says so (AgentStack then creates it and this
+    // parameter). Without it the web app gets no bidiAgentRuntimeArn and hides
+    // the mic and the Voice Chat item.
+    if (getRegionConfig(this).voiceChatEnabled) {
+      const bidiAgentRuntimeArn = StringParameter.valueForStringParameter(
+        this,
+        SSM_KEYS.BIDI_AGENT_RUNTIME_ARN,
+      );
+      RuntimeConfig.ensure(this).config.bidiAgentRuntimeArn =
+        bidiAgentRuntimeArn;
+    }
+
+    // No video model in this build (video-analysis.ts): the web app leaves
+    // video out of its upload picker and the backend refuses video uploads.
+    RuntimeConfig.ensure(this).config.videoUploadsEnabled =
+      VIDEO_ANALYSIS_ENABLED;
+
+    // Bedrock Data Automation runs through a cross-Region profile: where
+    // region config bdaEnabled is false (ap-south-1) the web app hides the
+    // upload's BDA option (the workflow skips the step anyway).
+    RuntimeConfig.ensure(this).config.bdaEnabled =
+      getRegionConfig(this).bdaEnabled;
 
     const websocketCallbackUrl = StringParameter.valueForStringParameter(
       this,
@@ -57,7 +77,9 @@ export class ApplicationStack extends Stack {
     );
     userIdentity.addPostAuthenticationTrigger(backendTable);
 
-    const backend = new Backend(this, 'Backend');
+    const backend = new Backend(this, 'Backend', {
+      videoUploadsEnabled: VIDEO_ANALYSIS_ENABLED,
+    });
 
     const frontend = new Frontend(this, 'Frontend');
     // Publish a new web app only after the backend function it calls runs the
