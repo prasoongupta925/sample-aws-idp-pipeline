@@ -888,7 +888,7 @@
       "action": "Erase applicant data",
       "title": "Erase {{name}}'s data?",
       "pan": "PAN {{pan}}",
-      "body": "This permanently deletes the documents listed below and the data derived from them: the stored files, extracted facts and page text, search-index entries, knowledge-graph data and analysis records. The applicant's name is also removed from the webhook delivery log.",
+      "body": "This permanently deletes the documents listed below and the data derived from them: the stored files, extracted facts and page text, search-index entries (removed now and physically deleted within a day), knowledge-graph data and analysis records. The applicant's name is also removed from the webhook delivery log.",
       "documents": "{{count}} documents will be erased:",
       "documents_one": "{{count}} document will be erased:",
       "cannotUndo": "This cannot be undone.",

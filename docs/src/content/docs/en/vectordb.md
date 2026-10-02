@@ -54,19 +54,24 @@ Read Path:
 Delete Path:
   Backend API (project deletion)
     → LanceDB Service Lambda: drop_table
+  Backend API (document delete / applicant erase), Retention Sweeper
+    → LanceDB Service Lambda: delete_by_workflow (rows hidden)
+  Retention Sweeper (nightly, every table), Backend API (applicant erase)
+    → LanceDB Service Lambda: optimize (files of deleted rows removed)
 ```
 
 ### Storage Architecture
 
 ```
 S3 Express One Zone (Directory Bucket)
-  └─ idp-v2/
-      ├─ {project_id_1}/     ← one LanceDB table per project
-      │   ├─ data/
-      │   └─ indices/
-      └─ {project_id_2}/
-          ├─ data/
-          └─ indices/
+  ├─ {project_id}.lance/           ← one LanceDB table per project
+  │   ├─ data/                     ← rows (.lance files)
+  │   ├─ _deletions/               ← rows hidden by a delete
+  │   ├─ _indices/{uuid}/          ← FTS index
+  │   ├─ _transactions/            ← one file per commit
+  │   └─ _versions/                ← one manifest per table version
+  ├─ {project_id}_datasets.lance/  ← the project's dataset catalog
+  └─ graph_keywords.lance/         ← graph keywords of every project
 
 DynamoDB (Lock Table)
   PK: base_uri  |  SK: version
@@ -102,6 +107,22 @@ The core vector DB service. Implemented in Rust using `cargo-lambda-cdk` for opt
 | `count` | Count records in a project table |
 | `delete_by_workflow` | Delete all records for a workflow |
 | `drop_table` | Drop an entire project table |
+| `optimize` | Physically remove deleted rows: compaction, FTS index rebuild and pruning of old table versions (`project_id` = one table, else every table; `older_than_hours`, default 24, `0` keeps only the latest version) |
+
+**Physical deletion:** a LanceDB delete only hides rows. The files that hold
+them stay in S3, used by older table versions (and by an FTS index built
+before the delete), until `optimize` compacts the table, rebuilds its FTS
+index and prunes those versions. The Retention Sweeper runs it on every table
+each night with `older_than_hours: 0` (`LANCEDB_PRUNE_OLDER_THAN_HOURS`), and
+an applicant erase starts it for the project's table at once
+(asynchronously); when the nightly sweep runs short of time, it starts the
+remaining tables without waiting. Files no version references (a write still
+in progress, or one that failed, such as a compaction that conflicted with a
+concurrent delete) are only removed once they are 7 days old (lance's fixed
+threshold), by the next nightly sweep: at most 8 days after they were written.
+No S3 lifecycle rule expires objects in the bucket (expiring live table files
+would corrupt the tables); its only rule aborts incomplete multipart uploads
+after 1 day.
 
 **Why Rust Lambda:**
 

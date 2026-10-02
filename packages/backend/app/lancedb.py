@@ -84,3 +84,31 @@ def delete_graph_keywords_by_project_id(
 ) -> DeleteGraphKeywordsByProjectIdOutput:
     result = invoke_lancedb("delete_graph_keywords_by_project_id", params.model_dump())
     return DeleteGraphKeywordsByProjectIdOutput(**result)
+
+
+# --- optimize ---
+
+
+class OptimizeInput(BaseModel):
+    # The table, as in drop_table: a project's table is its project id.
+    project_id: str
+    # Table versions newer than this are kept; 0 keeps only the latest, so
+    # the rows deleted so far leave storage.
+    older_than_hours: int = 0
+
+
+def start_optimize(params: OptimizeInput) -> None:
+    """Start the service's optimize without waiting for it (Event invoke).
+
+    A LanceDB delete only hides rows; optimize (compaction, FTS index rebuild,
+    pruning of old table versions) deletes the files that still hold them.
+    Lambda answers 202 once the event is queued.
+    """
+    config = get_config()
+    resp = get_lambda_client().invoke(
+        FunctionName=config.lancedb_function_name,
+        InvocationType="Event",
+        Payload=json.dumps({"action": "optimize", "params": params.model_dump()}),
+    )
+    if resp.get("StatusCode") != 202:
+        raise LanceDbError(f"optimize was not started (StatusCode {resp.get('StatusCode')})")

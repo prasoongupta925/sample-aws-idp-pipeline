@@ -29,7 +29,9 @@ const ASSET_EXCLUDE = ['test_*.py', '__pycache__', '.pytest_cache', '*.pyc'];
  * - RetentionSweeper (daily 02:00 IST): deletes documents older than the
  *   cutoff with the same cleanup as the backend's delete_document (S3,
  *   LanceDB, graph via SQS, DynamoDB), plus facts, datasets, chat sessions,
- *   artifacts and finished Amazon Transcribe jobs.
+ *   artifacts and finished Amazon Transcribe jobs. Last, it runs the LanceDB
+ *   service's optimize on every table: a LanceDB delete only hides rows, and
+ *   this deletes the S3 Express files that still hold them.
  * - LogRetentionEnforcer (daily 02:30 IST and on every deploy): caps every
  *   CloudWatch log group at retentionDays, including log groups that AWS
  *   services create on their own, and expires untagged ECR images.
@@ -121,6 +123,10 @@ export class RetentionStack extends Stack {
         RETENTION_DAYS: String(days),
         DRY_RUN: 'false',
         DELETE_TRANSCRIBE_JOBS: 'true',
+        // LanceDB table versions kept by the nightly optimize. 0 = only the
+        // latest, so rows deleted before the sweep are physically gone after
+        // it: the erase dialog promises "physically deleted within a day".
+        LANCEDB_PRUNE_OLDER_THAN_HOURS: '0',
       },
       logGroup: new logs.LogGroup(this, 'RetentionSweeperLogs', {
         retention: logRetention,
@@ -143,7 +149,8 @@ export class RetentionStack extends Stack {
       bucket.grantDelete(sweeper);
     }
 
-    // LanceDB service (delete_by_workflow, drop_table, graph keywords)
+    // LanceDB service (delete_by_workflow, drop_table, graph keywords,
+    // list_tables, optimize)
     sweeper.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['lambda:InvokeFunction'],

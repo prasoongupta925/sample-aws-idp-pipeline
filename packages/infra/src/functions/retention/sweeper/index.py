@@ -3,14 +3,17 @@
 Runs daily (EventBridge schedule) and deletes client data older than
 RETENTION_DAYS: documents (same cascade as the backend's delete_document),
 extracted facts, datasets, chat sessions, artifacts and finished Amazon
-Transcribe jobs. The logic lives in sweep.py; this module only builds the
-boto3 clients and the configuration from the environment.
+Transcribe jobs. Then it optimizes every LanceDB table, which physically
+removes the rows deleted so far (a LanceDB delete only hides them). The logic
+lives in sweep.py; this module only builds the boto3 clients and the
+configuration from the environment.
 
 Environment:
     BACKEND_TABLE_NAME, DOCUMENT_STORAGE_BUCKET_NAME, SESSION_STORAGE_BUCKET_NAME,
     AGENT_STORAGE_BUCKET_NAME, LANCEDB_FUNCTION_NAME, GRAPH_DELETE_QUEUE_URL
     (all required), RETENTION_DAYS (default 7), DRY_RUN (default false),
-    DELETE_TRANSCRIBE_JOBS (default true).
+    DELETE_TRANSCRIBE_JOBS (default true), LANCEDB_PRUNE_OLDER_THAN_HOURS
+    (default 0: LanceDB keeps only each table's latest version).
 
 A manual invoke with {"dry_run": true} only counts what would be deleted.
 Logs contain counts only.
@@ -59,6 +62,13 @@ def load_config(env=None) -> SweepConfig:
         raise RuntimeError(f'RETENTION_DAYS must be an integer >= 1, got {raw_days!r}') from None
     if retention_days < 1:
         raise RuntimeError(f'RETENTION_DAYS must be an integer >= 1, got {raw_days!r}')
+    raw_hours = str(env.get('LANCEDB_PRUNE_OLDER_THAN_HOURS', '0') or '0').strip()
+    try:
+        prune_hours = int(raw_hours)
+    except ValueError:
+        raise RuntimeError(f'LANCEDB_PRUNE_OLDER_THAN_HOURS must be an integer >= 0, got {raw_hours!r}') from None
+    if prune_hours < 0:
+        raise RuntimeError(f'LANCEDB_PRUNE_OLDER_THAN_HOURS must be an integer >= 0, got {raw_hours!r}')
     return SweepConfig(
         table_name=env['BACKEND_TABLE_NAME'],
         document_bucket=env['DOCUMENT_STORAGE_BUCKET_NAME'],
@@ -69,6 +79,7 @@ def load_config(env=None) -> SweepConfig:
         retention_days=retention_days,
         dry_run=_env_bool(env, 'DRY_RUN', False),
         delete_transcribe_jobs=_env_bool(env, 'DELETE_TRANSCRIBE_JOBS', True),
+        lancedb_prune_older_than_hours=prune_hours,
     )
 
 

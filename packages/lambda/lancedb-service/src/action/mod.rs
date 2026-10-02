@@ -13,4 +13,5 @@ pub mod get_graph_keywords;
 pub mod get_segments_by_document_id;
 pub mod hybrid_search;
 pub mod list_tables;
+pub mod optimize;
 pub mod search_graph_keywords;

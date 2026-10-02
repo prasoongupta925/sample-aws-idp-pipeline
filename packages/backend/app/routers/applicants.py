@@ -4,7 +4,11 @@ POST /projects/{project_id}/applicants/erase deletes every document the file
 check attributes to one applicant, with exactly the cleanup of
 DELETE /projects/{project_id}/documents/{document_id} (the same function runs):
 the S3 objects, the LanceDB vectors, the knowledge-graph delete queue and the
-DynamoDB items (document, workflow, facts).
+DynamoDB items (document, workflow, facts). A LanceDB delete only hides rows,
+so the erase then starts the LanceDB service's optimize on the project's table
+(asynchronously), which deletes the files still holding them; the nightly
+retention sweep optimizes every table too, so they are physically gone within
+a day even when that start fails.
 
 The applicant's documents come from the file-check Lambda's read-only
 applicant_documents tool, which groups documents like the verdict (PAN first,
@@ -48,6 +52,7 @@ from app.file_check import (
     UnknownChecklistError,
     get_applicant_documents,
 )
+from app.lancedb import LanceDbError, OptimizeInput, start_optimize
 from app.routers.documents import delete_document
 from app.routers.eligibility import erase_applicant_eligibility
 from app.routers.file_check import ErrorResponse, ProjectId, UserId
@@ -205,6 +210,20 @@ def _delete(project_id: str, document_id: str) -> str | None:
     return None
 
 
+def _start_search_index_cleanup(project_id: str) -> None:
+    """Start the physical removal of the erased rows from the project's LanceDB table.
+
+    Not waited for. When it cannot start, the nightly retention sweep removes
+    them (it optimizes every table), still within a day.
+    """
+    if not get_config().lancedb_function_name:
+        return
+    try:
+        start_optimize(OptimizeInput(project_id=project_id))
+    except (ClientError, BotoCoreError, LanceDbError) as e:
+        print(f"applicant erase: search-index clean-up not started project={project_id} ({type(e).__name__})")
+
+
 def _without_name(applicants: str, name: str) -> str | None:
     """A delivery item's comma-separated applicant names without `name`; None when none is left."""
     kept = [n.strip() for n in applicants.split(",") if n.strip() and _folded(n) != _folded(name)]
@@ -316,7 +335,9 @@ def _write_audit(
 def erase_applicant(project_id: ProjectId, user_id: UserId, request: EraseRequest) -> EraseResponse:
     """Permanently delete every document the file check shows under one applicant.
 
-    Each document gets the same cleanup as DELETE /projects/{project_id}/documents/{document_id}.
+    Each document gets the same cleanup as DELETE /projects/{project_id}/documents/{document_id};
+    the search-index entries removed that way are then physically deleted from storage, asynchronously
+    (within a day at the latest).
     A document that fails is reported in `failed` and the others are still deleted.
     The applicant is resolved like the file check's applicant filter (PAN first,
     else a compatible name); `confirm` must be the applicant's name as the file
@@ -358,6 +379,8 @@ def erase_applicant(project_id: ProjectId, user_id: UserId, request: EraseReques
             failed.append(EraseFailedDocument(document_id=doc.document_id, name=doc.name, error=error))
         else:
             deleted.append(doc)
+    # The documents' search-index rows are hidden now; this deletes their files.
+    _start_search_index_cleanup(project_id)
 
     redacted = _redact_delivery_log(project_id, found.applicant_name)
     # Saved under the identifier the page used (the PAN when known, else the name).

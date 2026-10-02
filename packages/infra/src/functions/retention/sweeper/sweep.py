@@ -11,6 +11,10 @@ Order of work (each step is isolated, so one failure does not stop the others):
   3. sweep_artifacts       - ART# items + their files, and stray artifact files
                              in the agent bucket (never __prompts/ or agents/).
   4. sweep_transcribe_jobs - finished Amazon Transcribe jobs of our documents.
+  5. sweep_lancedb         - every LanceDB table: the service's optimize action
+                             physically removes the rows deleted so far (by step
+                             1 or in the app), which a delete only hides. Tables
+                             left when time runs short are started unawaited.
 
 The result holds counts and error summaries only: no document names, file
 names or other personal data.
@@ -30,6 +34,8 @@ MAX_ERRORS = 50
 STOP_MARGIN_MS = 60_000
 # A job that finished very recently may still be read by transcribe-check.
 TRANSCRIBE_JOB_GRACE = timedelta(hours=1)
+# One LanceDB optimize call can take the service's whole 5-minute timeout.
+LANCEDB_OPTIMIZE_MARGIN_MS = 330_000
 
 SESSION_FOLDER_RE = re.compile(r'^(sessions/[^/]+/[^/]+/session_[^/]+/)')
 # {user_id}/{project_id}/artifacts/{artifact_id}/{file} (and flat
@@ -51,6 +57,9 @@ class SweepConfig:
     retention_days: int = 7
     dry_run: bool = False
     delete_transcribe_jobs: bool = True
+    # LanceDB table versions newer than this are kept by the optimize step;
+    # 0 keeps only the latest, so deleted rows are gone after the sweep.
+    lancedb_prune_older_than_hours: int = 0
 
 
 class LanceDbError(Exception):
@@ -114,14 +123,14 @@ class _Run:
         self._time_left_ms = time_left_ms
         self.result = _new_result(cfg, cutoff)
 
-    def out_of_time(self) -> bool:
+    def out_of_time(self, margin_ms: int = STOP_MARGIN_MS) -> bool:
         if self._time_left_ms is None:
             return False
         try:
             left = self._time_left_ms()
         except Exception:
             return False
-        if left is not None and left < STOP_MARGIN_MS:
+        if left is not None and left < margin_ms:
             self.result['stopped_early'] = True
             return True
         return False
@@ -164,6 +173,13 @@ def _new_result(cfg, cutoff) -> dict:
             'orphan_objects_deleted': 0,
         },
         'transcribe_jobs': {'checked': 0, 'deleted': 0, 'skipped_recent': 0},
+        'lancedb': {
+            'tables': 0,
+            'optimized': 0,
+            'started': 0,
+            'old_versions_removed': 0,
+            'bytes_removed': 0,
+        },
         'errors': [],
         'errors_total': 0,
     }
@@ -247,14 +263,21 @@ def _delete_item(run: _Run, pk: str, sk: str) -> int:
     return 1
 
 
-def _invoke_lancedb(run: _Run, action: str, params: dict) -> None:
-    """Invoke the LanceDB service like the backend does; raise on failure."""
+def _invoke_lancedb(run: _Run, action: str, params=None) -> dict:
+    """Invoke the LanceDB service like the backend does; raise on failure.
+
+    Returns the answer (an empty dict in dry run). An action without params
+    (list_tables) is sent without them: the service rejects an empty object.
+    """
     if run.dry_run:
-        return
+        return {}
+    body = {'action': action}
+    if params is not None:
+        body['params'] = params
     response = run.lambda_client.invoke(
         FunctionName=run.cfg.lancedb_function,
         InvocationType='RequestResponse',
-        Payload=json.dumps({'action': action, 'params': params}),
+        Payload=json.dumps(body),
     )
     raw = response['Payload'].read()
     try:
@@ -266,6 +289,25 @@ def _invoke_lancedb(run: _Run, action: str, params: dict) -> None:
     status = payload.get('statusCode') if isinstance(payload, dict) else None
     if status != 200:
         raise LanceDbError(f'{action}: statusCode={status}')
+    return payload
+
+
+def _start_lancedb(run: _Run, action: str, params: dict) -> None:
+    """Start a LanceDB service action without waiting for it (Event invoke).
+
+    Lambda answers 202 once the event is queued; the action's own outcome
+    only shows in the service's logs. Raises when it was not queued.
+    """
+    if run.dry_run:
+        return
+    response = run.lambda_client.invoke(
+        FunctionName=run.cfg.lancedb_function,
+        InvocationType='Event',
+        Payload=json.dumps({'action': action, 'params': params}),
+    )
+    status = response.get('StatusCode')
+    if status != 202:
+        raise LanceDbError(f'{action}: not started (StatusCode={status})')
 
 
 def _send_graph_delete(run: _Run, project_id: str, workflow_id: str) -> None:
@@ -657,6 +699,60 @@ def sweep_transcribe_jobs(run: _Run) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 5. LanceDB physical clean-up
+# ---------------------------------------------------------------------------
+
+
+def _optimize_params(run: _Run, table: str) -> dict:
+    return {'project_id': table, 'older_than_hours': run.cfg.lancedb_prune_older_than_hours}
+
+
+def sweep_lancedb(run: _Run) -> None:
+    """Optimize every LanceDB table, so deleted rows leave the bucket.
+
+    A LanceDB delete (step 1, a document deleted in the app, a re-analysis)
+    only hides rows: the files holding them stay in the S3 Express bucket,
+    used by older table versions. The service's optimize action compacts the
+    table, rebuilds its FTS index and prunes the versions older than
+    lancedb_prune_older_than_hours, which deletes those files. Tables dropped
+    in step 1 are gone already. One call per table: each gets the service's
+    whole timeout. When too little time is left to wait for one more call,
+    the remaining tables are started without waiting (counted as `started`):
+    the table list comes in the same order every night, so skipping them
+    could leave the same tables uncleaned night after night. Dry run makes
+    no call.
+    """
+    if run.dry_run:
+        return
+    counts = run.result['lancedb']
+    try:
+        listed = _invoke_lancedb(run, 'list_tables').get('tables') or []
+    except Exception as e:
+        run.error('lancedb', 'list_tables failed', e)
+        return
+    tables = [t for t in listed if isinstance(t, str) and t]
+    counts['tables'] = len(tables)
+    for i, table in enumerate(tables):
+        if run.out_of_time(LANCEDB_OPTIMIZE_MARGIN_MS):
+            for rest in tables[i:]:
+                try:
+                    _start_lancedb(run, 'optimize', _optimize_params(run, rest))
+                    counts['started'] += 1
+                except Exception as e:
+                    run.error('lancedb', f'optimize not started for table={rest}', e)
+            return
+        try:
+            payload = _invoke_lancedb(run, 'optimize', _optimize_params(run, table))
+        except Exception as e:
+            run.error('lancedb', f'optimize failed for table={table}', e)
+            continue
+        counts['optimized'] += 1
+        for stats in payload.get('tables') or []:
+            counts['old_versions_removed'] += int(stats.get('old_versions_removed') or 0)
+            counts['bytes_removed'] += int(stats.get('bytes_removed') or 0)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -674,6 +770,8 @@ def run_sweep(table, s3, lambda_client, sqs, transcribe, cfg, now=None, time_lef
     ]
     if cfg.delete_transcribe_jobs:
         steps.append(('transcribe', sweep_transcribe_jobs))
+    # Last: it also removes what step 1 deleted.
+    steps.append(('lancedb', sweep_lancedb))
 
     for stage, step in steps:
         if run.out_of_time():
