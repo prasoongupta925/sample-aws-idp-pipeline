@@ -17,13 +17,25 @@ NEEDS REVIEW item (consistency status REVIEW, listed in needs_review) and
 never changes READY / NOT READY, except a FOIR the checklist marks
 hard_limit. Only loan EMIs count toward FOIR; rent, SIP, utilities and
 credit-card payments do not.
+
+Confirmations: a needs-review (manual) checklist item that a person confirmed
+in the web app (backend POST .../file-check/confirmations, stored as
+PROJ#{pid} / FCCONF#... items with the retention TTL) is CONFIRMED and counts
+as met, so a checklist with required manual items can reach READY. It stays
+confirmed while every document it was made on is still in the applicant's
+file; otherwise the item is REVIEW again and says why.
+
+Call recordings (audio / video documents without extracted facts) are never
+part of a loan file: they are listed in recording_documents and do not keep
+an applicant NOT READY while they are transcribed.
 """
 
+import hashlib
 import json
 import os
 import re
 from collections import Counter
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from statistics import median
 
 ENGINE_VERSION = '1.0'
@@ -34,6 +46,11 @@ DOC_TYPES = [
     'salary_slip',
     'bank_statement',
     'form16_itr',
+    # Read for the eligibility page (the CIBIL block, other income); no
+    # checklist item or consistency check uses them yet.
+    'credit_report',
+    'rent_agreement',
+    'pension_slip',
     'other',
 ]
 
@@ -101,6 +118,9 @@ _DOC_NOUNS = {
     'salary_slip': 'salary slips',
     'bank_statement': 'bank statement',
     'form16_itr': 'Form-16 / ITR',
+    'credit_report': 'credit report',
+    'rent_agreement': 'rent agreement',
+    'pension_slip': 'pension slips',
     'other': 'documents',
 }
 
@@ -117,17 +137,42 @@ UNSUPPORTED_REASON = (
     'upload the statement as PDF'
 )
 
+# Audio / video documents are call recordings (reviewed with Call QA). Without
+# extracted facts they are listed in recording_documents, never as a loan
+# document that is pending or missing its facts.
+RECORDING_MIME_PREFIXES = ('audio/', 'video/')
+# Fallback when a DOC# item carries no usable MIME type.
+RECORDING_EXTENSIONS = (
+    '.wav', '.mp3', '.m4a', '.aac', '.ogg', '.oga', '.opus', '.flac', '.amr',
+    '.wma', '.mp4', '.m4v', '.mov', '.webm', '.mkv', '.avi', '.3gp',
+)
+
+# Confirmed needs-review items (see the module docstring): the SK prefix of the
+# backend's items, whose data index.py passes as `confirmations`.
+CONFIRMATION_SK_PREFIX = 'FCCONF#'
+CONFIRMED = 'CONFIRMED'
+# Statuses that meet a required checklist item.
+MET_STATUSES = ('PRESENT', CONFIRMED)
+# Confirmation times are shown in India Standard Time.
+IST = timezone(timedelta(hours=5, minutes=30))
+
 ASSISTANT_INSTRUCTIONS = (
     "Report overall_verdict and each applicant's verdict, reasons, checklist "
     'and consistency exactly as returned. Do not re-compute, soften or add '
     'findings. Letters and artifacts must list exactly missing_items and '
     'mismatches. Report needs_review items as "needs review" (they do not '
-    'change the verdict). For obligations, EMIs and FOIR use only the '
-    'obligations and foir objects, and always label FOIR and the maximum new '
-    f'EMI "{FOIR_LABEL}"; never state approval, rates or sanction amounts.'
+    'change the verdict). A checklist item with status CONFIRMED was checked '
+    'by the person named in its confirmation and counts as met; say who '
+    'confirmed it. recording_documents are call recordings, not loan '
+    'documents: when a project holds only recordings, say the file check '
+    'applies to loan files and suggest the Call QA Reviewer agent. For '
+    'obligations, EMIs and FOIR use only the obligations and foir objects, '
+    f'and always label FOIR and the maximum new EMI "{FOIR_LABEL}"; never '
+    'state approval, rates or sanction amounts.'
 )
 
 _ID_RE = re.compile(r'^[a-z0-9_]+$')
+_PAN_RE = re.compile(r'^[A-Z]{5}[0-9]{4}[A-Z]$')
 _YM_RE = re.compile(r'^\d{4}-\d{2}$')
 _MONTHS = {m.lower(): i for i, m in enumerate(MONTH_ABBR, 1)}
 
@@ -620,6 +665,99 @@ def group_applicants(docs):
     else:
         unassigned = loose
     return groups, unassigned
+
+
+# ------------------------------------------------------------------ confirmations
+def applicant_key(applicant) -> str:
+    """Key of an applicant's confirmations: SHA-256 of the PAN (any case /
+    spacing) or of the name (case and spacing ignored).
+
+    The backend derives the same key from the PAN or name the verdict shows,
+    so a stored confirmation holds neither.
+    """
+    text = str(applicant or '')
+    compact = re.sub(r'\s', '', text).upper()
+    if _PAN_RE.match(compact):
+        basis = f'pan:{compact}'
+    else:
+        basis = 'name:' + ' '.join(text.split()).casefold()
+    return hashlib.sha256(basis.encode('utf-8')).hexdigest()[:40]
+
+
+def _applicant_keys(docs) -> set:
+    """The keys a confirmation of this applicant may carry: PAN and name."""
+    keys = set()
+    pan = _group_pan(docs)
+    if pan:
+        keys.add(applicant_key(pan))
+    name = _display_name(docs)
+    if name != 'Unknown':
+        keys.add(applicant_key(name))
+    return keys
+
+
+def _epoch(now) -> float:
+    if isinstance(now, datetime):
+        return (now if now.tzinfo else now.replace(tzinfo=timezone.utc)).timestamp()
+    if _is_number(now):
+        return float(now)
+    return datetime.now(timezone.utc).timestamp()
+
+
+def _confirmation_index(confirmations, now=None) -> dict:
+    """{(applicant_key, item_id): confirmation} of the well-formed confirmations
+    not past expires_at (DynamoDB TTL removes items late); the latest wins."""
+    now_s = _epoch(now)
+    index = {}
+    for c in confirmations or []:
+        if not isinstance(c, dict):
+            continue
+        key, item_id = c.get('applicant_key'), c.get('item_id')
+        if not (isinstance(key, str) and key and isinstance(item_id, str) and item_id):
+            continue
+        expires_at = c.get('expires_at')
+        if _is_number(expires_at) and expires_at <= now_s:
+            continue
+        ids = c.get('document_ids') if isinstance(c.get('document_ids'), list) else []
+        doc_ids = sorted({d for d in ids if isinstance(d, str) and d})
+        if not doc_ids:
+            continue
+        at = c.get('confirmed_at') if isinstance(c.get('confirmed_at'), str) else ''
+        by = c.get('confirmed_by') if isinstance(c.get('confirmed_by'), str) else ''
+        prev = index.get((key, item_id))
+        if prev is None or at > (prev['confirmed_at'] or ''):
+            index[(key, item_id)] = {
+                'confirmed_by': by.strip()[:256] or None,
+                'confirmed_at': at or None,
+                'document_ids': doc_ids,
+            }
+    return index
+
+
+def _confirmation_for(index, keys, item_id):
+    """The latest confirmation of `item_id` under any of the applicant's keys."""
+    found = [index[(k, item_id)] for k in keys if (k, item_id) in index]
+    return max(found, key=lambda c: c['confirmed_at'] or '') if found else None
+
+
+def _when(iso) -> str:
+    """'2026-10-01T08:35:00+00:00' -> '01 Oct 2026, 14:05 IST'."""
+    try:
+        ts = datetime.fromisoformat(str(iso))
+    except ValueError:
+        return str(iso or 'an unknown time')
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts.astimezone(IST).strftime('%d %b %Y, %H:%M IST')
+
+
+def _confirmed_by(conf) -> str:
+    who = conf['confirmed_by'] or 'an unnamed user'
+    return f"confirmed by {who} on {_when(conf['confirmed_at'])}"
+
+
+def _public_confirmation(conf) -> dict:
+    return {'confirmed_by': conf['confirmed_by'], 'confirmed_at': conf['confirmed_at']}
 
 
 # ------------------------------------------------------------------ evaluation
@@ -1893,8 +2031,14 @@ def _grounding_view(doc):
     return None, [], []
 
 
-def evaluate_applicant(docs, checklist, reference_month=None) -> dict:
-    """Apply one checklist to one applicant's documents (see interfaces s.4/5)."""
+def evaluate_applicant(
+    docs, checklist, reference_month=None, confirmations=None, now=None
+) -> dict:
+    """Apply one checklist to one applicant's documents (see interfaces s.4/5).
+
+    `confirmations`: the project's confirmation records (see the module
+    docstring); only this applicant's apply, and only to manual items.
+    """
     docs = sorted((_to_engine_doc(d) for d in docs), key=_sort_key)
     items = checklist.get('items') or []
     tol = checklist.get('tolerance_pct', DEFAULT_TOLERANCE_PCT) / 100
@@ -1903,8 +2047,11 @@ def evaluate_applicant(docs, checklist, reference_month=None) -> dict:
     )
     emi_tol = checklist.get('emi_tolerance_pct', DEFAULT_EMI_TOLERANCE_PCT) / 100
     ref = _reference_month(docs, items, reference_month)
+    confirmed_index = _confirmation_index(confirmations, now)
+    keys = _applicant_keys(docs) if confirmed_index else set()
+    doc_ids = {d['document_id'] for d in docs if d['document_id']}
 
-    rows, reasons, missing_items, manual_review = [], [], [], []
+    rows, reasons, missing_items, manual_review, confirmed = [], [], [], [], []
     for item in items:
         rule = item.get('rule') or {}
         kind = rule.get('kind')
@@ -1912,6 +2059,7 @@ def evaluate_applicant(docs, checklist, reference_month=None) -> dict:
         required = _item_required(item)
         idocs = _item_docs(docs, item)
         months = None
+        conf = None
         if kind == 'present':
             res, _ = _eval_present(item, idocs)
         elif kind == 'monthly':
@@ -1920,9 +2068,25 @@ def evaluate_applicant(docs, checklist, reference_month=None) -> dict:
             res, months = _eval_period(item, idocs, ref)
         else:
             res, _ = _eval_manual(item, idocs)
-        if kind == 'manual':
+            conf = _confirmation_for(confirmed_index, keys, item.get('id'))
+        # A confirmation holds while every document it was made on is still
+        # in this applicant's file (not deleted, erased or moved elsewhere).
+        stale = bool(conf) and not set(conf['document_ids']) <= doc_ids
+        if kind == 'manual' and conf and not stale:
+            status = CONFIRMED
+            res = {**res, 'ok': True, 'detail': _confirmed_by(conf)}
+            confirmed.append(
+                {'item_id': item.get('id'), 'item': label, **_public_confirmation(conf)}
+            )
+        elif kind == 'manual':
             status = 'REVIEW'
             manual_review.append(label)
+            if stale:
+                res = {
+                    **res,
+                    'detail': f"{res['detail']}; {_confirmed_by(conf)}, but a document it "
+                    'was made on is no longer in this file: confirm again',
+                }
         else:
             status = 'PRESENT' if res['ok'] else 'MISSING'
         row = {
@@ -1937,6 +2101,10 @@ def evaluate_applicant(docs, checklist, reference_month=None) -> dict:
         if months is not None:
             row['required_months'] = [ym_str(m) for m in months[0]]
             row['missing_months'] = [ym_str(m) for m in months[1]]
+        if status == CONFIRMED:
+            row['confirmation'] = _public_confirmation(conf)
+        elif stale:
+            row['stale_confirmation'] = _public_confirmation(conf)
         rows.append(row)
         if status == 'REVIEW' and required:
             reasons.append(f"REVIEW – {label}: {res['detail']}")
@@ -1961,7 +2129,7 @@ def evaluate_applicant(docs, checklist, reference_month=None) -> dict:
     ]
 
     ready = all(
-        r['status'] == 'PRESENT' for r in rows if r['required']
+        r['status'] in MET_STATUSES for r in rows if r['required']
     ) and not any(c['status'] == 'MISMATCH' for c in consistency)
 
     documents = []
@@ -1998,6 +2166,8 @@ def evaluate_applicant(docs, checklist, reference_month=None) -> dict:
         'mismatches': mismatches,
         'needs_review': needs_review,
         'manual_review': manual_review,
+        # manual items a person confirmed: {item_id, item, confirmed_by, confirmed_at}
+        'confirmed_items': confirmed,
     }
 
 
@@ -2067,25 +2237,50 @@ def applicant_documents(facts, applicant, documents=None) -> dict:
     return result
 
 
+def _mime(file_type) -> str:
+    return str(file_type or '').split(';')[0].strip().lower()
+
+
+def _is_recording(file_type, name) -> bool:
+    """An audio / video document (by MIME type, else by file extension)."""
+    mime = _mime(file_type)
+    if mime.startswith(RECORDING_MIME_PREFIXES):
+        return True
+    return mime in ('', 'application/octet-stream') and str(name or '').lower().endswith(
+        RECORDING_EXTENSIONS
+    )
+
+
+def _recording(document_id, name, file_type) -> dict:
+    return {'document_id': document_id, 'document_name': name, 'file_type': file_type or None}
+
+
 def _classify(facts, documents):
-    """Split project items into engine docs and the reporting buckets."""
-    pending, failed, no_facts, unsupported = [], [], [], []
+    """Split project items into engine docs and the reporting buckets.
+
+    A recording only counts as a loan document when facts were extracted from
+    it; otherwise it goes to `recordings`, never pending or no-facts.
+    """
+    pending, failed, no_facts, unsupported, recordings = [], [], [], [], []
     engine_docs = []
     if documents is None:
         for f in facts or []:
             if not isinstance(f, dict):
                 continue
+            name = f.get('document_name') or f.get('document_id')
             if f.get('status', 'completed') == 'completed':
                 engine_docs.append(_to_engine_doc(f))
+            elif f.get('reason') == 'media' or _is_recording(f.get('file_type'), name):
+                recordings.append(_recording(f.get('document_id'), name, f.get('file_type')))
             else:
                 no_facts.append(
                     {
                         'document_id': f.get('document_id'),
-                        'document_name': f.get('document_name') or f.get('document_id'),
+                        'document_name': name,
                         'reason': _no_facts_reason(f),
                     }
                 )
-        return engine_docs, pending, failed, no_facts, unsupported
+        return engine_docs, pending, failed, no_facts, unsupported, recordings
 
     facts_by_id = {
         f.get('document_id'): f for f in facts or [] if isinstance(f, dict)
@@ -2098,13 +2293,15 @@ def _classify(facts, documents):
         fact = facts_by_id.get(did)
         name = doc.get('name') or (fact or {}).get('document_name') or did
         status = doc.get('status')
-        file_type = str(doc.get('file_type') or '').split(';')[0].strip().lower()
+        file_type = _mime(doc.get('file_type'))
         fact_ok = bool(fact) and fact.get('status') == 'completed'
         spreadsheet = file_type in UNSUPPORTED_FILE_TYPES or (
             file_type in ('', 'application/octet-stream')
             and str(name or '').lower().endswith(UNSUPPORTED_EXTENSIONS)
         )
-        if spreadsheet:
+        if not fact_ok and _is_recording(file_type, name):
+            recordings.append(_recording(did, name, doc.get('file_type')))
+        elif spreadsheet:
             unsupported.append(
                 {
                     'document_id': did,
@@ -2127,7 +2324,7 @@ def _classify(facts, documents):
             )
         else:
             engine_docs.append(_to_engine_doc({**fact, 'document_name': name}))
-    return engine_docs, pending, failed, no_facts, unsupported
+    return engine_docs, pending, failed, no_facts, unsupported, recordings
 
 
 def _no_facts_reason(fact):
@@ -2159,14 +2356,24 @@ def run_file_check(
     applicant=None,
     as_of=None,
     project_id=None,
+    confirmations=None,
+    now=None,
 ) -> dict:
-    """Full run_file_check response (interfaces section 5)."""
-    engine_docs, pending, failed, no_facts, unsupported = _classify(facts, documents)
+    """Full run_file_check response (interfaces section 5).
+
+    `confirmations`: the data of the project's FCCONF# items (confirmed
+    needs-review items); `now` (datetime or epoch seconds, default the clock)
+    decides which of them have expired.
+    """
+    engine_docs, pending, failed, no_facts, unsupported, recordings = _classify(facts, documents)
     groups, unassigned = group_applicants(engine_docs)
     if applicant:
         groups = [g for g in groups if _applicant_matches(g, applicant)]
 
-    applicants = [evaluate_applicant(g, checklist, reference_month) for g in groups]
+    applicants = [
+        evaluate_applicant(g, checklist, reference_month, confirmations=confirmations, now=now)
+        for g in groups
+    ]
     if pending:
         names = ', '.join(p['document_name'] or p['document_id'] for p in pending)
         reason = (
@@ -2193,6 +2400,8 @@ def run_file_check(
                 notes.append(_plural(len(a['reasons']), 'issue'))
             if a['needs_review']:
                 notes.append(f"{len(a['needs_review'])} to review")
+            if a['confirmed_items']:
+                notes.append(f"{len(a['confirmed_items'])} confirmed")
             if notes:
                 part += f" ({', '.join(notes)})"
             parts.append(part)
@@ -2203,6 +2412,12 @@ def run_file_check(
         summary = (
             'No applicant could be identified '
             f'({_plural(len(unassigned), "unassigned document")})'
+        )
+    elif recordings and not (pending or failed or no_facts or unsupported):
+        summary = (
+            'No loan documents in this project, only '
+            f"{_plural(len(recordings), 'call recording')}: the file check applies "
+            'to loan files; review calls with Call QA'
         )
     else:
         summary = 'No analysed documents found in this project'
@@ -2233,5 +2448,7 @@ def run_file_check(
             }
             for d in unassigned
         ],
+        # audio / video documents: call recordings, not part of any loan file
+        'recording_documents': recordings,
         'assistant_instructions': ASSISTANT_INSTRUCTIONS,
     }

@@ -13,7 +13,8 @@ that applicant, no more and no fewer. Documents that belong to no applicant in
 the verdict (still being analysed, failed, without facts, spreadsheets,
 unassigned) are not touched. The applicant's saved eligibility inputs (the
 CIBIL page: PAN, mobile, DOB, addresses, income, loans; ELIG# items saved
-under the PAN or the name) are deleted too.
+under the PAN or the name) and the needs-review items a person confirmed for
+them (FCCONF# items: who confirmed which checklist item) are deleted too.
 
 The caller must repeat the applicant's name, as the verdict shows it, in
 `confirm`, and list the documents it confirmed in `document_ids`: the grouping
@@ -41,6 +42,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, Validation
 from app.config import get_config
 from app.ddb import get_project_item, get_table
 from app.ddb.ask_usage import TTL_ATTRIBUTE
+from app.ddb.file_check_confirmations import delete_applicant_confirmations
 from app.ddb.webhooks import DELIVERY_SK_PREFIX
 from app.file_check import (
     FileCheckNotConfiguredError,
@@ -263,7 +265,19 @@ def _erase_eligibility(project_id: str, *identifiers: str) -> int | None:
         return None
 
 
-def _not_erased(delivery_log_redacted: int | None, eligibility_deleted: int | None = 0) -> list[str]:
+def _erase_confirmations(project_id: str, document_ids: list[str], *identifiers: str) -> int | None:
+    """Delete the applicant's confirmed needs-review items (by PAN, name or document); how many, None
+    on failure."""
+    try:
+        return delete_applicant_confirmations(project_id, applicants=identifiers, document_ids=document_ids)
+    except (ClientError, BotoCoreError) as e:
+        print(f"applicant erase: review confirmations not deleted project={project_id} ({type(e).__name__})")
+        return None
+
+
+def _not_erased(
+    delivery_log_redacted: int | None, eligibility_deleted: int | None = 0, confirmations_deleted: int | None = 0
+) -> list[str]:
     days = get_config().retention_days
     items = [
         "Chat conversations and artifacts that mention the applicant: delete them in the chat and artifact "
@@ -277,6 +291,11 @@ def _not_erased(delivery_log_redacted: int | None, eligibility_deleted: int | No
             "The applicant's saved eligibility inputs (CIBIL page): they are deleted automatically "
             f"{days} days after they were first saved"
         )
+    if confirmations_deleted is None:
+        items.append(
+            "Who confirmed the applicant's needs-review items in the file check: they are deleted automatically "
+            f"{days} days after they were confirmed"
+        )
     return items
 
 
@@ -289,6 +308,7 @@ def _write_audit(
     failed: int,
     redacted: int,
     eligibility_deleted: int = 0,
+    confirmations_deleted: int = 0,
 ) -> None:
     """One ERASE# item with counts only; DynamoDB TTL deletes it after the retention period."""
     item = {
@@ -299,6 +319,7 @@ def _write_audit(
         "documents_failed": failed,
         "delivery_log_redacted": redacted,
         "eligibility_inputs_deleted": eligibility_deleted,
+        "review_confirmations_deleted": confirmations_deleted,
         TTL_ATTRIBUTE: int(erased_at.timestamp()) + get_config().retention_days * 86400,
     }
     try:
@@ -362,6 +383,7 @@ def erase_applicant(project_id: ProjectId, user_id: UserId, request: EraseReques
     redacted = _redact_delivery_log(project_id, found.applicant_name)
     # Saved under the identifier the page used (the PAN when known, else the name).
     eligibility_deleted = _erase_eligibility(project_id, request.applicant, found.applicant_name)
+    confirmations_deleted = _erase_confirmations(project_id, sorted(current), request.applicant, found.applicant_name)
     erased_at = dt.datetime.now(dt.UTC)
     _write_audit(
         project_id,
@@ -371,12 +393,13 @@ def erase_applicant(project_id: ProjectId, user_id: UserId, request: EraseReques
         failed=len(failed),
         redacted=redacted or 0,
         eligibility_deleted=eligibility_deleted or 0,
+        confirmations_deleted=confirmations_deleted or 0,
     )
     # Counts only: never the applicant's name or PAN.
     print(
         f"applicant erase user={user_id} project={project_id} documents={len(found.documents)} "
         f"deleted={len(deleted)} failed={len(failed)} delivery_log_redacted={redacted} "
-        f"eligibility_inputs_deleted={eligibility_deleted}"
+        f"eligibility_inputs_deleted={eligibility_deleted} review_confirmations_deleted={confirmations_deleted}"
     )
     return EraseResponse(
         applicant=found.applicant_name,
@@ -384,6 +407,6 @@ def erase_applicant(project_id: ProjectId, user_id: UserId, request: EraseReques
         failed=failed,
         delivery_log_redacted=redacted,
         eligibility_inputs_deleted=eligibility_deleted,
-        not_erased=_not_erased(redacted, eligibility_deleted),
+        not_erased=_not_erased(redacted, eligibility_deleted, confirmations_deleted),
         erased_at=erased_at,
     )

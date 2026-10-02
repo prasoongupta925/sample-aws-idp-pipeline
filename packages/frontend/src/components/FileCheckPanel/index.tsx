@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import type { FileCheckState } from '../../hooks/useFileCheck';
 import type { FileCheckAskState } from '../../hooks/useFileCheckAsk';
+import { useAwsClient } from '../../hooks/useAwsClient';
 import type { PainPointId, PainPointTarget } from '../../data/dsaPainPoints';
 import type { FileCheckApplicant } from '../../types/fileCheck';
 import {
@@ -31,6 +32,8 @@ import {
 import VerdictCard from './VerdictCard';
 import AskSection from './AskSection';
 import EraseApplicantDialog, { EraseResultCard } from './EraseApplicant';
+import CallProjectNote, { isCallRecordingsOnly } from './CallProjectNote';
+import { useItemConfirmations } from './confirmations';
 
 /** Where to scroll when the panel is opened from a "Show me" button. */
 export interface FileCheckFocus {
@@ -119,6 +122,16 @@ export default function FileCheckPanel({
     clearEraseError,
     dismissEraseResult,
   } = state;
+
+  // Confirm / undo a needs-review item, then run the check again: the engine
+  // shows it CONFIRMED (met) or REVIEW.
+  const { fetchApi } = useAwsClient();
+  const itemConfirmations = useItemConfirmations({
+    fetchApi,
+    projectId: result?.project_id,
+    checklistId: result?.checklist?.id,
+    onChanged: runCheck,
+  });
 
   useEffect(() => {
     if (!checklistsLoaded && !checklistsLoading && !checklistsError) {
@@ -455,14 +468,26 @@ export default function FileCheckPanel({
             className={running ? 'opacity-60 transition-opacity' : undefined}
             aria-busy={running}
           >
-            <VerdictCard
-              result={result}
-              lastRunAt={lastRunAt}
-              onPainPoint={onPainPoint}
-              product={resultProduct}
-              onEraseApplicant={openErase}
-              onOpenEligibility={onOpenEligibility}
-            />
+            {isCallRecordingsOnly(result) ? (
+              // A call project is not a NOT READY loan file: point to Call QA.
+              <CallProjectNote result={result} />
+            ) : (
+              <VerdictCard
+                result={result}
+                lastRunAt={lastRunAt}
+                onPainPoint={onPainPoint}
+                product={resultProduct}
+                onEraseApplicant={openErase}
+                onOpenEligibility={onOpenEligibility}
+                confirmations={{
+                  busyKey: itemConfirmations.busyKey,
+                  error: itemConfirmations.error,
+                  disabled: running,
+                  onConfirm: itemConfirmations.confirm,
+                  onUndo: itemConfirmations.undo,
+                }}
+              />
+            )}
           </div>
         ) : running ? (
           <div className="flex flex-col items-center justify-center gap-2 py-10 text-xs text-slate-500">

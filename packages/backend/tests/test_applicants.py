@@ -23,6 +23,7 @@ import app.ddb.client as ddb_client
 import app.routers.applicants as applicants
 import app.routers.documents as documents
 from app.config import get_config
+from app.ddb.file_check_confirmations import CONFIRMATION_SK_PREFIX, confirmation_key
 from app.routers.eligibility import INPUTS_SK_PREFIX, applicant_key
 from tests.test_file_check import (
     FUNCTION_NAME,
@@ -405,6 +406,52 @@ class TestErase:
         )
         assert len(data["documents_deleted"]) == 7
 
+    def test_confirmed_review_items_are_erased_too(self, world, capsys):
+        """Who confirmed which needs-review item goes with the documents: under the PAN or the name,
+        or made on one of the applicant's documents (under a PAN the erase is not given)."""
+
+        def confirmation(identifier, item_id, document_ids):
+            key = confirmation_key(PROJECT_ID, identifier, item_id)
+            data = {"item_id": item_id, "document_ids": document_ids, "confirmed_by": "asha.verma"}
+            return {**key, "data": data, "expires_at": 2_000_000_000}
+
+        rahul_doc, sneha_doc = ids(rahul())[0], ids(sneha())[0]
+        items = [
+            confirmation(RAHUL_PAN, "address_proof", [rahul_doc]),
+            confirmation(RAHUL, "age", [rahul_doc]),
+            confirmation("ZZZZZ9999Z", "pan_format", [rahul_doc]),
+            confirmation(SNEHA_NAME, "address_proof", [sneha_doc]),
+        ]
+        for item in items:
+            world.table.put_item(Item=item)
+
+        data = _erase().json()
+
+        left = [sk for (_, sk) in world.table.items if sk.startswith(CONFIRMATION_SK_PREFIX)]
+        assert left == [confirmation_key(PROJECT_ID, SNEHA_NAME, "address_proof")["SK"]]
+        assert not any("needs-review" in line for line in data["not_erased"])
+        (audit,) = world.table.erase_items()
+        assert audit["review_confirmations_deleted"] == 3
+        out = capsys.readouterr().out
+        assert "review_confirmations_deleted=3" in out
+        for secret in (RAHUL, RAHUL_PAN, "asha.verma"):
+            assert secret not in out, secret
+
+    def test_a_failed_confirmation_erase_is_stated(self, world):
+        failure = ClientError({"Error": {"Code": "ProvisionedThroughputExceededException"}}, "Query")
+        with patch("app.routers.applicants.delete_applicant_confirmations", side_effect=failure):
+            response = _erase()
+
+        assert response.status_code == 200  # the documents are still erased
+        data = response.json()
+        assert data["not_erased"][-1] == (
+            "Who confirmed the applicant's needs-review items in the file check: they are deleted automatically "
+            "7 days after they were confirmed"
+        )
+        assert len(data["documents_deleted"]) == 7
+        (audit,) = world.table.erase_items()
+        assert audit["review_confirmations_deleted"] == 0
+
     def test_erase_by_name_and_the_second_erase_finds_nobody(self, world):
         first = _erase("Rahul V. Deshmukh", confirm=RAHUL)
         assert first.status_code == 200
@@ -436,6 +483,7 @@ class TestErase:
             "documents_failed",
             "delivery_log_redacted",
             "eligibility_inputs_deleted",
+            "review_confirmations_deleted",
             "expires_at",
         }
         assert item["PK"] == f"PROJ#{PROJECT_ID}"

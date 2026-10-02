@@ -3,11 +3,15 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import {
   Check,
+  Headphones,
   Info,
   Landmark,
+  Loader2,
   MessageCircle,
   Minus,
   Trash2,
+  Undo2,
+  UserCheck,
   UserRound,
   X,
 } from 'lucide-react';
@@ -21,6 +25,7 @@ import type {
   PendingDocument,
 } from '../../types/fileCheck';
 import {
+  apiErrorStatus,
   applicantUsageTotal,
   consistencyTone,
   documentUsage,
@@ -34,7 +39,11 @@ import {
   type StatusTone,
   type VerdictTone,
 } from '../../lib/fileCheck';
-import { formatTokens, formatUsd } from '../../lib/fileCheckAsk';
+import {
+  RETENTION_DAYS,
+  formatTokens,
+  formatUsd,
+} from '../../lib/fileCheckAsk';
 import {
   painPointForFinding,
   type PainPointId,
@@ -42,6 +51,15 @@ import {
 import ObligationsSection from './ObligationsSection';
 import PainPointTag, { PainPointOpenContext } from './PainPointTag';
 import ReminderDraft from './ReminderDraft';
+import { recordingDocuments } from './CallProjectNote';
+import {
+  canConfirmItem,
+  confirmationDocumentIds,
+  confirmationRowKey,
+  formatConfirmedAt,
+  isConfirmedItem,
+  type ConfirmableItemRow,
+} from './confirmations';
 
 // Colours / icons only: every verdict and status comes from the engine.
 
@@ -97,6 +115,7 @@ const ITEM_STATUS_KEYS: Record<string, string> = {
   MISSING: 'fileCheck.status.missing',
   REVIEW: 'fileCheck.status.review',
   'NEEDS REVIEW': 'fileCheck.status.review',
+  CONFIRMED: 'fileCheck.status.confirmed',
 };
 
 const CONSISTENCY_STATUS_KEYS: Record<string, string> = {
@@ -177,6 +196,7 @@ function FindingRow({
   documents,
   missingMonths,
   painPoint,
+  children,
 }: {
   tone: StatusTone;
   label: string;
@@ -186,6 +206,8 @@ function FindingRow({
   documents: string[];
   missingMonths?: string[];
   painPoint?: PainPointId | null;
+  /** Shown under the finding, e.g. the Confirm button of a review item. */
+  children?: ReactNode;
 }) {
   const { t } = useTranslation();
   // The engine usually names the documents inside the detail already.
@@ -240,6 +262,7 @@ function FindingRow({
             {t('fileCheck.documentsLabel', { names: documents.join(', ') })}
           </p>
         )}
+        {children}
       </div>
     </li>
   );
@@ -256,31 +279,199 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-function ItemRows({ rows }: { rows: FileCheckItemRow[] }) {
+const ACTION_BUTTON_CLASS =
+  'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1';
+
+/** Confirm / undo of the needs-review checklist items (see ./confirmations). */
+export interface VerdictConfirmations {
+  /** Row (confirmationRowKey) whose request is in flight. */
+  busyKey: string | null;
+  error: { key: string; error: unknown } | null;
+  /** A check is running: the buttons wait for its verdict. */
+  disabled?: boolean;
+  onConfirm: (applicant: FileCheckApplicant, row: ConfirmableItemRow) => void;
+  onUndo: (applicant: FileCheckApplicant, row: ConfirmableItemRow) => void;
+}
+
+function describeConfirmError(t: TFunction, error: unknown): string {
+  const status = apiErrorStatus(error);
+  if (status !== null) return t('fileCheck.confirm.failed', { status });
+  return t('fileCheck.confirm.failedOffline', {
+    message: error instanceof Error ? error.message : String(error),
+  });
+}
+
+/** "Confirm" on a needs-review item: the person checked it, the engine counts it as met. */
+function ConfirmControls({
+  applicant,
+  row,
+  confirmations,
+}: {
+  applicant: FileCheckApplicant;
+  row: ConfirmableItemRow;
+  confirmations: VerdictConfirmations;
+}) {
+  const { t } = useTranslation();
+  const key = confirmationRowKey(applicant, row);
+  const busy = confirmations.busyKey === key;
+  const noDocuments = confirmationDocumentIds(applicant).length === 0;
+  const error =
+    confirmations.error?.key === key ? confirmations.error.error : null;
+  return (
+    <div className="mt-1 space-y-1">
+      <button
+        type="button"
+        onClick={() => confirmations.onConfirm(applicant, row)}
+        disabled={
+          confirmations.busyKey !== null ||
+          !!confirmations.disabled ||
+          noDocuments
+        }
+        title={
+          noDocuments
+            ? t('fileCheck.confirm.noDocuments')
+            : t('fileCheck.confirm.title', { days: RETENTION_DAYS })
+        }
+        className={`${ACTION_BUTTON_CLASS} border-emerald-200 bg-emerald-50/70 text-emerald-800 hover:bg-emerald-100 focus-visible:ring-emerald-500 disabled:pointer-events-none disabled:opacity-50 dark:border-emerald-800/50 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/40`}
+        data-testid="confirm-item"
+      >
+        {busy ? (
+          <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+        ) : (
+          <UserCheck className="h-3 w-3" aria-hidden="true" />
+        )}
+        {t('fileCheck.confirm.action')}
+      </button>
+      {error != null && (
+        <p
+          role="alert"
+          className="break-words text-[10px] text-red-700 dark:text-red-400"
+        >
+          {describeConfirmError(t, error)}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** "Confirmed by <user> at <time>" on a CONFIRMED item, with Undo. */
+function ConfirmedLine({
+  applicant,
+  row,
+  confirmations,
+}: {
+  applicant: FileCheckApplicant;
+  row: ConfirmableItemRow;
+  confirmations?: VerdictConfirmations;
+}) {
+  const { t } = useTranslation();
+  const confirmation = row.confirmation;
+  const user = confirmation?.confirmed_by || t('fileCheck.confirm.unnamedUser');
+  const time = formatConfirmedAt(confirmation?.confirmed_at);
+  const key = confirmationRowKey(applicant, row);
+  const busy = confirmations?.busyKey === key;
+  const error =
+    confirmations?.error?.key === key ? confirmations.error.error : null;
+  return (
+    <div className="mt-0.5 space-y-1">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <p
+          className="text-[11px] leading-snug text-emerald-800 dark:text-emerald-300"
+          title={confirmation?.confirmed_at ?? undefined}
+          data-testid="confirmed-by"
+        >
+          {time
+            ? t('fileCheck.confirm.confirmedBy', { user, time })
+            : t('fileCheck.confirm.confirmedByUnknownTime', { user })}
+        </p>
+        {confirmations && (
+          <button
+            type="button"
+            onClick={() => confirmations.onUndo(applicant, row)}
+            disabled={
+              confirmations.busyKey !== null || !!confirmations.disabled
+            }
+            title={t('fileCheck.confirm.undoTitle')}
+            className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-700 disabled:pointer-events-none disabled:opacity-50 dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-slate-200"
+            data-testid="undo-confirmation"
+          >
+            {busy ? (
+              <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+            ) : (
+              <Undo2 className="h-3 w-3" aria-hidden="true" />
+            )}
+            {t('fileCheck.confirm.undo')}
+          </button>
+        )}
+      </div>
+      {error != null && (
+        <p
+          role="alert"
+          className="break-words text-[10px] text-red-700 dark:text-red-400"
+        >
+          {describeConfirmError(t, error)}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function ItemRows({
+  rows,
+  applicant,
+  confirmations,
+}: {
+  rows: FileCheckItemRow[];
+  applicant: FileCheckApplicant;
+  confirmations?: VerdictConfirmations;
+}) {
   const { t } = useTranslation();
   return (
     <ul className="space-y-1">
-      {rows.map((row, i) => (
-        <FindingRow
-          key={`${row.item_id ?? row.item}-${i}`}
-          tone={itemTone(row.status, row.required !== false)}
-          label={row.item}
-          statusText={statusLabel(t, row.status, ITEM_STATUS_KEYS)}
-          optional={row.required === false}
-          detail={row.detail}
-          documents={row.documents ?? []}
-          missingMonths={
-            normalizeStatus(row.status) === 'MISSING'
-              ? (row.missing_months ?? undefined)
-              : undefined
-          }
-          painPoint={painPointForFinding({
-            kind: 'item',
-            status: row.status,
-            required: row.required,
-          })}
-        />
-      ))}
+      {rows.map((row: ConfirmableItemRow, i) => {
+        const confirmed = isConfirmedItem(row);
+        return (
+          <FindingRow
+            key={`${row.item_id ?? row.item}-${i}`}
+            tone={
+              confirmed ? 'ok' : itemTone(row.status, row.required !== false)
+            }
+            label={row.item}
+            statusText={statusLabel(t, row.status, ITEM_STATUS_KEYS)}
+            optional={row.required === false}
+            // The line below names who confirmed it, in the viewer's time.
+            detail={confirmed && row.confirmation ? '' : row.detail}
+            documents={row.documents ?? []}
+            missingMonths={
+              normalizeStatus(row.status) === 'MISSING'
+                ? (row.missing_months ?? undefined)
+                : undefined
+            }
+            painPoint={painPointForFinding({
+              kind: 'item',
+              status: row.status,
+              required: row.required,
+            })}
+          >
+            {confirmed ? (
+              <ConfirmedLine
+                applicant={applicant}
+                row={row}
+                confirmations={confirmations}
+              />
+            ) : (
+              confirmations &&
+              canConfirmItem(row) && (
+                <ConfirmControls
+                  applicant={applicant}
+                  row={row}
+                  confirmations={confirmations}
+                />
+              )
+            )}
+          </FindingRow>
+        );
+      })}
     </ul>
   );
 }
@@ -359,9 +550,6 @@ export function usageTotalText(
     : main;
 }
 
-const ACTION_BUTTON_CLASS =
-  'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1';
-
 interface ApplicantSectionProps {
   applicant: FileCheckApplicant;
   checklistId?: string | null;
@@ -375,6 +563,8 @@ interface ApplicantSectionProps {
   onErase?: (applicant: FileCheckApplicant, trigger: HTMLElement) => void;
   /** Opens Eligibility & lenders for the applicant. */
   onOpenEligibility?: (applicant: FileCheckApplicant) => void;
+  /** Confirm / undo on the needs-review checklist items. */
+  confirmations?: VerdictConfirmations;
 }
 
 function ApplicantSection({
@@ -385,6 +575,7 @@ function ApplicantSection({
   pendingDocuments,
   onErase,
   onOpenEligibility,
+  confirmations,
 }: ApplicantSectionProps) {
   const { t } = useTranslation();
   const reminderId = useId();
@@ -515,7 +706,11 @@ function ApplicantSection({
 
       {items.length > 0 && (
         <Section title={t('fileCheck.sections.checklist')}>
-          <ItemRows rows={items} />
+          <ItemRows
+            rows={items}
+            applicant={applicant}
+            confirmations={confirmations}
+          />
         </Section>
       )}
 
@@ -649,6 +844,30 @@ function SkippedDocuments({ result }: { result: FileCheckResult }) {
   );
 }
 
+/** Call recordings next to a loan file: not checked, reviewed with Call QA. */
+function RecordingDocuments({ result }: { result: FileCheckResult }) {
+  const { t } = useTranslation();
+  const recordings = recordingDocuments(result);
+  if (recordings.length === 0) return null;
+  return (
+    <div
+      className="rounded-lg border border-sky-200/80 bg-sky-50/50 px-2.5 py-2 dark:border-sky-800/40 dark:bg-sky-900/10"
+      data-testid="recording-documents"
+    >
+      <p className="flex items-center gap-1.5 text-[11px] font-semibold text-sky-900 dark:text-sky-200">
+        <Headphones className="h-3.5 w-3.5" aria-hidden="true" />
+        {t('fileCheck.callProject.mixedTitle', { count: recordings.length })}
+      </p>
+      <p className="mt-0.5 break-words text-[11px] text-slate-600 dark:text-slate-300">
+        {recordings.map((d) => d.document_name || d.document_id).join(', ')}
+      </p>
+      <p className="mt-0.5 text-[10px] text-slate-500 dark:text-slate-400">
+        {t('fileCheck.callProject.mixedHint')}
+      </p>
+    </div>
+  );
+}
+
 interface VerdictCardProps {
   result: FileCheckResult;
   lastRunAt?: Date | null;
@@ -663,6 +882,8 @@ interface VerdictCardProps {
   ) => void;
   /** Shows "Eligibility & lenders" per applicant. */
   onOpenEligibility?: (applicant: FileCheckApplicant) => void;
+  /** Shows Confirm on needs-review checklist items and Undo on confirmed ones. */
+  confirmations?: VerdictConfirmations;
 }
 
 export default function VerdictCard({
@@ -672,6 +893,7 @@ export default function VerdictCard({
   product,
   onEraseApplicant,
   onOpenEligibility,
+  confirmations,
 }: VerdictCardProps) {
   const { t } = useTranslation();
   const applicants = result.applicants ?? [];
@@ -766,10 +988,12 @@ export default function VerdictCard({
             pendingDocuments={result.pending_documents ?? []}
             onErase={onEraseApplicant}
             onOpenEligibility={onOpenEligibility}
+            confirmations={confirmations}
           />
         ))}
 
         <SkippedDocuments result={result} />
+        <RecordingDocuments result={result} />
       </div>
     </PainPointOpenContext.Provider>
   );

@@ -8,16 +8,25 @@ the request, checks the project exists and returns the engine's result.
 POST .../file-check/ask answers one question about the file from that verdict
 and the documents' facts and page text only (Amazon Nova 2 Lite), and
 GET .../file-check/usage reports the Ask calls' tokens and cost (last 7 days).
+
+POST .../file-check/confirmations records that the signed-in user checked a
+needs-review checklist item (one the rules cannot verify) of one applicant;
+DELETE takes it back. The engine then counts the item as met (CONFIRMED), so a
+checklist with required review items can reach READY. Confirmations are kept
+for the retention period (app/ddb/file_check_confirmations.py).
 """
 
 import datetime as dt
 from typing import Annotated, Any, Literal
 
+from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Body, Header, HTTPException, Path
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
+from app.config import get_config
 from app.ddb import get_project_item
 from app.ddb.ask_usage import sum_ask_usage
+from app.ddb.file_check_confirmations import delete_confirmation, put_confirmation
 from app.file_check import (
     TOOL_LIST_CHECKLISTS,
     TOOL_RUN_FILE_CHECK,
@@ -179,7 +188,10 @@ class ApplicantDocument(BaseModel):
     document_id: str | None = None
     document_name: str
     doc_type: str = Field(
-        description="loan_application, identity_details, salary_slip, bank_statement, form16_itr or other"
+        description=(
+            "loan_application, identity_details, salary_slip, bank_statement, form16_itr, credit_report, "
+            "rent_agreement, pension_slip or other"
+        )
     )
     grounded: bool | None = Field(
         default=None, description="The document had a machine text layer to verify values against"
@@ -193,16 +205,31 @@ class ApplicantDocument(BaseModel):
     )
 
 
+class ItemConfirmationInfo(BaseModel):
+    confirmed_by: str | None = Field(default=None, description="x-user-id of the person who confirmed the item")
+    confirmed_at: str | None = Field(default=None, description="ISO timestamp (UTC)")
+
+
 class ChecklistItemResult(BaseModel):
     item_id: str
     item: str
     required: bool
-    status: Literal["PRESENT", "MISSING", "REVIEW"]
-    ok: bool | None = Field(description="null for REVIEW (manual) items")
+    status: Literal["PRESENT", "MISSING", "REVIEW", "CONFIRMED"] = Field(
+        description=(
+            "REVIEW: a manual item a person must check; CONFIRMED: a manual item a person confirmed "
+            "(POST .../file-check/confirmations), which counts as met like PRESENT"
+        )
+    )
+    ok: bool | None = Field(description="null for REVIEW (manual) items, true for CONFIRMED ones")
     detail: str = Field(description="Human-readable finding citing document names and months")
     documents: list[str] = Field(description="Names of the documents this item used")
     required_months: list[str] | None = Field(default=None, description="monthly / period items: YYYY-MM needed")
     missing_months: list[str] | None = Field(default=None, description="monthly / period items: YYYY-MM missing")
+    confirmation: ItemConfirmationInfo | None = Field(default=None, description="CONFIRMED items: who and when")
+    stale_confirmation: ItemConfirmationInfo | None = Field(
+        default=None,
+        description="REVIEW items confirmed before a document they were confirmed on left the file: confirm again",
+    )
 
 
 class ConsistencyResult(BaseModel):
@@ -234,6 +261,13 @@ class IncomeSummary(BaseModel):
     bank_credits: list[BankCredit] = []
 
 
+class ConfirmedItem(BaseModel):
+    item_id: str
+    item: str
+    confirmed_by: str | None = None
+    confirmed_at: str | None = None
+
+
 class ApplicantResult(BaseModel):
     applicant: str
     pan: str | None = None
@@ -256,6 +290,9 @@ class ApplicantResult(BaseModel):
         default=[], description="Consistency findings with status REVIEW; reported, the verdict is unchanged"
     )
     manual_review: list[str] = Field(description="Items a person must verify (not decided by the rules)")
+    confirmed_items: list[ConfirmedItem] = Field(
+        default=[], description="Manual items a person confirmed; they count as met"
+    )
     obligations: dict[str, Any] | None = Field(
         default=None, description="Existing obligations from the bank statement and the application, if computed"
     )
@@ -294,6 +331,12 @@ class UnassignedDocument(BaseModel):
     doc_type: str
 
 
+class RecordingDocument(BaseModel):
+    document_id: str | None = None
+    document_name: str | None = None
+    file_type: str | None = None
+
+
 class FileCheckResponse(BaseModel):
     project_id: str | None = None
     engine_version: str
@@ -309,6 +352,88 @@ class FileCheckResponse(BaseModel):
     no_facts_documents: list[NoFactsDocument]
     unsupported_documents: list[UnsupportedDocument]
     unassigned_documents: list[UnassignedDocument]
+    recording_documents: list[RecordingDocument] = Field(
+        default=[],
+        description="Audio / video documents: call recordings (review them with Call QA), never part of a loan file",
+    )
+
+
+# ------------------------------------------------------------------ confirmations
+# Item ids of the bundled checklists look like ss_pl_02 or x05.
+ItemId = Annotated[str, StringConstraints(strip_whitespace=True, pattern=r"^[A-Za-z0-9_.-]{1,64}$")]
+ConfirmedDocumentId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=256)]
+# The applicant as the verdict shows it; rejecting control characters keeps it out of trouble.
+ApplicantRef = Annotated[str, StringConstraints(strip_whitespace=True, pattern=r"^[^\x00-\x1f\x7f]{1,200}$")]
+
+
+class ConfirmItemRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {
+                    "applicant": "BQXPD4821K",
+                    "item_id": "ss_pl_02",
+                    "checklist_id": "ss_pl_sal",
+                    "document_ids": ["doc_01", "doc_02", "doc_03"],
+                }
+            ]
+        },
+    )
+
+    applicant: ApplicantRef = Field(
+        description="The applicant as the verdict shows it: its `pan` when it has one, else its name"
+    )
+    item_id: ItemId = Field(description="`checklist[].item_id` of a REVIEW item of that applicant")
+    checklist_id: str | None = Field(
+        default=None,
+        pattern=r"^[a-z0-9_]+$",
+        max_length=64,
+        description="Checklist the item was confirmed under (kept for the record; item ids carry across checklists)",
+    )
+    document_ids: list[ConfirmedDocumentId] = Field(
+        min_length=1,
+        max_length=500,
+        description=(
+            "The applicant's documents in the verdict (`documents[].document_id`): the confirmation holds "
+            "while all of them are still in the applicant's file"
+        ),
+    )
+
+
+class UndoConfirmationRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {"applicant": "BQXPD4821K", "applicant_name": "Rahul Vijay Deshmukh", "item_id": "ss_pl_02"},
+                {"applicant": "Rahul Vijay Deshmukh", "item_id": "x02"},
+            ]
+        },
+    )
+
+    applicant: ApplicantRef = Field(description="The applicant as the verdict shows it: its `pan`, else its name")
+    applicant_name: ApplicantRef | None = Field(
+        default=None,
+        description=(
+            "The applicant's name too, when `applicant` is the PAN: a confirmation saved under the name "
+            "(before a PAN was read) still applies, so it is removed as well"
+        ),
+    )
+    item_id: ItemId
+
+
+class ItemConfirmation(BaseModel):
+    item_id: str
+    checklist_id: str | None = None
+    confirmed_by: str = Field(description="x-user-id of the caller")
+    confirmed_at: str = Field(description="ISO timestamp (UTC)")
+    expires_at: dt.datetime = Field(description="When the confirmation is deleted (retention period)")
+
+
+class UndoConfirmationResponse(BaseModel):
+    item_id: str
+    deleted: bool = Field(description="false when there was no such confirmation (already undone or expired)")
 
 
 # ------------------------------------------------------------------ ask
@@ -505,3 +630,69 @@ def file_check_usage(project_id: ProjectId, user_id: UserId) -> AskUsageResponse
     usage = sum_ask_usage(project_id, window_days=USAGE_WINDOW_DAYS)
     print(f"file-check usage user={user_id} project={project_id} calls={usage['calls']}")
     return AskUsageResponse.model_validate(usage)
+
+
+_STORAGE_ERRORS: dict[int | str, dict[str, Any]] = {
+    404: _ERRORS[404],
+    502: {"model": ErrorResponse, "description": "The confirmation could not be stored"},
+}
+
+
+@router.post(
+    "/file-check/confirmations",
+    responses=_STORAGE_ERRORS,
+    summary="Confirm a needs-review checklist item of one applicant",
+)
+def confirm_item(project_id: ProjectId, user_id: UserId, request: ConfirmItemRequest) -> ItemConfirmation:
+    """Record that the caller checked a REVIEW (manual) checklist item, such as an address proof.
+
+    The next file check shows the item as CONFIRMED, with who and when, and
+    counts it as met; it does so while every document in `document_ids` is
+    still in the applicant's file, and for the retention period. Confirming
+    again replaces the earlier confirmation. Only manual items can be
+    confirmed: a confirmation never makes a missing document present.
+    """
+    _require_project(project_id)
+    config = get_config()
+    try:
+        data = put_confirmation(
+            project_id,
+            applicant=request.applicant,
+            item_id=request.item_id,
+            checklist_id=request.checklist_id,
+            document_ids=request.document_ids,
+            confirmed_by=user_id,
+            retention_days=config.retention_days,
+        )
+    except (BotoCoreError, ClientError) as e:
+        print(f"file-check confirm failed user={user_id} project={project_id} ({type(e).__name__})")
+        raise HTTPException(status_code=502, detail="The confirmation could not be stored") from e
+    # The item id only: the applicant is personal data.
+    print(f"file-check confirm user={user_id} project={project_id} item={request.item_id}")
+    return ItemConfirmation(
+        item_id=data["item_id"],
+        checklist_id=data["checklist_id"],
+        confirmed_by=data["confirmed_by"],
+        confirmed_at=data["confirmed_at"],
+        expires_at=dt.datetime.fromtimestamp(data["expires_at"], dt.UTC),
+    )
+
+
+@router.delete(
+    "/file-check/confirmations",
+    responses=_STORAGE_ERRORS,
+    summary="Undo the confirmation of a needs-review checklist item",
+)
+def undo_confirmation(
+    project_id: ProjectId, user_id: UserId, request: Annotated[UndoConfirmationRequest, Body()]
+) -> UndoConfirmationResponse:
+    """The item is REVIEW again in the next file check. The applicant travels in the body, not the URL."""
+    _require_project(project_id)
+    applicants = [request.applicant, *([request.applicant_name] if request.applicant_name else [])]
+    try:
+        deleted = delete_confirmation(project_id, applicants=applicants, item_id=request.item_id)
+    except (BotoCoreError, ClientError) as e:
+        print(f"file-check undo confirm failed user={user_id} project={project_id} ({type(e).__name__})")
+        raise HTTPException(status_code=502, detail="The confirmation could not be removed") from e
+    print(f"file-check undo confirm user={user_id} project={project_id} item={request.item_id} deleted={deleted}")
+    return UndoConfirmationResponse(item_id=request.item_id, deleted=deleted)

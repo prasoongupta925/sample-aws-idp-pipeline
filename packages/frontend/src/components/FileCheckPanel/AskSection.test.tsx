@@ -11,6 +11,11 @@ import type { FileCheckAskState } from '../../hooks/useFileCheckAsk';
 import type { FileCheckState } from '../../hooks/useFileCheck';
 import { ASK_DEFAULT_PRICING } from '../../lib/fileCheckAsk';
 
+// The panel signs its confirm / undo calls with the app's AWS client.
+vi.mock('../../hooks/useAwsClient', () => ({
+  useAwsClient: () => ({ fetchApi: async () => undefined }),
+}));
+
 const i18n = i18next.createInstance();
 
 beforeAll(async () => {

@@ -120,7 +120,10 @@ export interface ApplicantUsageTotal {
 export interface ApplicantDocument {
   document_id?: string | null;
   document_name: string;
-  /** loan_application, identity_details, salary_slip, bank_statement, form16_itr or other */
+  /**
+   * loan_application, identity_details, salary_slip, bank_statement,
+   * form16_itr, credit_report, rent_agreement, pension_slip or other
+   */
   doc_type: string;
   grounded?: boolean | null;
   grounding_notes: string[];

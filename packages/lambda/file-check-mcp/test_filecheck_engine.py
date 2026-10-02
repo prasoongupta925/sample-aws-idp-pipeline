@@ -1496,3 +1496,308 @@ def test_mask_pan():
     assert engine.mask_pan(' bqxpd 4821k ') == 'XXXXXX821K'
     assert engine.mask_pan('AB12') == 'XXXX'
     assert engine.mask_pan(None) is None and engine.mask_pan('') is None
+
+
+# ------------------------------------------------------------------ confirmations
+CONFIRMED_AT = '2026-10-01T08:35:00+00:00'  # 14:05 IST
+NOW = 1_790_000_000  # epoch seconds, 2026-09-21; confirmations below expire later
+
+
+def _address_proof_checklist(pl):
+    """The default checklist plus a required manual item, like the brand rule sets."""
+    custom = copy.deepcopy(pl)
+    custom['items'].append(
+        {'id': 'address_proof', 'label': 'Address proof', 'doc_types': [],
+         'required': True, 'rule': {'kind': 'manual'}})
+    return custom
+
+
+def _confirmation(applicant, item_id, facts, **overrides):
+    return {
+        'applicant_key': engine.applicant_key(applicant),
+        'item_id': item_id,
+        'checklist_id': 'ss_pl_sal',
+        'document_ids': [f['document_id'] for f in facts],
+        'confirmed_by': 'asha.verma',
+        'confirmed_at': CONFIRMED_AT,
+        'expires_at': NOW + 7 * 86400,
+        **overrides,
+    }
+
+
+def test_applicant_key_ignores_case_and_spacing_and_tells_pan_from_name():
+    assert engine.applicant_key('BQXPD4821K') == engine.applicant_key(' bqxpd 4821k ')
+    assert engine.applicant_key('Rahul  Vijay Deshmukh') == engine.applicant_key('rahul vijay deshmukh')
+    assert engine.applicant_key('BQXPD4821K') != engine.applicant_key('Rahul Vijay Deshmukh')
+    # not a PAN shape: keyed as a name (the backend computes the same)
+    assert engine.applicant_key('BQXPD48Z1K') == engine.applicant_key('bqxpd48z1k')
+    key = engine.applicant_key('BQXPD4821K')
+    assert len(key) == 40 and 'BQXPD' not in key.upper()
+
+
+def test_confirmed_manual_item_counts_as_met(pl):
+    custom = _address_proof_checklist(pl)
+    facts = rahul()
+    conf = _confirmation('BQXPD4821K', 'address_proof', facts)
+    res = engine.run_file_check(facts, custom, confirmations=[conf], now=NOW)
+    a = res['applicants'][0]
+    row = _by_id(a['checklist'], 'item_id')['address_proof']
+    assert row['status'] == 'CONFIRMED' and row['ok'] is True
+    assert row['detail'] == 'confirmed by asha.verma on 01 Oct 2026, 14:05 IST'
+    assert row['confirmation'] == {'confirmed_by': 'asha.verma', 'confirmed_at': CONFIRMED_AT}
+    assert 'stale_confirmation' not in row
+    assert a['verdict'] == 'READY' and res['overall_verdict'] == 'READY'
+    assert a['reasons'] == [] and a['manual_review'] == []
+    assert a['confirmed_items'] == [
+        {'item_id': 'address_proof', 'item': 'Address proof',
+         'confirmed_by': 'asha.verma', 'confirmed_at': CONFIRMED_AT}]
+    assert res['summary'] == '1 applicant: Rahul Vijay Deshmukh READY (1 confirmed)'
+    # without the confirmation the same file needs a person
+    plain = engine.run_file_check(facts, custom, now=NOW)['applicants'][0]
+    assert plain['verdict'] == 'NOT READY' and plain['confirmed_items'] == []
+    assert _by_id(plain['checklist'], 'item_id')['address_proof']['status'] == 'REVIEW'
+
+
+def test_confirmation_by_name_and_the_latest_one_wins(pl):
+    custom = _address_proof_checklist(pl)
+    facts = rahul()
+    older = _confirmation('BQXPD4821K', 'address_proof', facts, confirmed_by='rohan.iyer',
+                          confirmed_at='2026-09-30T05:00:00+00:00')
+    newer = _confirmation('Rahul Vijay Deshmukh', 'address_proof', facts)
+    for confs in ([older, newer], [newer, older]):
+        a = engine.run_file_check(facts, custom, confirmations=confs, now=NOW)['applicants'][0]
+        row = _by_id(a['checklist'], 'item_id')['address_proof']
+        assert row['status'] == 'CONFIRMED'
+        assert row['confirmation']['confirmed_by'] == 'asha.verma'
+
+
+def test_confirmation_applies_only_to_its_applicant(pl):
+    custom = _address_proof_checklist(pl)
+    facts = rahul() + sneha()
+    conf = _confirmation('BQXPD4821K', 'address_proof', rahul())
+    res = engine.run_file_check(facts, custom, confirmations=[conf], now=NOW)
+    rows = {a['applicant']: _by_id(a['checklist'], 'item_id')['address_proof'] for a in res['applicants']}
+    assert rows['Rahul Vijay Deshmukh']['status'] == 'CONFIRMED'
+    assert rows['Sneha Anil Kulkarni']['status'] == 'REVIEW'
+    # Sneha's key with Rahul's documents: not her file, so it does not apply
+    wrong = _confirmation('CKRPK7314M', 'address_proof', rahul())
+    res = engine.run_file_check(facts, custom, confirmations=[wrong], now=NOW)
+    sneha_row = _by_id(res['applicants'][1]['checklist'], 'item_id')['address_proof']
+    assert res['applicants'][1]['applicant'] == 'Sneha Anil Kulkarni'
+    assert sneha_row['status'] == 'REVIEW' and 'stale_confirmation' in sneha_row
+
+
+def test_confirmation_goes_stale_when_a_document_leaves_the_file(pl):
+    custom = _address_proof_checklist(pl)
+    facts = rahul()
+    conf = _confirmation('BQXPD4821K', 'address_proof', facts)
+    # a document added since the confirmation keeps it
+    extra = copy.deepcopy(facts[2])
+    extra['document_id'], extra['document_name'] = 'r-new', '08_salary_slip_copy.pdf'
+    a = engine.run_file_check(facts + [extra], custom, confirmations=[conf], now=NOW)['applicants'][0]
+    assert _by_id(a['checklist'], 'item_id')['address_proof']['status'] == 'CONFIRMED'
+    # a document it was made on was deleted (or erased): confirm again
+    a = engine.run_file_check(facts[1:], custom, confirmations=[conf], now=NOW)['applicants'][0]
+    row = _by_id(a['checklist'], 'item_id')['address_proof']
+    assert row['status'] == 'REVIEW' and row['ok'] is None
+    assert row['stale_confirmation'] == {'confirmed_by': 'asha.verma', 'confirmed_at': CONFIRMED_AT}
+    assert row['detail'] == (
+        'cannot be verified automatically; review manually; confirmed by asha.verma on '
+        '01 Oct 2026, 14:05 IST, but a document it was made on is no longer in this file: '
+        'confirm again')
+    assert a['verdict'] == 'NOT READY' and a['manual_review'] == ['Address proof']
+    assert a['reasons'][-1].startswith(f'REVIEW {EN} Address proof: ')
+
+
+def test_expired_and_malformed_confirmations_are_ignored(pl):
+    custom = _address_proof_checklist(pl)
+    facts = rahul()
+    good = _confirmation('BQXPD4821K', 'address_proof', facts)
+    for bad in (
+        {**good, 'expires_at': NOW},  # past expires_at, not yet removed by TTL
+        {**good, 'document_ids': []},
+        {**good, 'document_ids': 'r-01'},
+        {**good, 'applicant_key': ''},
+        {**good, 'item_id': None},
+        'FCCONF#x',
+        None,
+    ):
+        a = engine.run_file_check(facts, custom, confirmations=[bad], now=NOW)['applicants'][0]
+        row = _by_id(a['checklist'], 'item_id')['address_proof']
+        assert row['status'] == 'REVIEW', bad
+        assert 'stale_confirmation' not in row
+    # without expires_at the item's TTL is trusted
+    nottl = {k: v for k, v in good.items() if k != 'expires_at'}
+    a = engine.run_file_check(facts, custom, confirmations=[nottl], now=NOW)['applicants'][0]
+    assert a['verdict'] == 'READY'
+
+
+def test_confirmations_never_meet_document_items(pl):
+    facts = sneha()
+    confs = [_confirmation('CKRPK7314M', item, facts)
+             for item in ('salary_slips', 'bank_statement', 'form16_itr')]
+    a = engine.run_file_check(facts, pl, confirmations=confs, now=NOW)['applicants'][0]
+    rows = _by_id(a['checklist'], 'item_id')
+    assert [rows[i]['status'] for i in ('salary_slips', 'bank_statement', 'form16_itr')] == [
+        'MISSING', 'MISSING', 'MISSING']
+    assert a['verdict'] == 'NOT READY' and len(a['reasons']) == 5
+    assert a['confirmed_items'] == []
+
+
+def test_confirmations_do_not_change_the_demo_verdicts(pl):
+    """The default checklist has no manual items: Rahul READY, Sneha NOT READY
+    (5 issues), Amit NOT READY on PAN, with or without confirmations."""
+    facts = rahul() + sneha() + amit()
+    confs = [_confirmation(pan, 'x02', facts) for pan in ('BQXPD4821K', 'CKRPK7314M', 'DMVPP5928L')]
+    res = engine.run_file_check(facts, pl, confirmations=confs, now=NOW)
+    verdicts = {a['applicant']: (a['verdict'], len(a['reasons'])) for a in res['applicants']}
+    assert verdicts == {
+        'Rahul Vijay Deshmukh': ('READY', 0),
+        'Sneha Anil Kulkarni': ('NOT READY', 5),
+        'Amit Suresh Patil': ('NOT READY', 1),
+    }
+    assert res == engine.run_file_check(facts, pl, now=NOW)
+
+
+def _complete_rahul():
+    """Rahul's file plus a second Form-16 / ITR year: every document item of every brand rule set."""
+    facts = rahul()
+    f16 = copy.deepcopy(facts[-1])
+    f16['document_id'], f16['document_name'] = 'r-08', '08_form16_itr_summary_FY2024-25.pdf'
+    f16['fields'].update(financial_year='2024-25', gross_salary=1080000)
+    return facts + [f16]
+
+
+def test_every_brand_rule_set_reaches_ready_once_its_review_items_are_confirmed(catalog):
+    facts = _complete_rahul()
+    brand = [cl for cl in catalog['checklists'] if cl['id'].startswith(('ss_', 'ls_'))]
+    assert len(brand) == 22
+    for cl in brand:
+        required = [i for i in cl['items'] if i['rule']['kind'] == 'manual' and engine._item_required(i)]
+        confs = [_confirmation('BQXPD4821K', i['id'], facts) for i in required]
+        before = engine.run_file_check(facts, cl, confirmations=confs[:-1], now=NOW)['applicants'][0]
+        assert before['verdict'] == 'NOT READY', cl['id']
+        assert before['reasons'] == [
+            f"REVIEW {EN} {required[-1]['label']}: cannot be verified automatically; review manually"
+        ], cl['id']
+        after = engine.run_file_check(facts, cl, confirmations=confs, now=NOW)['applicants'][0]
+        assert after['verdict'] == 'READY', (cl['id'], after['reasons'])
+        assert [c['item_id'] for c in after['confirmed_items']] == [i['id'] for i in required]
+        # optional review items stay review-only: they never blocked READY
+        assert len(after['manual_review']) == sum(
+            1 for i in cl['items'] if i['rule']['kind'] == 'manual' and not engine._item_required(i))
+
+
+def test_assistant_instructions_mention_confirmed_items_and_recordings(pl):
+    text = engine.run_file_check(rahul(), pl)['assistant_instructions']
+    assert 'CONFIRMED' in text and 'recording_documents' in text and 'Call QA Reviewer' in text
+
+
+# ------------------------------------------------------------------ call recordings
+def _call(document_id='c-01', name='call_sneha_2026-09-29.wav', file_type='audio/wav', status='completed'):
+    return {'document_id': document_id, 'project_id': 'p1', 'name': name,
+            'file_type': file_type, 'status': status}
+
+
+def _media_facts(document_id='c-01', name='call_sneha_2026-09-29.wav'):
+    """The facts step's record for a recording: skipped, reason media."""
+    return {'schema_version': 1, 'document_id': document_id, 'project_id': 'p1',
+            'document_name': name, 'file_type': 'audio/wav', 'status': 'skipped',
+            'reason': 'media', 'fields': {}}
+
+
+def test_call_recordings_project_is_not_a_loan_file(pl):
+    docs = [_call(), _call('c-02', 'call_rahul.mp3', 'audio/mpeg', 'processing')]
+    res = engine.run_file_check([_media_facts()], pl, documents=docs)
+    assert res['applicants'] == []
+    assert res['recording_documents'] == [  # in document-name order
+        {'document_id': 'c-02', 'document_name': 'call_rahul.mp3', 'file_type': 'audio/mpeg'},
+        {'document_id': 'c-01', 'document_name': 'call_sneha_2026-09-29.wav', 'file_type': 'audio/wav'},
+    ]
+    assert res['pending_documents'] == [] and res['no_facts_documents'] == []
+    assert res['overall_verdict'] == 'NOT READY'
+    assert res['summary'] == (
+        'No loan documents in this project, only 2 call recordings: the file check applies to '
+        'loan files; review calls with Call QA')
+    # the facts-only form (no DOC# items) says the same
+    facts_only = engine.run_file_check([_media_facts()], pl)
+    assert facts_only['recording_documents'] == [
+        {'document_id': 'c-01', 'document_name': 'call_sneha_2026-09-29.wav', 'file_type': 'audio/wav'}]
+    assert facts_only['no_facts_documents'] == []
+    assert facts_only['summary'].startswith('No loan documents in this project, only 1 call recording:')
+
+
+def test_recordings_never_hold_up_a_loan_file(pl):
+    facts = rahul()
+    docs = doc_items(facts) + [
+        _call(status='processing'),  # still being transcribed
+        _call('c-02', 'Call 2.M4A', 'application/octet-stream'),  # no MIME type: by extension
+        _call('c-03', 'kyc_video.mp4', 'video/mp4; codecs=avc1', 'failed'),
+    ]
+    res = engine.run_file_check(facts + [_media_facts('c-02', 'Call 2.M4A')], pl, documents=docs)
+    assert res['overall_verdict'] == 'READY'
+    assert [d['document_id'] for d in res['recording_documents']] == ['c-02', 'c-01', 'c-03']
+    assert res['pending_documents'] == [] and res['failed_documents'] == []
+    assert res['no_facts_documents'] == []
+    assert res['summary'] == '1 applicant: Rahul Vijay Deshmukh READY'
+    # never listed under an applicant, so never erased with one
+    assert not {'c-01', 'c-02', 'c-03'} & set(_ids(engine.applicant_documents(facts, 'BQXPD4821K', docs)))
+
+
+def test_recording_with_extracted_facts_is_read_like_any_document(pl):
+    facts = rahul()
+    slip = next(f for f in facts if f['doc_type'] == 'salary_slip')
+    docs = doc_items(facts)
+    for d in docs:
+        if d['document_id'] == slip['document_id']:
+            d['file_type'] = 'video/mp4'  # e.g. a screen recording whose pages were read
+    res = engine.run_file_check(facts, pl, documents=docs)
+    assert res['recording_documents'] == []
+    assert res['overall_verdict'] == 'READY'
+
+
+def test_other_unchecked_documents_keep_the_plain_summary(pl):
+    docs = [_call(), {'document_id': 'd-01', 'project_id': 'p1', 'name': 'scan.pdf',
+                      'file_type': 'application/pdf', 'status': 'processing'}]
+    res = engine.run_file_check([], pl, documents=docs)
+    assert res['summary'] == 'No analysed documents found in this project'
+    assert len(res['recording_documents']) == 1 and len(res['pending_documents']) == 1
+
+
+# ------------------------------------------------------------------ eligibility-page documents
+def _credit_report(pid, prefix, name, pan):
+    """A synthetic credit report as the facts step records it (credit_report fields)."""
+    return _doc(pid, prefix, '07_credit_report_sample.pdf', 'credit_report', applicant_name=name,
+                pan=pan, bureau='CIBIL', report_date='2026-09-25', credit_score=765,
+                enquiries_30d=0, enquiries_60d=1, enquiries_90d=1, enquiries_120d=2,
+                tradelines=[{'loan_type': 'car_loan', 'lender': 'Mulshi Auto Finance',
+                             'outstanding': 182000, 'emi': 8200, 'status': 'active',
+                             'account_last4': '4417'}])
+
+
+def test_credit_reports_and_other_eligibility_documents_are_known_types(pl):
+    """The credit report, rent agreement and pension slip the facts step reads for the
+    eligibility page are listed under their applicant, not as unclassified documents,
+    and change no demo verdict."""
+    report = _credit_report('p1', 'r', 'Rahul Vijay Deshmukh', 'BQXPD4821K')
+    rent = _doc('p1', 'r', '08_rent_agreement.pdf', 'rent_agreement',
+                applicant_name='Rahul Vijay Deshmukh', monthly_rent=15000, registration='registered')
+    res = engine.run_file_check(rahul() + [report, rent] + sneha() + amit(), pl)
+    a = {x['applicant']: x for x in res['applicants']}
+    rahul_a = a['Rahul Vijay Deshmukh']
+    assert {d['document_name']: d['doc_type'] for d in rahul_a['documents']}[
+        '07_credit_report_sample.pdf'] == 'credit_report'
+    assert 'unclassified_documents' not in _by_id(rahul_a['consistency'], 'check_id')
+    assert _by_id(rahul_a['consistency'], 'check_id')['pan']['status'] == 'OK'
+    verdicts = {n: (x['verdict'], len(x['reasons'])) for n, x in a.items()}
+    assert verdicts == {
+        'Rahul Vijay Deshmukh': ('READY', 0),
+        'Sneha Anil Kulkarni': ('NOT READY', 5),
+        'Amit Suresh Patil': ('NOT READY', 1),
+    }
+    # a checklist may ask for them
+    cat = _catalog_with()
+    cat['checklists'][0]['items'].append(
+        {'id': 'credit_report', 'label': 'Credit report', 'doc_types': ['credit_report'],
+         'required': False, 'rule': {'kind': 'present'}})
+    assert engine.validate_catalog(cat) == []
