@@ -463,7 +463,7 @@ export class Backend extends Construct {
     // unauthenticated request for any other path. More specific than
     // /{proxy+}, so API Gateway picks this route for /public/... paths.
     const publicMethods = [HttpMethod.GET, HttpMethod.POST];
-    this.api.addRoutes({
+    const publicRoutes = this.api.addRoutes({
       path: PUBLIC_ROUTE_PATH,
       methods: publicMethods,
       integration,
@@ -471,6 +471,11 @@ export class Backend extends Construct {
     const stage = this.api.defaultStage?.node.defaultChild;
     if (!(stage instanceof CfnStage)) {
       throw new Error('Unable to throttle public routes: no default CfnStage');
+    }
+    // The stage's RouteSettings name these routes: API Gateway refuses them
+    // (404) while the routes do not exist yet, so create the routes first.
+    for (const route of publicRoutes) {
+      stage.node.addDependency(route);
     }
     // routeSettings is raw JSON: CloudFormation's (PascalCase) key names.
     stage.routeSettings = Object.fromEntries(

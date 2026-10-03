@@ -118,6 +118,28 @@ describe('Backend: customer upload link routes', () => {
     });
   });
 
+  it('creates the public routes before the stage that throttles them', () => {
+    const template = synth();
+    const publicIds = Object.entries(
+      template.findResources('AWS::ApiGatewayV2::Route'),
+    )
+      .filter(([, r]) =>
+        String((r as Resource).Properties.RouteKey).endsWith(PUBLIC_ROUTE_PATH),
+      )
+      .map(([id]) => id);
+    expect(publicIds).toHaveLength(2);
+
+    const stages = Object.values(
+      template.findResources('AWS::ApiGatewayV2::Stage', {
+        Properties: { StageName: '$default' },
+      }),
+    ) as { DependsOn?: string[] }[];
+    expect(stages).toHaveLength(1);
+    expect(stages[0].DependsOn ?? []).toEqual(
+      expect.arrayContaining(publicIds),
+    );
+  });
+
   it('allows the link token header in CORS', () => {
     synth().hasResourceProperties('AWS::ApiGatewayV2::Api', {
       CorsConfiguration: {
