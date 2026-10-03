@@ -2,7 +2,7 @@
 
 GET  /integrations/crm-launch          {secret_set, rotated_at, rotated_by} (admins)
 POST /integrations/crm-launch/secret   new launch secret, returned once (admins)
-POST /crm-launch/open                  {query}: verify the link, open or create the lead's project
+POST /crm-launch/open                  {query}: verify the link (its #fragment), open or create the lead's project
 
 See app/crm_launch.py for the link format and the checks. /crm-launch/open
 needs a signed-in user of the app (a user pool identity in the request), as
@@ -41,7 +41,10 @@ class LaunchSecretResponse(BaseModel):
 class LaunchOpenRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    query: str = Field(max_length=crm_launch.MAX_QUERY_LENGTH, description="The raw query string of the /launch URL")
+    query: str = Field(
+        max_length=crm_launch.MAX_QUERY_LENGTH,
+        description="The parameters of the /launch URL: its fragment, after #",
+    )
 
 
 class LaunchOpenResponse(BaseModel):

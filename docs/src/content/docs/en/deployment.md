@@ -122,9 +122,11 @@ to private resources); deploy it with the rest (`--all`) or before
   one send the payload unchanged. The signature scheme is unchanged: the field
   is part of the signed body.
 - CRM launch link: the CRM opens a lead with
-  `https://<app>/launch?lead=<id>&name=<name>&phone=<phone>&exp=<unix>&sig=<hex>`,
-  HMAC-SHA256 over the canonical query with the launch secret (one per CRM,
-  KMS-encrypted). The app checks the signature, an expiry of at most 5 minutes
+  `https://<app>/launch#lead=<id>&name=<name>&phone=<phone>&exp=<unix>&sig=<hex>`
+  (the parameters in the URL fragment, which the browser never sends to a
+  server, so the applicant's name and phone stay out of the CloudFront access
+  logs; a link with them after `?` is refused), HMAC-SHA256 over the canonical
+  query with the launch secret (one per CRM, KMS-encrypted). The app checks the signature, an expiry of at most 5 minutes
   and one use, after the normal Cognito sign-in, then opens (or creates) the
   lead's project. An admin generates or rotates the secret in Settings →
   Integrations. Format and ready-to-copy PHP / JavaScript:

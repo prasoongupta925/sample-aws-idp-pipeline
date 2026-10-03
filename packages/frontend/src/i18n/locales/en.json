@@ -1772,12 +1772,14 @@
     "errors": {
       "forbidden": "Sign in with an account of this app to open CRM links.",
       "notSetUp": "CRM launch links are not set up yet. Ask an admin to generate the launch secret in Settings → Integrations.",
-      "status": "The request was rejected (HTTP {{status}})."
+      "status": "The request was rejected (HTTP {{status}}).",
+      "missing": "This link has no lead details. Open the lead again from the CRM.",
+      "queryForm": "This link carries the lead details after \"?\", where web servers log them. The CRM must put them after \"#\" instead (docs/crm-launch-link.md)."
     },
     "settings": {
       "menu": "Integrations",
       "title": "Smart Dial CRM launch link",
-      "intro": "The CRM opens a lead here with a signed link: /launch?lead=…&name=…&phone=…&exp=…&sig=…. Each link works once and for at most {{minutes}} minutes, and the user still signs in. See docs/crm-launch-link.md for the CRM code.",
+      "intro": "The CRM opens a lead here with a signed link: /launch#lead=…&name=…&phone=…&exp=…&sig=… (the details go after #, so no server logs them). Each link works once and for at most {{minutes}} minutes, and the user still signs in. See docs/crm-launch-link.md for the CRM code.",
       "secretTitle": "Launch secret",
       "set": "Set",
       "notSet": "Not set",

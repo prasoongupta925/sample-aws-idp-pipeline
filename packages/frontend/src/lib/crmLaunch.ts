@@ -2,8 +2,54 @@ import type { TFunction } from 'i18next';
 import { apiErrorDetail } from './apiError';
 import { apiErrorStatus } from './fileCheck';
 
-/** Page the Smart Dial CRM opens: /launch?lead=..&name=..&phone=..&exp=..&sig=.. */
+/**
+ * Page the Smart Dial CRM opens: /launch#lead=..&name=..&phone=..&exp=..&sig=..
+ * The parameters sit in the URL fragment, which the browser never sends to a
+ * server, so the applicant's name and phone stay out of the CDN access logs.
+ */
 export const LAUNCH_PATH = '/launch';
+
+/** Why /launch cannot even ask the backend: no fragment, or the old ?query form. */
+export type LaunchUrlProblem = 'missing' | 'queryForm';
+
+/**
+ * The signed parameters of the launch URL (its fragment, without "#"), or
+ * the problem: a link with its parameters in the query string (the old form,
+ * which servers log) is refused rather than sent on.
+ */
+export function launchParams(
+  hash: string,
+  search: string,
+): { params: string } | { problem: LaunchUrlProblem } {
+  const params = hash.replace(/^#/, '');
+  if (params) return { params };
+  return { problem: search.length > 1 ? 'queryForm' : 'missing' };
+}
+
+/**
+ * launchParams of the page URL, read once; the fragment is then taken out of
+ * the address bar (same history entry and state), so the applicant's name and
+ * phone do not stay there or in the browser history. A link works once, so
+ * nothing is lost: a refused link is opened again from the CRM.
+ */
+export function takeLaunchParams(
+  location: Pick<Location, 'hash' | 'pathname' | 'search'> = window.location,
+  history: Pick<History, 'state' | 'replaceState'> = window.history,
+): ReturnType<typeof launchParams> {
+  const link = launchParams(location.hash, location.search);
+  if (location.hash) {
+    try {
+      history.replaceState(
+        history.state,
+        '',
+        `${location.pathname}${location.search}`,
+      );
+    } catch {
+      // Refused (very old browser): the fragment stays.
+    }
+  }
+  return link;
+}
 
 export interface CrmLaunchSettings {
   secret_set: boolean;
@@ -38,15 +84,15 @@ export function isAdmin(profile: unknown): boolean {
 
 /**
  * Where to come back after the Cognito sign-in: the launch link (with its
- * query) when that is the page being opened, otherwise nothing (the app
+ * fragment) when that is the page being opened, otherwise nothing (the app
  * starts on its home page as before).
  */
 export function launchReturnTo(
   pathname: string,
-  search: string,
+  hash: string,
 ): string | undefined {
-  return pathname === LAUNCH_PATH && search.startsWith('?') && search.length > 1
-    ? `${LAUNCH_PATH}${search}`
+  return pathname === LAUNCH_PATH && hash.startsWith('#') && hash.length > 1
+    ? `${LAUNCH_PATH}${hash}`
     : undefined;
 }
 
@@ -57,8 +103,8 @@ export function safeLaunchReturn(state: unknown): string | null {
       ? (state as Record<string, unknown>).returnTo
       : undefined;
   if (typeof returnTo !== 'string') return null;
-  // Same-origin path only: "/launch?" exactly, never "//host" or "/launch.evil".
-  return returnTo.startsWith(`${LAUNCH_PATH}?`) && returnTo.length <= 4096
+  // Same-origin path only: "/launch#" exactly, never "//host" or "/launch.evil".
+  return returnTo.startsWith(`${LAUNCH_PATH}#`) && returnTo.length <= 4096
     ? returnTo
     : null;
 }

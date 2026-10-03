@@ -58,7 +58,7 @@ const CognitoAuth: React.FC<PropsWithChildren> = ({ children }) => {
 function signinState(): { returnTo: string } | undefined {
   const returnTo = launchReturnTo(
     window.location.pathname,
-    window.location.search,
+    window.location.hash,
   );
   return returnTo ? { returnTo } : undefined;
 }

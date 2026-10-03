@@ -5,14 +5,17 @@ import { AlertTriangle, Loader2 } from 'lucide-react';
 import { useAwsClient } from '../hooks/useAwsClient';
 import {
   describeLaunchError,
+  takeLaunchParams,
   type CrmLaunchOpenResult,
 } from '../lib/crmLaunch';
 
 /**
- * The page the Smart Dial CRM opens (docs/crm-launch-link.md). The user is
- * already signed in here (CognitoAuth comes back to this URL after the
- * sign-in). The backend checks the signature, the expiry and that the link
- * was not used before, then returns the lead's project (made if needed).
+ * The page the Smart Dial CRM opens (docs/crm-launch-link.md):
+ * /launch#lead=..&exp=..&sig=.. with the parameters in the fragment, which no
+ * server sees. The user is already signed in here (CognitoAuth comes back to
+ * this URL after the sign-in). The backend checks the signature, the expiry
+ * and that the link was not used before, then returns the lead's project
+ * (made if needed).
  */
 export const Route = createFileRoute('/launch')({
   component: LaunchPage,
@@ -67,11 +70,16 @@ function LaunchPage() {
   useEffect(() => {
     if (sentRef.current) return;
     sentRef.current = true;
-    const query = window.location.search;
+    // Read once, then out of the address bar (the name and phone with it).
+    const link = takeLaunchParams();
+    if ('problem' in link) {
+      setError(new Error(t(`crmLaunch.errors.${link.problem}`)));
+      return;
+    }
     fetchApi<CrmLaunchOpenResult>('crm-launch/open', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query }),
+      body: JSON.stringify({ query: link.params }),
     })
       .then((result) =>
         // replace: the used link (with its signature) leaves the history
@@ -82,7 +90,7 @@ function LaunchPage() {
         }),
       )
       .catch((e) => setError(e ?? new Error('failed')));
-  }, [fetchApi, navigate]);
+  }, [fetchApi, navigate, t]);
 
   return (
     <LaunchView

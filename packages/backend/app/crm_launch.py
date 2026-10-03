@@ -2,7 +2,12 @@
 
 The CRM opens the app on a lead with
 
-    https://<app>/launch?lead=<id>&name=<name>&phone=<phone>&exp=<unix>&sig=<hex>
+    https://<app>/launch#lead=<id>&name=<name>&phone=<phone>&exp=<unix>&sig=<hex>
+
+The parameters are in the URL fragment (after "#"), which browsers never send
+to a server: the applicant's name and phone stay out of the CDN access logs,
+which a query string would put them in. The /launch page posts the fragment
+to /crm-launch/open.
 
 sig = lowercase hex HMAC-SHA256(key = the CRM's launch secret as UTF-8,
 message = the canonical query). The canonical query is every parameter except
@@ -89,8 +94,8 @@ def sign(secret: str, params: dict[str, str]) -> str:
 
 
 def parse_query(query: str) -> dict[str, str]:
-    """The parameters of a raw query string (with or without "?"); refuses repeats and unknown names."""
-    query = query[1:] if query.startswith("?") else query
+    """The parameters of the link's fragment (with or without "#"); refuses repeats and unknown names."""
+    query = query[1:] if query[:1] in ("#", "?") else query
     if len(query) > MAX_QUERY_LENGTH:
         raise LaunchLinkError("The launch link is too long")
     try:

@@ -5,8 +5,14 @@ builds it on the server (the secret never goes to the browser) and opens it in a
 new tab when the agent clicks "Documents" on the lead.
 
 ```
-https://<app>/launch?lead=<id>&name=<name>&phone=<phone>&exp=<unix>&sig=<hex>
+https://<app>/launch#lead=<id>&name=<name>&phone=<phone>&exp=<unix>&sig=<hex>
 ```
+
+The parameters go after `#` (the URL fragment), not after `?`. A browser never
+sends the fragment to any server, so the applicant's name and phone do not end
+up in a web server, proxy or CDN access log; the `/launch` page reads them in
+the browser and sends them to the API in a request body. The app refuses a
+link with the parameters after `?`.
 
 | Parameter | Required | Rule |
 |-----------|----------|------|
@@ -30,7 +36,8 @@ No other parameter is accepted, and none may repeat.
    `crm_lead_id`).
 
 A refused link shows the reason (expired, already used, bad signature…). Make a
-new link on every click; do not cache links.
+new link on every click; do not cache links. Once read, the page takes the
+parameters out of the address bar.
 
 ## The secret
 
@@ -51,7 +58,7 @@ store), like the webhook secret.
 5. `sig` = lowercase hex of HMAC-SHA256(key = the secret as UTF-8 bytes,
    message = that string).
 
-Put the same encoded values in the URL and append `&sig=...`.
+Put the same encoded string after `/launch#` and append `&sig=...`.
 
 Example (made-up secret `test-secret`, `exp` 1790000000):
 
@@ -84,7 +91,8 @@ function smartdial_launch_url(string $appUrl, string $secret, string $leadId,
     $canonical = implode('&', $pairs);
     $sig = hash_hmac('sha256', $canonical, $secret);   // lowercase hex
 
-    return rtrim($appUrl, '/') . '/launch?' . $canonical . '&sig=' . $sig;
+    // After "#": the fragment never reaches a server log
+    return rtrim($appUrl, '/') . '/launch#' . $canonical . '&sig=' . $sig;
 }
 
 // Usage (secret from the environment, never hard-coded)
@@ -122,7 +130,8 @@ export function smartdialLaunchUrl(appUrl, secret, leadId,
     .join('&');
   const sig = createHmac('sha256', secret).update(canonical, 'utf8').digest('hex');
 
-  return `${appUrl.replace(/\/+$/, '')}/launch?${canonical}&sig=${sig}`;
+  // After "#": the fragment never reaches a server log
+  return `${appUrl.replace(/\/+$/, '')}/launch#${canonical}&sig=${sig}`;
 }
 
 // Usage
@@ -138,7 +147,9 @@ const url = smartdialLaunchUrl(
 
 - Build the link on the server, right when the agent clicks; `exp` = now + 1-2
   minutes (5 at most). The CRM server clock must be in sync (NTP).
-- Open it with `window.open(url, '_blank', 'noopener')` or a 302 redirect.
+- Open it with `window.open(url, '_blank', 'noopener')` or a 302 redirect (the
+  browser keeps the `#...` part of a `Location` header).
+- Keep the parameters after `#`, never after `?`.
 - A link opens once; a reload of the same URL is refused. Click again in the
   CRM for a new link.
 - Do not log the full URL or the secret.
