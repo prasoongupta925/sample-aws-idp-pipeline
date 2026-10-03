@@ -10,6 +10,7 @@ import en from '../../i18n/locales/en.json';
 import { ApiError } from '../../lib/apiError';
 import BranchFinder, {
   BranchResults,
+  GridPreview,
   MAX_LENDERS,
   ReferenceListsPanel,
   branchesPath,
@@ -20,6 +21,7 @@ import BranchFinder, {
   lenderQuery,
   nearestText,
   parseBranches,
+  parseReferenceList,
   parseReferenceLists,
   removeReferenceList,
   uploadProblems,
@@ -248,10 +250,58 @@ const LISTS = {
       optional_columns: [],
       uploaded: false,
     },
+    {
+      kind: 'lender_grid',
+      columns: ['lender', 'field', 'value'],
+      optional_columns: ['category', 'slab_from'],
+      uploaded: false,
+      template:
+        'lender,field,category,slab_from,value\r\nHDFC Bank,roi_min,,,10.5\r\n',
+    },
   ],
   retention_days: 7,
   max_upload_bytes: 4194304,
   max_rows: 100000,
+};
+
+const GRID_PREVIEW = {
+  kind: 'lender_grid',
+  columns: ['lender', 'field', 'value'],
+  optional_columns: ['category', 'slab_from'],
+  uploaded: false,
+  filename: 'grid.csv',
+  rows: 21,
+  lenders: ['HDFC Bank'],
+  duplicates: 0,
+  notes: [
+    'HDFC Bank: employment types, unlisted-company and other-income rules stay as in the sample policy',
+  ],
+  preview: true,
+  grid: [
+    {
+      lender_id: 'hdfc_bank',
+      lender: 'HDFC Bank',
+      roi: 10.5,
+      roi_max: 14,
+      min_cibil_score: 750,
+      max_enquiries_90d: 4,
+      min_tenure_months: 12,
+      max_tenure_months: 72,
+      calculation_tenure_months: 60,
+      min_amount: 50000,
+      max_amount: 4000000,
+      foir: 0.5,
+      multiplier: 20,
+      processing_fee: { pct: 1.5, min_amount: 2500, max_amount: 25000 },
+      categories: {
+        'CAT A': { foir: 0.6, multiplier: 24 },
+        'CAT B': { foir: 0.5, multiplier: 20 },
+      },
+      slab_starts: [25000, 75000],
+      foir_grid: { 'CAT A': [0.6, 0.7], 'CAT B': [0.5, 0.55] },
+    },
+  ],
+  template: null,
 };
 
 const PARSED = parseBranches(ANSWER);
@@ -278,10 +328,13 @@ function listsPanel(
         loadError: null,
         busy: null,
         outcome: null,
+        pending: null,
         ...state,
       }}
       onRetry={noop}
       onUpload={noop}
+      onSave={noop}
+      onCancel={noop}
       onRemove={noop}
     />,
   );
@@ -473,6 +526,64 @@ describe('requests', () => {
       'category',
     ]);
     expect(csvTemplate('company_categories')).toMatch(/\r\n$/);
+    expect(header('lender_grid')).toEqual([
+      'lender',
+      'field',
+      'category',
+      'slab_from',
+      'value',
+    ]);
+    // The API's template (the sample HDFC grid) when it is loaded.
+    const grid = parseReferenceLists(LISTS).lists[3];
+    expect(csvTemplate('lender_grid', grid.template)).toBe(
+      'lender,field,category,slab_from,value\r\nHDFC Bank,roi_min,,,10.5\r\n',
+    );
+  });
+
+  it('previews a lender grid with ?preview=true and reads its policies', async () => {
+    const { calls, fetchApi } = fakeApi(GRID_PREVIEW);
+    const file = new File(['lender,field,value\r\n'], 'grid.csv');
+
+    const list = await uploadReferenceList(
+      fetchApi,
+      'proj_demo',
+      'lender_grid',
+      file,
+      true,
+    );
+
+    expect(calls[0].url).toBe(
+      'projects/proj_demo/eligibility/reference-data?kind=lender_grid&filename=grid.csv&preview=true',
+    );
+    expect(list.preview).toBe(true);
+    expect(list.grid).toEqual([
+      {
+        lender_id: 'hdfc_bank',
+        lender: 'HDFC Bank',
+        roi: 10.5,
+        roi_max: 14,
+        min_cibil_score: 750,
+        max_enquiries_90d: 4,
+        min_tenure_months: 12,
+        max_tenure_months: 72,
+        min_amount: 50000,
+        max_amount: 4000000,
+        processing_fee: { pct: 1.5, min_amount: 2500, max_amount: 25000 },
+        categories: {
+          'CAT A': { foir: 0.6, multiplier: 24 },
+          'CAT B': { foir: 0.5, multiplier: 20 },
+        },
+        slab_starts: [25000, 75000],
+        foir_grid: { 'CAT A': [0.6, 0.7], 'CAT B': [0.5, 0.55] },
+      },
+    ]);
+    // A list of another kind has no grid; a broken grid column is dropped.
+    expect(parseReferenceLists(LISTS).lists[1].grid).toBeNull();
+    const broken = parseReferenceList({
+      ...GRID_PREVIEW,
+      grid: [{ ...GRID_PREVIEW.grid[0], foir_grid: { 'CAT A': [0.6] } }],
+    });
+    expect(broken.grid?.[0].slab_starts).toEqual([]);
   });
 
   it('explains a refused upload with its row problems', () => {
@@ -712,7 +823,7 @@ describe('ReferenceListsPanel', () => {
   it('stays closed until opened, with how many lists are uploaded', () => {
     const html = listsPanel({}, false);
     expect(html).toContain('aria-expanded="false"');
-    expect(plain(html)).toContain('Your lists (CSV) · 1 of 3 uploaded');
+    expect(plain(html)).toContain('Your lists (CSV) · 1 of 4 uploaded');
     expect(html).not.toContain('data-kind=');
   });
 
@@ -791,6 +902,64 @@ describe('ReferenceListsPanel', () => {
     expect(plain(item)).toContain(
       "The file has 2 problems Row 2: the pincode '4012' is not 6 digits Row 3: serviceable is 'perhaps': use yes or no",
     );
+  });
+
+  it('shows a previewed lender grid with Save and Cancel', () => {
+    const list = parseReferenceList(GRID_PREVIEW);
+    const html = listsPanel({
+      outcome: { kind: 'lender_grid', ok: true, list },
+      pending: { kind: 'lender_grid', file: new File([''], 'grid.csv') },
+    });
+    const item = listItem(html, 'lender_grid');
+    expect(item).toContain('data-testid="grid-preview"');
+    const text = plain(item);
+    expect(text).toContain('Preview of grid.csv (21 rows), not saved yet:');
+    expect(text).toContain('ROI 10.5% – 14%');
+    expect(text).toContain('Minimum CIBIL 750');
+    expect(text).toContain('Tenure 12 to 72 months');
+    expect(text).toContain(
+      'Processing fee 1.5%, at least ₹2,500, at most ₹25,000',
+    );
+    expect(text).toContain('Multiplier 24× 20×');
+    expect(text).toContain('FOIR from ₹25,000 60% 50%');
+    expect(text).toContain('FOIR from ₹75,000 70% 55%');
+    expect(text).toContain('FOIR outside the slabs 60% 50%');
+    expect(text).toContain('stay as in the sample policy');
+    expect(text).toContain('Save');
+    expect(text).toContain('Cancel');
+    expect(item).not.toContain('Saved ');
+
+    // Without a pending file (e.g. after a project switch), no Save button.
+    const stale = plain(
+      listItem(
+        listsPanel({ outcome: { kind: 'lender_grid', ok: true, list } }),
+        'lender_grid',
+      ),
+    );
+    expect(stale).not.toContain('Save');
+  });
+
+  it('shows a grid without a fee or slabs', () => {
+    const [lender] = GRID_PREVIEW.grid;
+    const html = render(
+      <GridPreview
+        grid={[
+          {
+            ...lender,
+            roi_max: null,
+            processing_fee: null,
+            slab_starts: [],
+            foir_grid: {},
+          },
+        ]}
+      />,
+    );
+    const text = plain(html);
+    expect(text).toContain('ROI 10.5%');
+    expect(text).not.toContain('14%');
+    expect(text).toContain('Processing fee none');
+    expect(text).toContain('FOIR 60% 50%');
+    expect(text).not.toContain('FOIR from');
   });
 
   it('says when the lists cannot be loaded', () => {

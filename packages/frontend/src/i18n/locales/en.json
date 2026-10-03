@@ -1637,6 +1637,10 @@
           "company_categories": {
             "label": "Company categories",
             "description": "Your lenders' company lists: the category (for example CAT A) a company has with each lender, also in Check category and the eligibility calculation; a company missing from a lender's list is unlisted with it."
+          },
+          "lender_grid": {
+            "label": "Lender grid",
+            "description": "Your lenders' policy grids: ROI range, minimum CIBIL, maximum enquiries, tenure, processing fee, multipliers and FOIR by net-salary slab and company category. A lender in this grid is calculated with it instead of the sample policy. The file is checked and shown before you save it; the template is the sample HDFC Bank grid."
           }
         },
         "columns": "Columns: {{columns}}",
@@ -1658,7 +1662,29 @@
         "duplicates_one": "{{count}} identical row dropped",
         "duplicates_other": "{{count}} identical rows dropped",
         "tooLarge": "The file is over {{mb}} MB: split it, or keep only the columns needed.",
-        "removeFailed": "Could not remove the list: {{message}}"
+        "removeFailed": "Could not remove the list: {{message}}",
+        "previewTitle_one": "Preview of {{file}} ({{count}} row), not saved yet:",
+        "previewTitle_other": "Preview of {{file}} ({{count}} rows), not saved yet:",
+        "save": "Save",
+        "cancel": "Cancel",
+        "grid": {
+          "roi": "ROI",
+          "minCibil": "Minimum CIBIL",
+          "maxEnquiries": "Maximum enquiries (90 days)",
+          "tenure": "Tenure",
+          "months": "{{from}} to {{to}} months",
+          "amount": "Loan amount",
+          "fee": "Processing fee",
+          "feeMin": "at least {{amount}}",
+          "feeMax": "at most {{amount}}",
+          "noFee": "none",
+          "caption": "{{lender}}: multiplier and FOIR by net monthly salary and company category",
+          "salary": "Net salary",
+          "multiplier": "Multiplier",
+          "slabFrom": "FOIR from {{amount}}",
+          "foirOutside": "FOIR outside the slabs",
+          "foir": "FOIR"
+        }
       }
     },
     "errors": {

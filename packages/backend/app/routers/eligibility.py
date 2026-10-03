@@ -521,7 +521,8 @@ class LenderPolicyOut(BaseModel):
     id: str
     name: str
     product: str | None = None
-    roi: float = Field(description="Annual rate of interest, percent")
+    roi: float = Field(description="Annual rate of interest, percent (the from-rate of a range)")
+    roi_max: float | None = Field(default=None, description="The top of the ROI range, if the policy has one")
     foir: float = Field(description="Base FOIR (fraction of the monthly income); a company category may override it")
     multiplier: float = Field(description="Base income multiplier; a company category may override it")
     min_tenure_months: int
@@ -707,6 +708,7 @@ class LenderEligibility(BaseModel):
     computed_amount: float | None = Field(description="What the formulas give, whatever the status")
     tenure_months: int = Field(description="The lender's max tenure: the EMI is shown at it")
     roi: float = Field(description="Annual rate, percent")
+    roi_max: float | None = Field(default=None, description="The top of the lender's ROI range, if it has one")
     emi: float = Field(description="EMI of eligible_amount at roi over tenure_months; 0 unless eligible")
     calculation_tenure_months: int = Field(
         description="The per-lakh EMI's tenure: the lender's calculation tenure, or a shorter requested tenure "
@@ -1937,14 +1939,14 @@ def file_check_use(found: dict | None, detail: str) -> dict[str, Any]:
 
 
 def _calculation_lists(project_id: str, notes: list[str] | None = None) -> reference_data.CalculationLists | None:
-    """The DSA's uploaded serviceability and company lists; None when none is uploaded or they cannot
-    be read (then the SAMPLE lists apply, and `notes` says so)."""
+    """The DSA's uploaded serviceability and company lists and lender grid; None when none is uploaded or
+    they cannot be read (then the SAMPLE data applies, and `notes` says so)."""
     try:
         return reference_data.calculation_lists(project_id, _now())
     except (ClientError, BotoCoreError) as e:
         print(f"eligibility: uploaded lists not read project={project_id} ({type(e).__name__})")
         if notes is not None:
-            notes.append("Your uploaded serviceability and company lists could not be read: the sample lists are used")
+            notes.append("Your uploaded lists and lender grid could not be read: the sample data is used")
         return None
 
 
@@ -2131,9 +2133,12 @@ def _display_name(applicant: str, inputs: EligibilityInputs) -> str:
 @router.get("/lenders", responses=_NOT_FOUND, summary="SAMPLE lender policies and the form's choices")
 def list_lenders(project_id: ProjectId, user_id: UserId) -> LendersResponse:
     """Every lender's SAMPLE policy (ROI, FOIR, multiplier, tenure, amounts, CIBIL and enquiry limits,
-    employment types, company categories, income consideration, serviceable regions)."""
+    employment types, company categories, income consideration, serviceable regions); a lender of the
+    project's uploaded lender grid has the grid's policy, labelled with the grid."""
     _require_project(project_id)
     book = eligibility.load_policy_book()
+    lists = _calculation_lists(project_id)
+    shown = reference_data.CalculationBook(book, lists) if lists else book
     lenders = [
         LenderPolicyOut(
             **lender.model_dump(exclude={"employment_types", "company_categories", "unlisted_company"}),
@@ -2141,10 +2146,10 @@ def list_lenders(project_id: ProjectId, user_id: UserId) -> LendersResponse:
             company_categories={k: CategoryPolicyOut(**v.model_dump()) for k, v in lender.company_categories.items()},
             unlisted_company=UnlistedCompanyOut(**lender.unlisted_company.model_dump()),
             serviceable_regions=[region.name for region in book.regions_of(lender.id)],
-            sample=book.sample,
-            label=book.label,
+            sample=book.sample and not (lists and lists.grid_label(lender.id)),
+            label=shown.label_of(lender.id),
         )
-        for lender in book.lenders
+        for lender in shown.lenders
     ]
     disclaimers = [f"Every result is {eligibility.INDICATIVE_LABEL}."]
     if book.sample:

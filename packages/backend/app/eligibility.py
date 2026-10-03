@@ -583,7 +583,9 @@ class LenderPolicy(_Data):
     id: str = _spec(_text(pattern=r"[a-z0-9_]{1,64}"))
     name: str = _spec(_text(min_length=1, max_length=100))
     product: str | None = _spec(_optional(_text()), None)
-    roi: float = _spec(_real(ge=0, le=60))  # annual rate of interest, percent
+    roi: float = _spec(_real(ge=0, le=60))  # annual rate of interest, percent (the from-rate of a range)
+    # The top of the lender's ROI range, shown with roi; the calculation uses roi.
+    roi_max: float | None = _spec(_optional(_real(ge=0, le=60)), None)
     foir: float = _spec(_real(gt=0, le=1))
     multiplier: float = _spec(_real(gt=0, le=100))
     # The FOIR of a listed company by net salary slab and category, instead of its category's FOIR.
@@ -613,6 +615,8 @@ class LenderPolicy(_Data):
             raise ValueError("calculation_tenure_months is outside min_tenure_months to max_tenure_months")
         if self.min_amount > self.max_amount:
             raise ValueError("min_amount is more than max_amount")
+        if self.roi_max is not None and self.roi_max < self.roi:
+            raise ValueError("roi_max is less than roi")
         if self.foir_grid is not None:
             # The multiplier of a grid category comes from its company category.
             unknown = [c for c in self.foir_grid.categories if c not in self.company_categories]
@@ -732,6 +736,10 @@ class PolicyBook:
     def label(self) -> str | None:
         """The SAMPLE label, shown wherever this data is shown; None for a real grid."""
         return SAMPLE_LABEL if self.sample else None
+
+    def label_of(self, lender_id: str) -> str | None:
+        """The label of one lender's policy (the book's; a book with uploaded grids has its own)."""
+        return self.label
 
     def lender(self, id_or_name: str | None) -> LenderPolicy | None:
         """A lender by id (icici_bank) or name (ICICI Bank), case and spacing ignored."""
@@ -1250,6 +1258,7 @@ def _lender_result(
         "computed_amount": money(computed),
         "tenure_months": lender.max_tenure_months,
         "roi": lender.roi,
+        "roi_max": lender.roi_max,
         "emi": money(monthly_emi),
         "calculation_tenure_months": tenure,
         "emi_at_calculation_tenure": money(calculation_emi),
@@ -1296,7 +1305,7 @@ def _lender_result(
             "apr": "formula",
             "total_cost": "formula",
         },
-        "label": book.label,
+        "label": book.label_of(lender.id),
     }
 
 

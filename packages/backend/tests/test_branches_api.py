@@ -173,6 +173,9 @@ class TestUpload:
             "expires_at": "2026-10-09T10:00:00+00:00",
             "duplicates": 0,
             "notes": [],
+            "preview": False,
+            "grid": None,
+            "template": None,
         }
 
     def test_the_web_apps_octet_stream_upload(self, tables):
@@ -204,7 +207,7 @@ class TestUpload:
         )
         assert response.status_code == 400
         assert response.json()["detail"] == (
-            "kind must be one of: pincode_serviceability, lender_branches, company_categories"
+            "kind must be one of: pincode_serviceability, lender_branches, company_categories, lender_grid"
         )
         assert upload("branch_list", BRANCH_LIST).status_code == 422
 
@@ -262,6 +265,72 @@ class TestUpload:
 
 
 # ------------------------------------------------------------------ GET / DELETE .../reference-data
+class TestLenderGrid:
+    """A lender grid: previewed (checked, shown, not saved), then saved like the other lists."""
+
+    def grid(self, *changes):
+        from tests.test_reference_data import grid_lines
+
+        return csv_bytes(*grid_lines(*changes))
+
+    def test_the_list_answer_has_the_template(self, tables):
+        lists = {item["kind"]: item for item in client.get(f"{BASE}/reference-data", headers=HEADERS).json()["lists"]}
+        grid = lists["lender_grid"]
+        assert (grid["label"], grid["columns"], grid["optional_columns"]) == (
+            "Lender grid",
+            ["lender", "field", "value"],
+            ["category", "slab_from"],
+        )
+        assert grid["template"] == reference_data.grid_template()
+        assert grid["template"].startswith("lender,field,category,slab_from,value\r\nHDFC Bank,roi_min,,,")
+
+    def test_a_preview_shows_the_policy_and_saves_nothing(self, tables):
+        response = client.post(
+            f"{BASE}/reference-data?kind=lender_grid&filename=grid.csv&preview=true",
+            content=self.grid(("HDFC Bank,roi_min", "10.75%")),
+            headers={**HEADERS, "Content-Type": "text/csv"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert (body["preview"], body["uploaded"], body["filename"], body["lenders"]) == (
+            True,
+            False,
+            "grid.csv",
+            ["HDFC Bank"],
+        )
+        (hdfc,) = body["grid"]
+        sample = eligibility.load_policy_book().lender("hdfc_bank")
+        assert (hdfc["lender_id"], hdfc["roi"], hdfc["min_cibil_score"]) == ("hdfc_bank", 10.75, sample.min_cibil_score)
+        assert hdfc["slab_starts"] == list(sample.foir_grid.slab_starts)
+        assert hdfc["foir_grid"] == {c: list(v) for c, v in sample.foir_grid.categories.items()}
+        assert hdfc["processing_fee"] == sample.processing_fee.model_dump()
+        _, lists = tables
+        assert lists.items == {}
+
+    def test_save_stores_it_with_the_retention(self, tables):
+        response = upload("lender_grid", self.grid(), "grid.csv")
+        assert response.status_code == 200
+        body = response.json()
+        assert (body["preview"], body["uploaded"], body["expires_at"]) == (False, True, "2026-10-09T10:00:00+00:00")
+        assert [lender["lender"] for lender in body["grid"]] == ["HDFC Bank"]
+        listed = client.get(f"{BASE}/reference-data", headers=HEADERS).json()["lists"]
+        assert next(item for item in listed if item["kind"] == "lender_grid")["uploaded"] is True
+
+    def test_a_bad_grid_is_refused_with_its_row_errors(self, tables):
+        response = client.post(
+            f"{BASE}/reference-data?kind=lender_grid&preview=true",
+            content=self.grid(("HDFC Bank,min_cibil", "high"), ("HDFC Bank,roi_min", "75")),
+            headers={**HEADERS, "Content-Type": "text/csv"},
+        )
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert detail["message"] == "The file has 2 problems"
+        assert detail["errors"] == [
+            "Row 2: roi_min is '75': it must be 0 to 60 (ROI from, % a year)",
+            "Row 4: the min_cibil value 'high' is not a number",
+        ]
+
+
 class TestListsAndDelete:
     def test_lists_every_kind_with_its_columns_and_upload(self, tables):
         upload("lender_branches", BRANCH_LIST, "branches.csv")
@@ -290,6 +359,9 @@ class TestListsAndDelete:
             "expires_at": None,
             "duplicates": None,
             "notes": [],
+            "preview": False,
+            "grid": None,
+            "template": None,
         }
 
     def test_delete_brings_back_the_public_and_sample_data(self, tables):

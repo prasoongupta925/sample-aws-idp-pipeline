@@ -488,3 +488,188 @@ class TestLookups:
         with pytest.raises(ValueError):
             stored.company_category("hdfc_bank", "Example Tech")
         assert stored.source()["name"] == "Your lender branches list (uploaded 02 Oct 2026)"
+
+
+# ------------------------------------------------------------------ lender_grid
+GRID_HEADER = "lender,field,category,slab_from,value"
+
+
+def grid_lines(*changes: tuple[str, str], drop: tuple[str, ...] = ()) -> list[str]:
+    """The template (the sample HDFC grid) with rows changed: (row start, new value) pairs, and
+    rows starting with `drop` left out."""
+    lines = reference_data.grid_template().splitlines()
+    out = []
+    for line in lines:
+        if any(line.startswith(prefix) for prefix in drop):
+            continue
+        for start, value in changes:
+            if line.startswith(start + ","):
+                line = line.rsplit(",", 1)[0] + "," + value
+        out.append(line)
+    return out
+
+
+def hdfc_sample() -> eligibility.LenderPolicy:
+    return eligibility.load_policy_book().lender("hdfc_bank")
+
+
+class TestLenderGridCsv:
+    def test_the_template_is_the_sample_hdfc_grid_and_reads_back_as_it(self):
+        template = reference_data.grid_template()
+        assert template.splitlines()[:3] == [GRID_HEADER, "HDFC Bank,roi_min,,,12", "HDFC Bank,roi_max,,,12"]
+        assert "HDFC Bank,max_amount,,,1500000" in template.splitlines()
+        assert "HDFC Bank,foir,CAT A,75000,0.7" in template.splitlines()
+        parsed = parse_csv("lender_grid", template.encode())
+        assert (parsed.kind, parsed.lenders, parsed.duplicates) == ("lender_grid", ["HDFC Bank"], 0)
+        assert parsed.notes == [
+            "HDFC Bank: employment types, unlisted-company and other-income rules stay as in the sample policy"
+        ]
+        policies, problems, _ = reference_data.grid_policies(parsed.rows, eligibility.load_policy_book())
+        sample = hdfc_sample()
+        assert problems == []
+        assert policies["hdfc_bank"] == sample.model_copy(
+            update={"roi_max": 12.0, "foir_grid": sample.foir_grid.model_copy(update={"label": "your lender grid"})}
+        )
+
+    def test_spreadsheet_headers_percent_and_rupee_cells_are_read(self):
+        data = csv_bytes(
+            "Bank;Parameter;Company Category;Salary From;Value",
+            "ICICI Bank;ROI From;;;10.75%",
+            "ICICI Bank;ROI To;;;14.5 %",
+            "ICICI Bank;Min CIBIL;;;760",
+            "ICICI Bank;Max Enquiries;;;3",
+            "ICICI Bank;Max Tenure;;;48",
+            "ICICI Bank;Processing Fee;;;2%",
+            "ICICI Bank;Min Processing Fee;;;Rs 2,500",
+            "ICICI Bank;Max Processing Fee;;;₹ 20,000",
+            *[
+                f"ICICI Bank;Multiplier;{c};;18"
+                for c in eligibility.load_policy_book().lender("icici_bank").company_categories
+            ],
+            *[
+                f"ICICI Bank;FOIR;{c};30000;55%"
+                for c in eligibility.load_policy_book().lender("icici_bank").company_categories
+            ],
+            *[
+                f"ICICI Bank;FOIR;{c};60,000;0.65"
+                for c in eligibility.load_policy_book().lender("icici_bank").company_categories
+            ],
+        )
+        parsed = parse_csv("lender_grid", data)
+        policy = reference_data.grid_policies(parsed.rows, eligibility.load_policy_book())[0]["icici_bank"]
+        assert (policy.roi, policy.roi_max, policy.min_cibil_score, policy.max_enquiries_90d) == (10.75, 14.5, 760, 3)
+        assert (policy.max_tenure_months, policy.calculation_tenure) == (48, 48)
+        assert policy.processing_fee == eligibility.ProcessingFee(pct=2.0, min_amount=2500.0, max_amount=20000.0)
+        assert policy.foir_grid.slab_starts == (30000, 60000)
+        assert set(policy.foir_grid.categories.values()) == {(0.55, 0.65)}
+        # A category's FOIR outside the slabs defaults to its first slab's.
+        assert {c.foir for c in policy.company_categories.values()} == {0.55}
+        assert {c.multiplier for c in policy.company_categories.values()} == {18.0}
+
+    def test_every_bad_row_is_listed_with_its_row_number(self):
+        error = refused(
+            "lender_grid",
+            csv_bytes(
+                GRID_HEADER,
+                "HDFC Bank,interest,,,12",
+                "HDFC Bank,min_cibil,CAT A,,750",
+                "HDFC Bank,multiplier,CAT A,50000,20",
+                "HDFC Bank,foir,CAT Z,,0.6",
+                "HDFC Bank,roi_min,,,twelve",
+                "HDFC Bank,min_cibil,,,950",
+                "HDFC Bank,max_tenure_months,,,60.5",
+                "HDFC Bank,multiplier,,,20%",
+                "HDFC Bank,foir,CAT A,50k,0.6",
+                "HDFC Bank,foir,CAT A,50000,120%",
+                "Unknown Finance,roi_min,,,12",
+            ),
+        )
+        assert error.message == "The file has 11 problems"
+        assert error.errors[:10] == [
+            "Row 2: the field 'interest' is not one of: " + ", ".join(reference_data.GRID_FIELDS),
+            "Row 3: min_cibil is for the whole lender: leave the category empty",
+            "Row 4: a salary slab is only for a category's FOIR (field foir with a category)",
+            "Row 5: HDFC Bank has no category 'CAT Z' (its categories: Super CAT A, CAT A, CAT B, CAT C, CAT D)",
+            "Row 6: the roi_min value 'twelve' is not a number",
+            "Row 7: min_cibil is '950': it must be 300 to 900 (minimum CIBIL score)",
+            "Row 8: max_tenure_months must be a whole number (maximum tenure, months), not '60.5'",
+            "Row 9: multiplier is not a percent (income multiplier): '20%'",
+            "Row 10: the slab start '50k' is not a whole number of rupees a month",
+            "Row 11: foir is '120%': it must be more than 0 and at most 1 (or 100%) (FOIR, a fraction or a percent)",
+        ]
+        assert error.errors[10].startswith("Row 12: 'Unknown Finance' is not a lender of the policy file (HDFC Bank, ")
+
+    def test_a_lender_without_its_rules_or_with_a_gap_in_the_grid_is_refused(self):
+        lines = grid_lines(drop=("HDFC Bank,roi_min,", "HDFC Bank,multiplier,CAT D,", "HDFC Bank,foir,CAT B,50000,"))
+        lines.append("HDFC Bank,foir,CAT C,60000,0.5")
+        error = refused("lender_grid", csv_bytes(*lines))
+        assert error.message == "The grid has 6 problems"
+        assert error.errors == [
+            "HDFC Bank: no roi_min row",
+            "HDFC Bank: no multiplier for CAT D",
+            # A slab of one category (CAT C from 60,000) is a slab of the whole grid.
+            "HDFC Bank: the FOIR grid has no Super CAT A FOIR for the slab from 60,000",
+            "HDFC Bank: the FOIR grid has no CAT A FOIR for the slab from 60,000",
+            "HDFC Bank: the FOIR grid has no CAT B FOIR for the slabs from 50,000, 60,000",
+            "HDFC Bank: the FOIR grid has no CAT D FOIR for the slab from 60,000",
+        ]
+
+    def test_rules_across_rows_are_checked_by_the_policy(self):
+        error = refused("lender_grid", csv_bytes(*grid_lines(("HDFC Bank,roi_max", "11"))))
+        assert error.errors == ["HDFC Bank: roi_max is less than roi"]
+        error = refused("lender_grid", csv_bytes(*grid_lines(drop=("HDFC Bank,processing_fee_pct,",))))
+        assert error.errors == ["HDFC Bank: processing_fee_min, processing_fee_max without processing_fee_pct"]
+        error = refused("lender_grid", csv_bytes(*grid_lines(("HDFC Bank,min_tenure_months", "72"))))
+        assert error.errors == ["HDFC Bank: min_tenure_months is more than max_tenure_months"]
+
+    def test_a_contradiction_names_the_rule(self):
+        lines = [*grid_lines(), "HDFC Bank,foir,CAT A,50000,0.6", "hdfc_bank,roi_min,,,12"]
+        error = refused("lender_grid", csv_bytes(*lines))
+        # The second roi_min (by the lender's id) is the same rule: dropped as a duplicate, no error.
+        assert error.errors == [
+            f"Row {len(lines) - 1}: it contradicts row 25 (HDFC Bank foir, CAT A, slab from 50,000)"
+        ]
+
+    def test_without_a_fee_or_amounts_the_notes_say_what_applies(self):
+        lines = grid_lines(drop=("HDFC Bank,processing_fee", "HDFC Bank,min_amount", "HDFC Bank,max_amount"))
+        parsed = parse_csv("lender_grid", csv_bytes(*lines))
+        assert parsed.notes == [
+            "HDFC Bank: employment types, unlisted-company and other-income rules, loan amounts stay as in the "
+            "sample policy",
+            "HDFC Bank: no processing fee (no processing_fee_pct row)",
+        ]
+        policy = reference_data.grid_policies(parsed.rows, eligibility.load_policy_book())[0]["hdfc_bank"]
+        assert policy.processing_fee is None
+        assert (policy.min_amount, policy.max_amount) == (hdfc_sample().min_amount, hdfc_sample().max_amount)
+
+
+class TestLenderGridStorage:
+    def test_a_grid_is_stored_like_the_other_lists_and_gives_its_policies(self, table):
+        parsed = parse_csv("lender_grid", csv_bytes(*grid_lines(("HDFC Bank,roi_min", "10.5"))))
+        stored = reference_data.save(PROJECT_ID, parsed, "grid.csv", NOW)
+        header = table.items[(PK, "REFDATA#lender_grid")]
+        assert (header["row_count"], header["lenders"], header["expires_at"]) == (
+            44,
+            ["HDFC Bank"],
+            int(NOW.timestamp()) + WEEK,
+        )
+        assert len(table.of(f"REFDATA#lender_grid#{stored.upload_id}#")) == 1
+        reference_data.reset_cache()
+        loaded = reference_data.load(PROJECT_ID, "lender_grid", NOW)
+        assert loaded.policy("hdfc_bank").roi == 10.5
+        assert loaded.policy("icici_bank") is None
+        assert loaded.source()["name"] == "Your lender grid list (grid.csv, uploaded 02 Oct 2026)"
+        with pytest.raises(ValueError):
+            loaded.serviceable("HDFC Bank", "401202")
+
+    def test_the_calculation_book_uses_the_grid_for_its_lenders_only(self, table):
+        reference_data.save(
+            PROJECT_ID, parse_csv("lender_grid", csv_bytes(*grid_lines(("HDFC Bank,roi_min", "10.5")))), "grid.csv", NOW
+        )
+        lists = reference_data.calculation_lists(PROJECT_ID, NOW)
+        book = reference_data.CalculationBook(eligibility.load_policy_book(), lists)
+        assert [lender.roi for lender in book.lenders if lender.id == "hdfc_bank"] == [10.5]
+        assert book.lender("ICICI Bank") == eligibility.load_policy_book().lender("icici_bank")
+        assert book.label_of("hdfc_bank") == "Your lender grid list (grid.csv, uploaded 02 Oct 2026)"
+        assert book.label_of("icici_bank") == eligibility.SAMPLE_LABEL
+        assert lists.notes() == ["Policy of HDFC Bank from your lender grid list (grid.csv, uploaded 02 Oct 2026)"]
