@@ -10,6 +10,8 @@ password-protected PDF from a customer upload link:
 It opens the locked copy with the password, writes an unprotected copy to the
 document's normal key (its ObjectCreated event starts the pipeline) and then
 deletes every version of the locked copy, so only the unlocked file is kept.
+The copy carries the user metadata unlocked=true: type detection never holds
+it for a password again (type-detection/encrypted_pdf.py UNLOCKED_METADATA).
 
 Answers (never an exception for an expected case):
 - {"status": "unlocked", "size": n}
@@ -36,6 +38,9 @@ _ID = r'[A-Za-z0-9_-]{1,64}'
 SOURCE_KEY_PATTERN = re.compile(
     rf'^projects/(?P<project>{_ID})/documents/(?P<document>{_ID})/locked/(?P<name>{_ID})\.pdf$'
 )
+
+# User metadata of the unlocked copy (type-detection/encrypted_pdf.py skips it).
+UNLOCKED_METADATA = {'unlocked': 'true'}
 
 STATUS_UNLOCKED = 'unlocked'
 STATUS_WRONG_PASSWORD = 'wrong_password'
@@ -145,7 +150,9 @@ def handler(event, context):
         print('pdf unlock: wrong password')
         return {'status': STATUS_WRONG_PASSWORD}
 
-    s3.put_object(Bucket=bucket, Key=target_key, Body=unlocked, ContentType='application/pdf')
+    s3.put_object(
+        Bucket=bucket, Key=target_key, Body=unlocked, ContentType='application/pdf', Metadata=UNLOCKED_METADATA
+    )
     deleted = delete_all_versions(bucket, source_key)
     print(f'pdf unlock: unlocked, {len(unlocked)} bytes written, {deleted} locked version(s) deleted')
     return {'status': STATUS_UNLOCKED, 'size': len(unlocked)}

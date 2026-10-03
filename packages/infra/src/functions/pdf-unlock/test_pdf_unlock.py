@@ -71,8 +71,8 @@ class FakeS3:
     def get_object(self, Bucket, Key):
         return {'Body': io.BytesIO(self.objects[Key][-1][1])}
 
-    def put_object(self, Bucket, Key, Body, ContentType):
-        self.puts.append({'Key': Key, 'Body': Body, 'ContentType': ContentType})
+    def put_object(self, Bucket, Key, Body, ContentType, Metadata=None):
+        self.puts.append({'Key': Key, 'Body': Body, 'ContentType': ContentType, 'Metadata': Metadata})
         self.add(Key, Body)
 
     def delete_object(self, Bucket, Key, VersionId):
@@ -120,6 +120,8 @@ def test_unlocks_writes_target_and_deletes_every_locked_version(s3, algorithm):
     assert result == {'status': 'unlocked', 'size': len(s3.puts[0]['Body'])}
     assert [p['Key'] for p in s3.puts] == [TARGET]
     assert s3.puts[0]['ContentType'] == 'application/pdf'
+    # Tagged, so type detection never holds the unlocked copy again (no password loop).
+    assert s3.puts[0]['Metadata'] == {'unlocked': 'true'}
     reader = pypdf.PdfReader(io.BytesIO(s3.puts[0]['Body']))
     assert not reader.is_encrypted
     assert len(reader.pages) == 1
