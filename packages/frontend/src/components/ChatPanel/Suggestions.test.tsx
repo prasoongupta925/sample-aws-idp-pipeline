@@ -340,7 +340,7 @@ describe('chatSuggestions', () => {
     );
     expect(lines.slice(1).map((l) => l.split(':')[0])).toEqual([
       'Works today',
-      'Pilot, in its own browser link',
+      "Works today, inside this app (the Tools menu of a project's chat)",
       'Not included yet',
     ]);
     expect(off.prompt).toMatch(/Call QA Reviewer agent scores each call/);

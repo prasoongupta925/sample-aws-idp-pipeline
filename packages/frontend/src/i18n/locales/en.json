@@ -523,7 +523,7 @@
       "voicePrompt": "How do phone calls and the voice bot work with this app? Answer for a DSA team in a few short points, using only these facts, and say clearly what works today and what does not yet:",
       "voiceFactCallQa": "Works today: call recordings (WAV or MP3) uploaded to a project are transcribed (Indian English, Hindi, Marathi), and the Call QA Reviewer agent scores each call against the QA rubric with evidence quotes, hard fails and coaching tips.",
       "voiceFactVoiceChat": "Works today: Tools → Voice Chat in this chat lets you talk to the assistant by voice.",
-      "voiceFactBot": "Pilot, in its own browser link: an AI voice bot talks with the customer in Hindi, English or Hinglish about the documents their file still needs (from this app's file check) and an indicative loan amount. It says it is an AI and that the call is recorded, never promises approval and never asks for an OTP.",
+      "voiceFactBot": "Works today, inside this app (the Tools menu of a project's chat): an AI voice bot talks in Hindi, English or Marathi about the documents their file still needs (from this app's file check) and an indicative loan amount. It says it is an AI and that the call is recorded, never promises approval and never asks for an OTP.",
       "voiceFactLine": "Not included yet: real phone calls to customers. They need a phone number from an Indian telephony provider, or WhatsApp calling.",
       "whyLabel": "Why does this help a DSA?",
       "whyPrompt": "Why does this app help a loan DSA? Answer in plain words, one short line per point, using only these points (the problem, then what the app does). Do not add claims; the lender still decides:"

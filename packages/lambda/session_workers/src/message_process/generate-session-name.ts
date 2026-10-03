@@ -103,7 +103,7 @@ export async function generateSessionName(
     'Generate a natural and descriptive session title based on the following conversation.',
     'The title should be 3-6 words that capture the essence or goal of the conversation.',
     'Make it sound like a natural conversation topic, not just keywords.',
-    'Detect the language used in the conversation and write the title in that same language.',
+    'Write the title in English, even when the conversation is in Hindi, Marathi or Hinglish.',
     'Output only the title, nothing else.',
     '',
     `User: ${userText}`,
