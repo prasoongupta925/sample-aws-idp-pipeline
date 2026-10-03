@@ -778,6 +778,44 @@
     "apiKeyHint": "Stored locally in your browser only",
     "voice": "Voice"
   },
+  "bureau": {
+    "title": "Credit bureau",
+    "fetch": "Fetch credit report",
+    "fetching": "Fetching…",
+    "loading": "Checking the credit bureau connection…",
+    "sample": "SAMPLE reports",
+    "sampleHint": "Mock bureau: synthetic reports for the demo applicants only. No credit bureau is called.",
+    "notConnected": "No credit bureau is connected, so a report cannot be fetched here. Upload the applicant's credit report PDF with the loan file, or type its values below. An admin can connect a consent-based bureau API later.",
+    "statusFailed": "The credit bureau connection could not be checked: {{message}}",
+    "consentLegend": "The applicant's consent",
+    "consent": "The applicant has consented to this credit report pull for this loan application.",
+    "consentHint": "Needed for every pull. It is logged with your user name, how it was taken and the time.",
+    "method": "How consent was taken",
+    "methods": {
+      "otp": "OTP to the applicant's mobile",
+      "signed_form": "Signed consent form",
+      "recorded_call": "Recorded call"
+    },
+    "reference": "Consent reference (optional)",
+    "referencePlaceholder": "OTP request id, form no. or call id",
+    "referenceInvalid": "The consent reference may hold letters, digits, spaces and . _ / # : - only.",
+    "needsConsent": "Tick the consent box to fetch the report.",
+    "needsPan": "A pull needs the applicant's full PAN: enter it on the Profile tab.",
+    "panMismatch": "The PAN on the Profile tab is not this applicant's: correct it first.",
+    "panUsed": "PAN {{pan}}",
+    "replaceConfirm": "Replace the score, enquiries and loans on this tab with the bureau report?",
+    "fetched": "Report fetched at {{time}}: the CIBIL block below is filled from it. Check it, then save.",
+    "noRecord": "The bureau has no record for this applicant ({{time}}).",
+    "consentLogged": "Consent logged ({{id}}).",
+    "errors": {
+      "notConfigured": "No credit bureau is connected",
+      "invalid": "The pull was refused",
+      "notFound": "Project not found",
+      "tooMany": "The report was just pulled: wait a few seconds",
+      "failed": "The credit bureau did not answer",
+      "status": "The pull failed (HTTP {{status}})"
+    }
+  },
   "fileCheck": {
     "title": "File check",
     "open": "Check the loan file against a lender checklist",

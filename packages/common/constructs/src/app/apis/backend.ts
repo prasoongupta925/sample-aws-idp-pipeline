@@ -20,6 +20,7 @@ import {
   UPLOAD_TOKEN_HEADER,
 } from '../../constants/upload-links.js';
 import { getRetentionDays, toLogRetention } from '../retention-config.js';
+import { getBureauProvider } from '../bureau-config.js';
 import { Bucket, IBucket } from 'aws-cdk-lib/aws-s3';
 import { Table, ITable } from 'aws-cdk-lib/aws-dynamodb';
 import {
@@ -224,6 +225,9 @@ export class Backend extends Construct {
         LANCEDB_FUNCTION_NAME: lancedbFunctionArn,
         GRAPH_SERVICE_FUNCTION_NAME: graphServiceFunctionArn,
         GRAPH_DELETE_QUEUE_URL: graphDeleteQueueUrl,
+        // CIBIL page "Fetch credit report": none (default) or mock (CDK
+        // context bureauProvider; SAMPLE reports, no bureau is called).
+        BUREAU_PROVIDER: getBureauProvider(this),
         FILE_CHECK_FUNCTION_NAME: fileCheckFunctionArn,
         // File-check Ask: model, and the lifetime of its usage-ledger items
         // (DynamoDB TTL attribute expires_at, see StorageStack).

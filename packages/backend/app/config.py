@@ -52,6 +52,10 @@ class Config(BaseSettings):
     # PDF unlock Lambda (WorkflowStack, idp-v2-pdf-unlock): name or ARN. The
     # customer upload page and staff unlock password-protected PDFs with it.
     pdf_unlock_function_name: str = ""
+    # Credit bureau of the CIBIL page's "Fetch credit report" (app/bureau.py): none (default,
+    # no bureau connected) or mock (SAMPLE reports for the demo applicants). Env BUREAU_PROVIDER,
+    # set by the Backend construct from CDK context bureauProvider.
+    bureau_provider: str = "none"
 
 
 @lru_cache

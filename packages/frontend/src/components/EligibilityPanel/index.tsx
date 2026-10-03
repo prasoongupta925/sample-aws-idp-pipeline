@@ -42,6 +42,7 @@ import CibilSection from './CibilSection';
 import LendersSection from './LendersSection';
 import EmiCalculator, { emiStartOf } from './EmiCalculator';
 import BranchFinder from './BranchFinder';
+import BureauFetch from './BureauFetch';
 import { describeEligibilityError } from './errors';
 import { BUTTON_CLASS, PRIMARY_CLASS } from './fields';
 import { companyCheckRows, pincodeCheckRows, type PolicyCheck } from './checks';
@@ -474,7 +475,18 @@ export default function EligibilityPanel({
                 onCheckCompany={handleCheckCompany}
               />
             ) : tab === 'cibil' ? (
-              <CibilSection cibil={inputs.cibil} onEdit={onEdit} />
+              <>
+                {projectId && (
+                  <BureauFetch
+                    key={applicant}
+                    projectId={projectId}
+                    applicant={applicant}
+                    inputs={inputs}
+                    onEdit={onEdit}
+                  />
+                )}
+                <CibilSection cibil={inputs.cibil} onEdit={onEdit} />
+              </>
             ) : (
               <LendersSection
                 applicantName={name}

@@ -8,6 +8,7 @@ from app.routers import (
     applicants,
     artifacts,
     branches,
+    bureau,
     chat,
     crm_launch,
     datasets,
@@ -68,6 +69,7 @@ app.include_router(agents.router)
 app.include_router(applicants.router)
 app.include_router(artifacts.router)
 app.include_router(branches.router)
+app.include_router(bureau.router)
 app.include_router(chat.router)
 app.include_router(crm_launch.router)
 app.include_router(datasets.router)
