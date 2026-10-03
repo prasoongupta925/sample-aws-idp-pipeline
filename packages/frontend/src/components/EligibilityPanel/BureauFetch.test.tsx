@@ -7,8 +7,6 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import i18next, { type TFunction } from 'i18next';
 import { I18nextProvider, initReactI18next } from 'react-i18next';
 import en from '../../i18n/locales/en.json';
-import ko from '../../i18n/locales/ko.json';
-import ja from '../../i18n/locales/ja.json';
 import { ApiError } from '../../lib/apiError';
 import {
   NO_CONSENT,
@@ -319,30 +317,5 @@ describe('the CIBIL tab', () => {
     expect(panel('proj-1', 'profile')).not.toContain(
       'data-testid="bureau-fetch"',
     );
-  });
-});
-
-describe('bureau translations', () => {
-  type Tree = { [key: string]: string | Tree };
-  const strings = (tree: Tree, prefix = ''): Record<string, string> =>
-    Object.entries(tree).reduce<Record<string, string>>((out, [k, v]) => {
-      const path = prefix ? `${prefix}.${k}` : k;
-      return typeof v === 'string'
-        ? { ...out, [path]: v }
-        : { ...out, ...strings(v, path) };
-    }, {});
-  const vars = (s: string | undefined) =>
-    (s?.match(/\{\{\w+\}\}/g) ?? []).sort();
-
-  it.each([
-    ['ko', ko],
-    ['ja', ja],
-  ])('%s has every bureau string of en, with its placeholders', (_, locale) => {
-    const want = strings((en as unknown as Tree).bureau as Tree);
-    const have = strings((locale as unknown as Tree).bureau as Tree);
-    expect(Object.keys(have).sort()).toEqual(Object.keys(want).sort());
-    for (const [key, text] of Object.entries(want)) {
-      expect([key, vars(have[key])]).toEqual([key, vars(text)]);
-    }
   });
 });

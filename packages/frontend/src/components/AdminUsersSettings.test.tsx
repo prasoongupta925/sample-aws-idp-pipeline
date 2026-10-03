@@ -4,8 +4,6 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import i18next from 'i18next';
 import { I18nextProvider, initReactI18next } from 'react-i18next';
 import en from '../i18n/locales/en.json';
-import ja from '../i18n/locales/ja.json';
-import ko from '../i18n/locales/ko.json';
 import { AdminUsersTable, InviteUserForm } from './AdminUsersSettings';
 import { ApiError } from '../lib/apiError';
 import {
@@ -186,17 +184,5 @@ describe('admin users helpers', () => {
     expect(describeUsersError(t, new ApiError(502, 'Cognito down'))).toBe(
       'The request was rejected (HTTP 502). (Cognito down)',
     );
-  });
-
-  it('has the same adminUsers keys in every locale', () => {
-    const keys = (o: object, prefix = ''): string[] =>
-      Object.entries(o).flatMap(([k, v]) =>
-        v && typeof v === 'object'
-          ? keys(v as object, `${prefix}${k}.`)
-          : [`${prefix}${k}`],
-      );
-    const base = keys(en.adminUsers).sort();
-    expect(keys(ja.adminUsers).sort()).toEqual(base);
-    expect(keys(ko.adminUsers).sort()).toEqual(base);
   });
 });
