@@ -7,7 +7,8 @@ URL that the backend signs after these checks:
 
 - uploads: a supported file type (no video in a build without a video model),
   a well-formed content type allowed for that type, a size of 1 byte to
-  500 MB, and one exact key per document;
+  500 MB, and one exact key per document (an audio-only WebM is stored as
+  .weba, see AUDIO_WEBM_EXTENSION);
 - document downloads: a plain key under ``projects/{project_id}/``;
 - artifact downloads: a plain key under the caller's ``{user_id}/`` prefix;
 - URLs embedded in responses (segment images and video, images in analysis
@@ -66,10 +67,15 @@ UPLOAD_CONTENT_TYPES: dict[str, frozenset[str]] = {
     "avi": frozenset({"video/x-msvideo", "video/avi", "video/msvideo"}),
     "mkv": frozenset({"video/x-matroska"}),
     "webm": frozenset({"video/webm", "audio/webm"}),
+    "weba": frozenset({"audio/webm"}),
     "mp3": frozenset({"audio/mpeg", "audio/mp3"}),
     "wav": frozenset({"audio/wav", "audio/x-wav", "audio/wave", "audio/vnd.wave"}),
     "flac": frozenset({"audio/flac", "audio/x-flac"}),
     "m4a": frozenset({"audio/mp4", "audio/x-m4a", "audio/m4a"}),
+    # Phone call recorders (Telecaller QA uploads): Amazon Transcribe reads AMR
+    # and Ogg as they are, no conversion.
+    "amr": frozenset({"audio/amr"}),
+    "ogg": frozenset({"audio/ogg", "application/ogg"}),
     "webreq": frozenset({"application/x-webreq"}),
     "dxf": frozenset({"application/dxf", "application/x-dxf", "image/vnd.dxf", "image/x-dxf"}),
 }
@@ -83,6 +89,13 @@ VIDEO_NOT_SUPPORTED = (
     "can read video. Upload the audio track instead (MP3, WAV or FLAC); audio is "
     "transcribed with Amazon Transcribe."
 )
+
+# An audio-only WebM (a phone or browser call recording sent as audio/webm) is
+# stored with this extension. The pipeline types a file by its key's extension
+# (type-detection, segment-prep) and .webm is video there, which a build
+# without a video model cannot read; as .weba it goes to Amazon Transcribe
+# like the other recordings. A .webm sent as video (or octet-stream) stays video.
+AUDIO_WEBM_EXTENSION = "weba"
 
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 # RFC 6838 type/subtype, optionally followed by parameters (e.g. "; charset=utf-8").
@@ -100,8 +113,9 @@ class PresignError(ValueError):
 
 
 def check_upload(file_name: str, content_type: str, file_size: int, *, video_allowed: bool = True) -> str:
-    """Validate an upload request; return the file extension as given (used in the key).
+    """Validate an upload request; return the extension for the key.
 
+    The extension is kept as given, except for an audio-only WebM (AUDIO_WEBM_EXTENSION).
     video_allowed=False (config video_uploads_enabled) refuses video files.
     """
     if not file_name or len(file_name) > MAX_FILE_NAME_LENGTH:
@@ -118,8 +132,6 @@ def check_upload(file_name: str, content_type: str, file_size: int, *, video_all
     allowed = UPLOAD_CONTENT_TYPES.get(ext.lower())
     if allowed is None:
         raise PresignError(400, f"Unsupported file type: .{ext}" if ext else "File name has no extension")
-    if not video_allowed and ext.lower() in VIDEO_EXTENSIONS:
-        raise PresignError(400, VIDEO_NOT_SUPPORTED)
 
     # fullmatch, not match + "$" (which also accepts a trailing newline), and no
     # control characters anywhere (a quoted parameter could carry CR/LF): the
@@ -130,6 +142,10 @@ def check_upload(file_name: str, content_type: str, file_size: int, *, video_all
     base = match.group("base").lower()
     if base != _OCTET_STREAM and base not in allowed:
         raise PresignError(400, f"Content type {base} does not match a .{ext.lower()} file")
+    if ext.lower() == "webm" and base == "audio/webm":
+        return AUDIO_WEBM_EXTENSION
+    if not video_allowed and ext.lower() in VIDEO_EXTENSIONS:
+        raise PresignError(400, VIDEO_NOT_SUPPORTED)
     return ext
 
 

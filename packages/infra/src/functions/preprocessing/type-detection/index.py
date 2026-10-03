@@ -70,6 +70,13 @@ MIME_TYPE_MAP = {
     'wav': 'audio/wav',
     'flac': 'audio/flac',
     'm4a': 'audio/mp4',
+    # Phone call recordings: Amazon Transcribe reads AMR, Ogg and WebM audio as
+    # they are (transcribe-start MEDIA_FORMAT_MAP), so nothing is converted.
+    'amr': 'audio/amr',
+    'ogg': 'audio/ogg',
+    # An audio-only WebM: the backend stores an audio/webm upload as .weba
+    # (.webm stays video).
+    'weba': 'audio/webm',
     # Web Request
     'webreq': 'application/x-webreq',
     # CAD

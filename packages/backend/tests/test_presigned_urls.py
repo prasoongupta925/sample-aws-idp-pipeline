@@ -250,8 +250,9 @@ class TestVideoUploads:
             ("site_visit.MOV", "video/quicktime"),
             ("kyc.avi", "video/x-msvideo"),
             ("kyc.mkv", "video/x-matroska"),
-            # type-detection maps .webm to video/webm, whatever the browser says
-            ("call.webm", "audio/webm"),
+            # .webm is video unless it is sent as audio/webm (test_call_recordings)
+            ("site_visit.webm", "video/webm"),
+            ("site_visit.webm", "application/octet-stream"),
             ("site_visit.mp4", "application/octet-stream"),
         ],
     )
