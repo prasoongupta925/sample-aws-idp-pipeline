@@ -20,6 +20,8 @@ import {
 } from '../../components/ui/resizable';
 import AgentSelectModal from '../../components/AgentSelectModal';
 import DocumentUploadModal from '../../components/DocumentUploadModal';
+import RequestDocumentsModal from '../../components/CustomerUploadLinks/RequestDocumentsModal';
+import UnlockPdfModal from '../../components/CustomerUploadLinks/UnlockPdfModal';
 import ArtifactViewer from '../../components/ArtifactViewer';
 import FileCheckPanel, {
   type FileCheckFocus,
@@ -206,6 +208,12 @@ function ProjectDetailPage() {
 
   // --- System prompt modal state ---
   const [showSystemPrompt, setShowSystemPrompt] = useState(false);
+  // Customer upload links: the request dialog and the staff PDF unlock.
+  const [showRequestDocs, setShowRequestDocs] = useState(false);
+  const [unlockTarget, setUnlockTarget] = useState<{
+    document_id: string;
+    name: string;
+  } | null>(null);
   const [showProjectGraph, setShowProjectGraph] = useState(false);
 
   // --- Subscribe to project WebSocket notifications ---
@@ -559,6 +567,13 @@ function ProjectDetailPage() {
                     onDeleteDocument={documentsHook.handleDeleteDocument}
                     onOpenFileCheck={openFileCheck}
                     onOpenPainPoints={openPainPointsFromNav}
+                    onRequestFromCustomer={() => setShowRequestDocs(true)}
+                    onUnlockDocument={(doc) =>
+                      setUnlockTarget({
+                        document_id: doc.document_id,
+                        name: doc.name,
+                      })
+                    }
                     // onViewProjectGraph={() => setShowProjectGraph(true)}
                   />
                   {/* File Check - overlays SidePanel (an open artifact stays on top) */}
@@ -749,6 +764,22 @@ function ProjectDetailPage() {
         }
         onClose={() => documentsHook.setShowUploadModal(false)}
         onUpload={documentsHook.processFiles}
+      />
+
+      {/* Request documents from customer (upload link) */}
+      <RequestDocumentsModal
+        isOpen={showRequestDocs}
+        onClose={() => setShowRequestDocs(false)}
+        fetchApi={fetchApi}
+        projectId={projectId}
+        fileCheckResult={fileCheck.result}
+      />
+      <UnlockPdfModal
+        document={unlockTarget}
+        projectId={projectId}
+        fetchApi={fetchApi}
+        onClose={() => setUnlockTarget(null)}
+        onUnlocked={documentsHook.loadDocuments}
       />
 
       {/* System Prompt Modal (Ctrl+Shift+S) */}
