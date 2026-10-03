@@ -499,6 +499,34 @@ class TestPasswordProtectedPdf:
         with patch.object(staff_router, "unlock_pdf", side_effect=pdf_unlock.PdfUnlockNotConfiguredError()):
             assert self.unlock(token, doc_id).status_code == 503
 
+    def test_too_long_password_is_not_echoed_in_the_422(self, store, locked):
+        token, doc_id = locked
+        secret = "Rohan" * 40  # 200 characters, over MAX_PASSWORD_LENGTH
+        with patch.object(staff_router, "unlock_pdf") as unlock:
+            response = self.unlock(token, doc_id, password=secret)
+        assert response.status_code == 422
+        assert secret not in response.text
+        assert "input" not in response.json()["detail"][0]
+        unlock.assert_not_called()
+
+    def test_staff_password_422_is_not_echoed(self, store, locked):
+        _, doc_id = locked
+        secret = "Asha" * 50
+        response = client.post(f"/projects/{PROJECT}/documents/{doc_id}/unlock", json={"password": secret})
+        assert response.status_code == 422
+        assert secret not in response.text
+
+    def test_malformed_token_is_not_echoed_in_the_422(self, store):
+        bad = "x" * 80  # over the header's max_length
+        response = client.get("/public/upload-link", headers={"x-upload-token": bad})
+        assert response.status_code == 422
+        assert bad not in response.text
+
+    def test_staff_422_outside_secrets_keeps_its_input(self, store):
+        response = client.post(f"/projects/{PROJECT}/upload-links", json={"items": [], "language": "xx"})
+        assert response.status_code == 422
+        assert any("input" in error for error in response.json()["detail"])
+
 
 # --- pdf unlock client -------------------------------------------------------
 
