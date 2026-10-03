@@ -210,13 +210,15 @@ def type_detection():
     if not TYPE_DETECTION.exists():
         pytest.skip("type-detection Lambda source not in this checkout")
     functions = str(FUNCTIONS_DIR)  # the shared layer: shared.ddb_client
-    sys.path.insert(0, functions)
+    own_dir = str(TYPE_DETECTION.parent)  # its sibling modules (encrypted_pdf), as in the Lambda
+    sys.path[:0] = [own_dir, functions]
     try:
         spec = importlib.util.spec_from_file_location("type_detection_index", TYPE_DETECTION)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
     finally:
         sys.path.remove(functions)
+        sys.path.remove(own_dir)
     return module
 
 
