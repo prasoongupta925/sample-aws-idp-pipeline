@@ -1,19 +1,19 @@
-/** WebSocket 연결 상태 */
+/** WebSocket connection state */
 export type WebSocketStatus =
   | 'connecting'
   | 'connected'
   | 'disconnected'
   | 'error';
 
-/** WebSocket 메시지 기본 타입 */
+/** Base WebSocket message type */
 export interface WebSocketMessage<T = unknown> {
   action: string;
   data?: T;
   projectId?: string;
 }
 
-/** 메시지 구독 콜백 타입 */
+/** Message subscription callback type */
 export type MessageCallback<T = unknown> = (data: T) => void;
 
-/** 구독 해제 함수 타입 */
+/** Unsubscribe function type */
 export type Unsubscribe = () => void;

@@ -67,7 +67,7 @@ export interface ContentBlock {
   text?: string;
 }
 
-/** 스트림 파싱 (JSON 이벤트) */
+/** Parse the stream (JSON events) */
 async function parseStream(
   response: Response,
   onEvent?: (event: StreamEvent) => void,
@@ -98,7 +98,7 @@ async function parseStream(
 
       buffer += decoder.decode(value, { stream: true });
 
-      // JSON 객체 단위로 파싱
+      // Parse one JSON object at a time
       let startIdx = 0;
       for (let i = 0; i < buffer.length; i++) {
         if (buffer[i] === '{') {
@@ -133,12 +133,12 @@ async function parseStream(
                 result += event.content;
               }
             } catch {
-              // JSON 파싱 실패 시 무시
+              // Ignore JSON parse failures
             }
             startIdx = j;
             i = j - 1;
           } else {
-            // 불완전한 JSON - 다음 chunk에서 완성될 때까지 버퍼에 유지
+            // Incomplete JSON: keep it buffered until the next chunk completes it
             startIdx = i;
             break;
           }
@@ -153,7 +153,7 @@ async function parseStream(
   return result;
 }
 
-/** ARN에서 리전 추출 */
+/** Extract the region from an ARN */
 function extractRegionFromArn(arn: string): string {
   return arn.split(':')[3];
 }
@@ -165,7 +165,7 @@ export function useAwsClient() {
   const credentialsRef = useRef<Credentials | null>(null);
   const pendingRef = useRef<Promise<Credentials> | null>(null);
 
-  /** Cognito Identity Pool에서 AWS 자격 증명 획득 */
+  /** Get AWS credentials from the Cognito Identity Pool */
   const getCredentials = useCallback(async (): Promise<Credentials> => {
     if (!cognitoProps || !user?.id_token) {
       throw new Error('Cognito props or user token not available');
@@ -199,7 +199,7 @@ export function useAwsClient() {
     return pendingRef.current;
   }, [cognitoProps, user]);
 
-  /** SigV4 서명된 AWS 클라이언트 생성 */
+  /** Create a SigV4-signed AWS client */
   const createAwsClient = useCallback(
     async (service: string, region?: string) => {
       if (!cognitoProps) throw new Error('Cognito props not available');
@@ -216,7 +216,7 @@ export function useAwsClient() {
     [cognitoProps, getCredentials],
   );
 
-  /** Backend API 호출 */
+  /** Call the backend API */
   const fetchApi = useCallback(
     async <T>(path: string, options?: RequestInit): Promise<T> => {
       if (!apis?.Backend) throw new Error('Backend API URL not available');
@@ -237,15 +237,15 @@ export function useAwsClient() {
         throw new ApiError(response.status, errorDetailFromBody(body));
       }
 
-      // 본문 없는 응답(예: 204 DELETE, 202 reanalyze)은 파싱하지 않고 undefined
-      // 반환. Content-Length 헤더는 신뢰할 수 없어 실제 본문을 읽어 판단한다.
+      // Responses without a body (e.g. 204 DELETE, 202 reanalyze) are not parsed;
+      // return undefined. Content-Length is unreliable, so read the actual body.
       const text = await response.text();
       return text ? (JSON.parse(text) as T) : (undefined as T);
     },
     [apis, createAwsClient, user],
   );
 
-  /** Backend API 호출 (Blob 응답 - 이미지 등 바이너리) */
+  /** Call the backend API (Blob response: images and other binaries) */
   const fetchApiBlob = useCallback(
     async (path: string, options?: RequestInit): Promise<Blob> => {
       if (!apis?.Backend) throw new Error('Backend API URL not available');
@@ -269,7 +269,7 @@ export function useAwsClient() {
     [apis, createAwsClient, user],
   );
 
-  /** Bedrock Agent 호출 (스트리밍 지원) */
+  /** Invoke the Bedrock agent (streaming) */
   const invokeAgent = useCallback(
     async (
       prompt: ContentBlock[],

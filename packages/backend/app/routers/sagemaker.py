@@ -41,6 +41,28 @@ def get_cloudwatch_client():
     return boto3.client("cloudwatch", region_name=config.aws_region)
 
 
+class EndpointAvailability(BaseModel):
+    available: bool
+
+
+@router.get("/availability", response_model=EndpointAvailability)
+async def get_endpoint_availability():
+    """Whether the GPU OCR endpoint exists in this deployment.
+
+    The endpoint is opt-in (cdk -c enablePaddleOcrVl=true); without it the
+    other routes answer 404. The Settings page asks here first and hides its
+    OCR section instead of calling them.
+    """
+    client = get_sagemaker_client()
+    try:
+        client.describe_endpoint(EndpointName=config.paddleocr_endpoint_name)
+    except client.exceptions.ClientError as e:
+        if "Could not find endpoint" in str(e):
+            return EndpointAvailability(available=False)
+        raise HTTPException(status_code=500, detail="Could not check the OCR endpoint") from e
+    return EndpointAvailability(available=True)
+
+
 @router.get("/status", response_model=EndpointStatus)
 async def get_endpoint_status():
     """Get current SageMaker endpoint status."""

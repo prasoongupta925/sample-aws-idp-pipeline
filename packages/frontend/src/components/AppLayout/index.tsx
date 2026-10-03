@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import Config from '../../config';
 import { Link, useLocation, useNavigate } from '@tanstack/react-router';
 import SidebarSessionList from './SidebarSessionList';
+import { SUPPORTED_LANGS } from '../../i18n/languages';
 
 // Navigation icons
 const ProjectsIcon = () => (
@@ -179,11 +180,7 @@ const ChevronUpIcon = () => (
   </svg>
 );
 
-const LANGUAGES = [
-  { code: 'ko', label: 'Korean' },
-  { code: 'en', label: 'English' },
-  { code: 'ja', label: 'Japanese' },
-];
+const LANGUAGES = SUPPORTED_LANGS.map((code) => ({ code }));
 
 /**
  * Defines the App layout with sidebar navigation.

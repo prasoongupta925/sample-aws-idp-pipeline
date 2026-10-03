@@ -59,7 +59,7 @@ export function WebSocketProvider({ children }: PropsWithChildren) {
   const connectionGenRef = useRef(0);
   const subscribersRef = useRef<Map<string, Set<MessageCallback>>>(new Map());
 
-  /** Cognito Identity Pool에서 AWS 자격 증명 획득 */
+  /** Get AWS credentials from the Cognito Identity Pool */
   const getCredentials = useCallback(async (): Promise<Credentials> => {
     if (!cognitoProps || !user?.id_token) {
       throw new Error('Cognito props or user token not available');
@@ -93,7 +93,7 @@ export function WebSocketProvider({ children }: PropsWithChildren) {
     return pendingCredentialsRef.current;
   }, [cognitoProps, user]);
 
-  /** WebSocket 연결 종료 */
+  /** Close the WebSocket connection */
   const disconnect = useCallback(() => {
     isManualDisconnectRef.current = true;
     // Invalidate any in-flight connect() and clear the connecting latch so a
@@ -120,7 +120,7 @@ export function WebSocketProvider({ children }: PropsWithChildren) {
     reconnectAttemptsRef.current = 0;
   }, []);
 
-  /** WebSocket 연결 */
+  /** Open the WebSocket connection */
   const connect = useCallback(async () => {
     if (!websocketUrl || !cognitoProps) {
       return;
@@ -205,7 +205,7 @@ export function WebSocketProvider({ children }: PropsWithChildren) {
       setStatus('disconnected');
       wsRef.current = null;
 
-      // 비정상 종료 시 재연결 시도
+      // Reconnect after an abnormal close
       if (!isManualDisconnectRef.current && event.code !== 1000) {
         if (reconnectAttemptsRef.current >= DEFAULT_MAX_RECONNECT_ATTEMPTS) {
           setStatus('error');
@@ -224,7 +224,7 @@ export function WebSocketProvider({ children }: PropsWithChildren) {
     };
   }, [websocketUrl, cognitoProps, getCredentials]);
 
-  /** 메시지 구독 */
+  /** Subscribe to messages */
   const subscribe = useCallback(
     <T,>(action: string, callback: MessageCallback<T>): Unsubscribe => {
       if (!subscribersRef.current.has(action)) {
@@ -240,7 +240,7 @@ export function WebSocketProvider({ children }: PropsWithChildren) {
     [],
   );
 
-  /** 메시지 전송 */
+  /** Send a message */
   const sendMessage = useCallback(<T,>(message: WebSocketMessage<T>) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(message));
@@ -249,7 +249,7 @@ export function WebSocketProvider({ children }: PropsWithChildren) {
     }
   }, []);
 
-  /** 자동 연결 */
+  /** Connect automatically */
   useEffect(() => {
     if (user?.id_token && websocketUrl) {
       connect();
@@ -260,7 +260,7 @@ export function WebSocketProvider({ children }: PropsWithChildren) {
     };
   }, [user?.id_token, websocketUrl, connect, disconnect]);
 
-  /** 탭 가시성 변경 시 재연결 */
+  /** Reconnect when the tab becomes visible */
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
@@ -298,7 +298,7 @@ export function WebSocketProvider({ children }: PropsWithChildren) {
   );
 }
 
-/** WebSocket 상태 접근 훅 */
+/** Hook for the WebSocket state */
 export function useWebSocket(): WebSocketContextValue {
   const context = useContext(WebSocketContext);
   if (!context) {
@@ -307,7 +307,7 @@ export function useWebSocket(): WebSocketContextValue {
   return context;
 }
 
-/** 특정 action 메시지 구독 훅 */
+/** Hook to subscribe to messages of one action */
 export function useWebSocketMessage<T>(
   action: string,
   callback: MessageCallback<T>,
