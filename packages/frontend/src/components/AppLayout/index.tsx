@@ -2,6 +2,7 @@ import { useAuth } from 'react-oidc-context';
 import * as React from 'react';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Mic } from 'lucide-react';
 
 import Config from '../../config';
 import { Link, useLocation, useNavigate } from '@tanstack/react-router';
@@ -261,6 +262,11 @@ const AppLayout: React.FC<React.PropsWithChildren> = ({ children }) => {
       to: '/artifacts',
       label: t('nav.artifacts'),
       icon: <ArtifactsIcon />,
+    },
+    {
+      to: '/call-recordings',
+      label: t('callRecordings.nav'),
+      icon: <Mic className="w-5 h-5" />,
     },
   ];
 

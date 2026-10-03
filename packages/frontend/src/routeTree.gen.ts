@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as TestRouteImport } from './routes/test'
 import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as CallRecordingsRouteImport } from './routes/call-recordings'
 import { Route as ArtifactsRouteImport } from './routes/artifacts'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ProjectsProjectIdRouteImport } from './routes/projects/$projectId'
@@ -23,6 +24,11 @@ const TestRoute = TestRouteImport.update({
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CallRecordingsRoute = CallRecordingsRouteImport.update({
+  id: '/call-recordings',
+  path: '/call-recordings',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ArtifactsRoute = ArtifactsRouteImport.update({
@@ -44,6 +50,7 @@ const ProjectsProjectIdRoute = ProjectsProjectIdRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/artifacts': typeof ArtifactsRoute
+  '/call-recordings': typeof CallRecordingsRoute
   '/settings': typeof SettingsRoute
   '/test': typeof TestRoute
   '/projects/$projectId': typeof ProjectsProjectIdRoute
@@ -51,6 +58,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/artifacts': typeof ArtifactsRoute
+  '/call-recordings': typeof CallRecordingsRoute
   '/settings': typeof SettingsRoute
   '/test': typeof TestRoute
   '/projects/$projectId': typeof ProjectsProjectIdRoute
@@ -59,19 +67,33 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/artifacts': typeof ArtifactsRoute
+  '/call-recordings': typeof CallRecordingsRoute
   '/settings': typeof SettingsRoute
   '/test': typeof TestRoute
   '/projects/$projectId': typeof ProjectsProjectIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/artifacts' | '/settings' | '/test' | '/projects/$projectId'
+  fullPaths:
+    | '/'
+    | '/artifacts'
+    | '/call-recordings'
+    | '/settings'
+    | '/test'
+    | '/projects/$projectId'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/artifacts' | '/settings' | '/test' | '/projects/$projectId'
+  to:
+    | '/'
+    | '/artifacts'
+    | '/call-recordings'
+    | '/settings'
+    | '/test'
+    | '/projects/$projectId'
   id:
     | '__root__'
     | '/'
     | '/artifacts'
+    | '/call-recordings'
     | '/settings'
     | '/test'
     | '/projects/$projectId'
@@ -80,6 +102,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ArtifactsRoute: typeof ArtifactsRoute
+  CallRecordingsRoute: typeof CallRecordingsRoute
   SettingsRoute: typeof SettingsRoute
   TestRoute: typeof TestRoute
   ProjectsProjectIdRoute: typeof ProjectsProjectIdRoute
@@ -99,6 +122,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/call-recordings': {
+      id: '/call-recordings'
+      path: '/call-recordings'
+      fullPath: '/call-recordings'
+      preLoaderRoute: typeof CallRecordingsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/artifacts': {
@@ -128,6 +158,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ArtifactsRoute: ArtifactsRoute,
+  CallRecordingsRoute: CallRecordingsRoute,
   SettingsRoute: SettingsRoute,
   TestRoute: TestRoute,
   ProjectsProjectIdRoute: ProjectsProjectIdRoute,
