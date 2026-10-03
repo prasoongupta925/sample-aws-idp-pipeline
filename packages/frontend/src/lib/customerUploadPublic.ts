@@ -1,8 +1,10 @@
 // Customer side of the upload links (/u#<token>): no login. The token sits
-// in the URL fragment (browsers never send it) and goes only into the
-// X-Upload-Token header of the backend's /public/upload-link calls. Calls
-// send no cookies and no referrer. The files go straight to S3 through the
-// presigned PUT the backend returns for each one.
+// in the URL fragment (browsers never send it), is taken out of the URL as
+// soon as the page reads it (takeLinkToken), is then kept in memory only and
+// goes only into the X-Upload-Token header of the backend's
+// /public/upload-link calls. Calls send no cookies and no referrer. The files
+// go straight to S3 through the single-use presigned PUT the backend returns
+// for each one.
 import { ApiError, errorDetailFromBody } from './apiError';
 import { isUploadToken, type RequestedItem } from './uploadLinks';
 import {
@@ -49,6 +51,50 @@ export type UnlockResult =
 export function tokenFromHash(hash: string): string | null {
   const token = hash.replace(/^#/, '');
   return isUploadToken(token) ? token : null;
+}
+
+/** The customer page's path; the link is /u#<token>. */
+export const CUSTOMER_UPLOAD_PATH = '/u';
+
+/**
+ * True for the customer page (/u or /u/). main.tsx renders that page on its
+ * own, outside CognitoAuth: no sign-in redirect, no router, no websocket.
+ */
+export function isCustomerUploadPath(pathname: string): boolean {
+  return (
+    pathname === CUSTOMER_UPLOAD_PATH || pathname === `${CUSTOMER_UPLOAD_PATH}/`
+  );
+}
+
+type PageLocation = Pick<Location, 'hash' | 'pathname' | 'search'>;
+type PageHistory = Pick<History, 'state' | 'replaceState'>;
+
+/**
+ * The link token, from the URL fragment only. The fragment is taken out of
+ * the address bar at once (history.replaceState on the same entry, its state
+ * unchanged), so the token is not left in the address bar, the browser's
+ * history list or a URL the customer copies or shares. The caller keeps the
+ * token in memory only: never in localStorage, sessionStorage, the history
+ * state, a cookie, a URL or a log. After a reload the page therefore asks
+ * the customer to open the link from the message again.
+ */
+export function takeLinkToken(
+  location: PageLocation = window.location,
+  history: PageHistory = window.history,
+): string | null {
+  const hash = location.hash;
+  if (hash) {
+    try {
+      history.replaceState(
+        history.state,
+        '',
+        `${location.pathname}${location.search}`,
+      );
+    } catch {
+      // Refused (very old browser): the token stays in the fragment.
+    }
+  }
+  return tokenFromHash(hash);
 }
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
@@ -261,6 +307,8 @@ export type ProgressRequest = Pick<
  * PUT the file to its presigned URL with upload progress (0-100). fetch has
  * no upload progress, hence XMLHttpRequest. Content-Type must be the type
  * the URL was signed for; the browser sets Content-Length from the file.
+ * If-None-Match: * is signed too (backend presign_put if_none_match): the URL
+ * creates the file once, S3 answers a second PUT with 412.
  */
 export function putWithProgress(
   url: string,
@@ -273,6 +321,7 @@ export function putWithProgress(
     const xhr = makeRequest();
     xhr.open('PUT', url);
     xhr.setRequestHeader('Content-Type', contentType);
+    xhr.setRequestHeader('If-None-Match', '*');
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable && e.total > 0) {
         onProgress(Math.min(100, Math.round((e.loaded / e.total) * 100)));

@@ -23,6 +23,8 @@ export interface CustomerPageText {
   requestedList: string;
   validTill: string;
   loading: string;
+  reopenTitle: string;
+  reopenBody: string;
   invalidTitle: string;
   invalidBody: string;
   errorBody: string;
@@ -75,6 +77,9 @@ export const CUSTOMER_PAGE_TEXT: Record<UploadLinkLanguage, CustomerPageText> =
       requestedList: 'Documents requested',
       validTill: 'This link works till {{date}}.',
       loading: 'Opening your secure link…',
+      reopenTitle: 'Open your link again',
+      reopenBody:
+        'For your safety this page does not keep your link. Open it again from the message your loan advisor sent you (SMS or WhatsApp).',
       invalidTitle: 'This link does not work any more',
       invalidBody:
         'It has expired, was already submitted, or was cancelled. Ask your loan advisor for a new link.',
@@ -137,6 +142,9 @@ export const CUSTOMER_PAGE_TEXT: Record<UploadLinkLanguage, CustomerPageText> =
       requestedList: 'माँगे गए दस्तावेज़',
       validTill: 'यह link {{date}} तक चलेगा।',
       loading: 'आपका सुरक्षित link खुल रहा है…',
+      reopenTitle: 'अपना link फिर से खोलें',
+      reopenBody:
+        'आपकी सुरक्षा के लिए यह page आपका link याद नहीं रखता। आपके loan advisor ने जो message (SMS या WhatsApp) भेजा है, उसी से link फिर से खोलें।',
       invalidTitle: 'यह link अब काम नहीं करता',
       invalidBody:
         'इसकी समय-सीमा खत्म हो गई है, यह पहले ही submit हो चुका है, या रद्द कर दिया गया है। अपने loan advisor से नया link माँगें।',
@@ -199,6 +207,9 @@ export const CUSTOMER_PAGE_TEXT: Record<UploadLinkLanguage, CustomerPageText> =
       requestedList: 'मागितलेली कागदपत्रे',
       validTill: 'ही लिंक {{date}} पर्यंत चालेल.',
       loading: 'तुमची सुरक्षित लिंक उघडत आहे…',
+      reopenTitle: 'तुमची लिंक पुन्हा उघडा',
+      reopenBody:
+        'तुमच्या सुरक्षिततेसाठी हे पेज तुमची लिंक लक्षात ठेवत नाही. तुमच्या लोन सल्लागाराने पाठवलेल्या मेसेजमधून (SMS किंवा WhatsApp) लिंक पुन्हा उघडा.',
       invalidTitle: 'ही लिंक आता चालत नाही',
       invalidBody:
         'तिची मुदत संपली आहे, ती आधीच सबमिट झाली आहे किंवा रद्द केली आहे. तुमच्या लोन सल्लागाराकडे नवी लिंक मागा.',

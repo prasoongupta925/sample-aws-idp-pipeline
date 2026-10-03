@@ -12,7 +12,8 @@ import {
 import { ApiError } from '../../lib/apiError';
 import type { PublicClient, PublicLink } from '../../lib/customerUploadPublic';
 import { CONSENT_VERSION } from '../../data/customerUploadPage';
-import { CustomerUploadFlow } from './index';
+import { RuntimeConfigContext } from '../RuntimeConfig';
+import CustomerUploadPage, { CustomerUploadFlow } from './index';
 
 const io = vi.hoisted(() => ({
   put: vi.fn(),
@@ -84,11 +85,12 @@ beforeEach(() => {
 });
 
 describe('CustomerUploadFlow', () => {
-  it('shows the "link does not work" page without a token', () => {
+  it('asks to open the link again without a token (it is never stored)', () => {
     render(<CustomerUploadFlow client={null} />);
     expect(screen.getByRole('alert').textContent).toContain(
-      'This link does not work any more',
+      'Open your link again',
     );
+    expect(screen.queryByText('This link does not work any more')).toBeNull();
   });
 
   it('shows the same page for a 404 link', async () => {
@@ -96,6 +98,63 @@ describe('CustomerUploadFlow', () => {
       throw new ApiError(404, 'gone');
     });
     render(<CustomerUploadFlow client={asClient(client)} />);
+    expect(
+      await screen.findByText('This link does not work any more'),
+    ).toBeTruthy();
+  });
+
+  it('shows "link does not work" for a 404 on consent', async () => {
+    const client = fakeClient(() => link({ consented: false }));
+    client.consent.mockRejectedValue(new ApiError(404, 'gone'));
+    render(<CustomerUploadFlow client={asClient(client)} />);
+    fireEvent.click(await screen.findByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Agree and continue' }));
+    expect(
+      await screen.findByText('This link does not work any more'),
+    ).toBeTruthy();
+  });
+
+  it('shows "link does not work" for a 404 on a file', async () => {
+    const client = fakeClient(() => link());
+    client.createFile.mockRejectedValue(new ApiError(404, 'gone'));
+    render(<CustomerUploadFlow client={asClient(client)} />);
+    const input = await screen.findByTestId('files-input');
+    await act(async () => {
+      fireEvent.change(input, {
+        target: { files: [file('pan.jpg', 'image/jpeg')] },
+      });
+    });
+    expect(
+      await screen.findByText('This link does not work any more'),
+    ).toBeTruthy();
+    expect(io.put).not.toHaveBeenCalled();
+  });
+
+  it('shows "link does not work" when an unlock finds the link gone', async () => {
+    let gone = false;
+    const client = fakeClient(() => {
+      if (gone) throw new ApiError(404, 'gone');
+      return link({
+        file_count: 1,
+        files: [
+          {
+            document_id: DOC_LOCKED,
+            file_name: 's.pdf',
+            status: 'password_required',
+            locked: true,
+          },
+        ],
+      });
+    });
+    client.unlock.mockImplementation(async () => {
+      gone = true;
+      throw new ApiError(404, 'gone');
+    });
+    render(<CustomerUploadFlow client={asClient(client)} />);
+    fireEvent.change(await screen.findByLabelText('PDF password'), {
+      target: { value: 'x' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock' }));
     expect(
       await screen.findByText('This link does not work any more'),
     ).toBeTruthy();
@@ -437,5 +496,94 @@ describe('CustomerUploadFlow', () => {
     render(<CustomerUploadFlow client={asClient(fakeClient(() => link()))} />);
     expect(await screen.findByText('Rent agreement')).toBeTruthy();
     expect(screen.getByText(/This link works till/)).toBeTruthy();
+  });
+});
+
+describe('CustomerUploadPage (the /u page as main.tsx renders it)', () => {
+  const TOKEN = 'Tk'.repeat(21) + 'Z';
+  const OTHER = 'Q'.repeat(42) + '9';
+  const BACKEND = 'https://api.example.com/';
+
+  function backend(status = 200) {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(status === 200 ? JSON.stringify(link()) : null, {
+        status,
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    return calls;
+  }
+
+  const page = (token: string | null) => (
+    // Only the runtime config: no AuthProvider (CognitoAuth) above the page.
+    <RuntimeConfigContext.Provider value={{ apis: { Backend: BACKEND } }}>
+      <CustomerUploadPage initialToken={token} />
+    </RuntimeConfigContext.Provider>
+  );
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    window.history.replaceState(null, '', '/');
+  });
+
+  it('works without any sign-in and sends the token only in its header', async () => {
+    const calls = backend();
+    const logs = (['log', 'info', 'warn', 'error', 'debug'] as const).map(
+      (level) => vi.spyOn(console, level),
+    );
+    const stored = [
+      vi.spyOn(window.localStorage, 'setItem'),
+      vi.spyOn(window.sessionStorage, 'setItem'),
+    ];
+    render(page(TOKEN));
+    expect(await screen.findByText('Add your documents')).toBeTruthy();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe('https://api.example.com/public/upload-link');
+    expect(calls[0].url).not.toContain(TOKEN);
+    expect(
+      (calls[0].init.headers as Record<string, string>)['X-Upload-Token'],
+    ).toBe(TOKEN);
+    expect(calls[0].init.credentials).toBe('omit');
+    expect(calls[0].init.referrerPolicy).toBe('no-referrer');
+    // Never logged, never stored, never in the address bar.
+    for (const spy of [...logs, ...stored]) {
+      expect(JSON.stringify(spy.mock.calls)).not.toContain(TOKEN);
+    }
+    expect(window.location.href).not.toContain(TOKEN);
+    expect(JSON.stringify(window.history.state)).not.toContain(TOKEN);
+  });
+
+  it('asks a reload without the fragment to open the link again', () => {
+    const calls = backend();
+    render(page(null));
+    expect(screen.getByText('Open your link again')).toBeTruthy();
+    expect(calls).toHaveLength(0);
+  });
+
+  it('takes a link opened again in the same tab (fragment only) and clears it', async () => {
+    const calls = backend();
+    window.history.replaceState(null, '', '/u');
+    render(page(null));
+    expect(screen.getByText('Open your link again')).toBeTruthy();
+    // jsdom fires hashchange on a later task, like a browser.
+    window.location.hash = `#${OTHER}`;
+    expect(await screen.findByText('Add your documents')).toBeTruthy();
+    expect(calls).toHaveLength(1);
+    expect(
+      (calls[0].init.headers as Record<string, string>)['X-Upload-Token'],
+    ).toBe(OTHER);
+    expect(window.location.hash).toBe('');
+    expect(window.location.pathname).toBe('/u');
+  });
+
+  it('shows "link does not work" for a 404, like every other refused link', async () => {
+    backend(404);
+    render(page(TOKEN));
+    expect(
+      await screen.findByText('This link does not work any more'),
+    ).toBeTruthy();
   });
 });

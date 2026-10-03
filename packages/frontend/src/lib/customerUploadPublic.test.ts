@@ -4,11 +4,13 @@ import { fileURLToPath } from 'node:url';
 import {
   createPublicClient,
   customerContentType,
+  isCustomerUploadPath,
   isEncryptedPdf,
   needsPassword,
   parsePublicLink,
   putWithProgress,
   rejectFile,
+  takeLinkToken,
   tokenFromHash,
 } from './customerUploadPublic';
 import { ApiError } from './apiError';
@@ -77,6 +79,90 @@ describe('tokenFromHash', () => {
     `#${TOKEN.slice(1)}/`,
   ])('refuses %j', (hash) => {
     expect(tokenFromHash(hash)).toBeNull();
+  });
+});
+
+describe('isCustomerUploadPath', () => {
+  it('is the /u page only', () => {
+    expect(isCustomerUploadPath('/u')).toBe(true);
+    expect(isCustomerUploadPath('/u/')).toBe(true);
+    for (const path of ['/', '/upload', '/u/x', '/projects/u', '/U', '']) {
+      expect(isCustomerUploadPath(path)).toBe(false);
+    }
+  });
+});
+
+describe('takeLinkToken', () => {
+  function fakeHistory(state: unknown = null, refuse = false) {
+    const calls: Array<[unknown, string, string | undefined]> = [];
+    const history = {
+      state,
+      replaceState(data: unknown, unused: string, url?: string | URL | null) {
+        if (refuse) throw new Error('SecurityError');
+        calls.push([data, unused, url == null ? undefined : String(url)]);
+        history.state = data;
+      },
+    };
+    return { history, calls };
+  }
+  const page = (hash: string, search = '') => ({
+    hash,
+    pathname: '/u',
+    search,
+  });
+
+  it('reads the fragment and takes it out of the address bar', () => {
+    const state = { other: 1 };
+    const { history, calls } = fakeHistory(state);
+    expect(takeLinkToken(page(`#${TOKEN}`, '?lang=hi'), history)).toBe(TOKEN);
+    // Same entry, same state object (nothing added), URL without the fragment.
+    expect(calls).toEqual([[state, '', '/u?lang=hi']]);
+    expect(JSON.stringify(history.state)).not.toContain(TOKEN);
+  });
+
+  it('reads nothing but the fragment (not the history state)', () => {
+    const { history, calls } = fakeHistory({ uploadLinkToken: TOKEN });
+    expect(takeLinkToken(page(''), history)).toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  it('clears a malformed fragment too, and refuses it', () => {
+    const { history, calls } = fakeHistory();
+    expect(takeLinkToken(page('#short'), history)).toBeNull();
+    expect(calls).toEqual([[null, '', '/u']]);
+  });
+
+  it('still works when the browser refuses replaceState', () => {
+    const { history } = fakeHistory(null, true);
+    expect(takeLinkToken(page(`#${TOKEN}`), history)).toBe(TOKEN);
+  });
+
+  it('never touches web storage', () => {
+    const touched: string[] = [];
+    const trap = (name: string) => ({
+      configurable: true,
+      get() {
+        touched.push(name);
+        return undefined;
+      },
+    });
+    const names = ['localStorage', 'sessionStorage'] as const;
+    const saved = names.map((name) =>
+      Object.getOwnPropertyDescriptor(globalThis, name),
+    );
+    for (const name of names) {
+      Object.defineProperty(globalThis, name, trap(name));
+    }
+    try {
+      takeLinkToken(page(`#${TOKEN}`), fakeHistory().history);
+    } finally {
+      names.forEach((name, i) => {
+        const original = saved[i];
+        if (original) Object.defineProperty(globalThis, name, original);
+        else Reflect.deleteProperty(globalThis, name);
+      });
+    }
+    expect(touched).toEqual([]);
   });
 });
 
@@ -354,7 +440,11 @@ describe('putWithProgress', () => {
       () => xhr,
     );
     expect(xhr.opened).toEqual(['PUT', 'https://s3/url']);
-    expect(xhr.headers).toEqual({ 'Content-Type': 'image/jpeg' });
+    // Both are signed: the type, and If-None-Match (the URL works once).
+    expect(xhr.headers).toEqual({
+      'Content-Type': 'image/jpeg',
+      'If-None-Match': '*',
+    });
     expect(xhr.body).toBe(file);
     expect(progress).toEqual([50, 100]);
   });

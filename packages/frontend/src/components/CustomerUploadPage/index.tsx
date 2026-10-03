@@ -26,7 +26,7 @@ import {
   needsPassword,
   putWithProgress,
   rejectFile,
-  tokenFromHash,
+  takeLinkToken,
   type PublicClient,
   type PublicFile,
   type PublicLink,
@@ -58,6 +58,7 @@ export interface LocalFile {
 
 export type Phase =
   | { kind: 'loading' }
+  | { kind: 'noLink' }
   | { kind: 'invalid' }
   | { kind: 'error' }
   | { kind: 'ready'; link: PublicLink }
@@ -70,17 +71,35 @@ const isNotFound = (err: unknown) =>
  * The customer's page of an upload link (/u#<token>), outside the signed-in
  * app: who asks for what, the DPDP consent, then the upload (camera or files,
  * progress, PDF passwords) and Submit. Everything it shows comes from the
- * token's link; a bad or closed token shows one "link does not work" page.
+ * token's link; every 404 shows one "link does not work" page.
+ *
+ * main.tsx reads the token from the fragment (takeLinkToken, which also takes
+ * it out of the address bar) before anything renders; here it lives in
+ * memory only. Opening the link again in the same tab only changes the
+ * fragment (no page load): that new token is taken the same way.
  */
-export default function CustomerUploadPage() {
+export default function CustomerUploadPage({
+  initialToken,
+}: {
+  initialToken: string | null;
+}) {
   const { apis } = useRuntimeConfig();
   const backendUrl = typeof apis?.Backend === 'string' ? apis.Backend : '';
-  const token = useMemo(() => tokenFromHash(window.location.hash), []);
+  const [token, setToken] = useState(initialToken);
+  useEffect(() => {
+    const onHashChange = () => {
+      const next = takeLinkToken();
+      if (next) setToken(next);
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
   const client = useMemo(
     () => (token && backendUrl ? createPublicClient(backendUrl, token) : null),
     [token, backendUrl],
   );
-  return <CustomerUploadFlow client={client} />;
+  // A new token starts the page over (key), with nothing of the old link.
+  return <CustomerUploadFlow key={token ?? ''} client={client} />;
 }
 
 /** The page's state and calls; `client` null means no usable token. */
@@ -90,7 +109,7 @@ export function CustomerUploadFlow({
   client: PublicClient | null;
 }) {
   const [phase, setPhase] = useState<Phase>(
-    client ? { kind: 'loading' } : { kind: 'invalid' },
+    client ? { kind: 'loading' } : { kind: 'noLink' },
   );
   const [language, setLanguage] = useState<UploadLinkLanguage | null>(null);
   const [locals, setLocals] = useState<LocalFile[]>([]);
@@ -264,6 +283,7 @@ export function CustomerUploadFlow({
       onLanguage={phase.kind === 'loading' ? undefined : setLanguage}
     >
       {phase.kind === 'loading' && <LoadingView t={t} />}
+      {phase.kind === 'noLink' && <NoLinkView t={t} />}
       {phase.kind === 'invalid' && <InvalidView t={t} />}
       {phase.kind === 'error' && (
         <ErrorView
@@ -364,6 +384,20 @@ export function LoadingView({ t }: { t: T }) {
       <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
       {t('loading')}
     </p>
+  );
+}
+
+export function NoLinkView({ t }: { t: T }) {
+  return (
+    <section className={CARD} role="alert">
+      <h2 className="mb-1 flex items-center gap-2 font-semibold">
+        <XCircle className="h-5 w-5 text-amber-600" aria-hidden="true" />
+        {t('reopenTitle')}
+      </h2>
+      <p className="text-sm text-slate-600 dark:text-slate-300">
+        {t('reopenBody')}
+      </p>
+    </section>
   );
 }
 
