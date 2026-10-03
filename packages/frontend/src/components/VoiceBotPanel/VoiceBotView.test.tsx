@@ -24,6 +24,10 @@ function render(overrides: Partial<VoiceBotViewProps> = {}) {
     <VoiceBotView
       language="en-IN"
       onLanguageChange={noop}
+      talkMode="handsfree"
+      onTalkModeChange={noop}
+      held={false}
+      onHeldChange={noop}
       phase="idle"
       callLanguage={null}
       items={[]}
@@ -219,5 +223,58 @@ describe('findQaProject', () => {
         ?.project_id,
     ).toBe('b');
     expect(findQaProject([p('a', 'Home loans')])).toBeUndefined();
+  });
+});
+
+describe('hold to talk / hands-free', () => {
+  const checked = (html: string, value: string) =>
+    /checked=""/.test(
+      html.match(new RegExp(`<input[^>]*value="${value}"[^>]*>`))?.[0] ?? '',
+    );
+
+  it('offers both modes before the call, with the chosen one checked', () => {
+    const html = render({ talkMode: 'ptt' });
+    expect(html).toContain('Hold to talk');
+    expect(html).toContain('Hands-free');
+    expect(checked(html, 'ptt')).toBe(true);
+    expect(checked(html, 'handsfree')).toBe(false);
+    expect(checked(render({ talkMode: 'handsfree' }), 'handsfree')).toBe(true);
+    expect(html).not.toContain('aria-pressed'); // no hold button before the call
+  });
+
+  it('a live hold-to-talk call shows the hold button and tells how to speak', () => {
+    const up = render({
+      phase: 'live',
+      callLanguage: 'en-IN',
+      talkMode: 'ptt',
+    });
+    expect(up).toContain('aria-pressed="false"');
+    expect(up).toContain('Hold the button (or Space) and speak');
+    const down = render({
+      phase: 'live',
+      callLanguage: 'en-IN',
+      talkMode: 'ptt',
+      held: true,
+    });
+    expect(down).toContain('aria-pressed="true"');
+    expect(down).toContain('Release to send');
+    expect(down).toContain('Speak now… release to send');
+    const hindi = render({
+      phase: 'live',
+      callLanguage: 'hi-IN',
+      talkMode: 'ptt',
+    });
+    expect(hindi).toContain('दबाकर रखें और बोलें');
+  });
+
+  it('a hands-free call has no hold button and keeps listening; the mode is locked in a call', () => {
+    const html = render({
+      phase: 'live',
+      callLanguage: 'en-IN',
+      talkMode: 'handsfree',
+    });
+    expect(html).not.toContain('aria-pressed');
+    expect(html).toContain('Listening… speak now');
+    expect(html.match(/<fieldset[^>]*disabled=""/g)).toHaveLength(2);
   });
 });

@@ -116,12 +116,16 @@ async function flush() {
   for (let i = 0; i < 10; i++) await Promise.resolve();
 }
 
-function startCall(getToken: () => Promise<string | null> = async () => TOKEN) {
+function startCall(
+  getToken: () => Promise<string | null> = async () => TOKEN,
+  talkMode?: 'ptt' | 'handsfree',
+) {
   const ends: SessionEnd[] = [];
   const events = { interrupt: 0, phases: [] as string[] };
   const session = new VoiceSession({
     websocketUrl: 'wss://voice.example.in/ws',
     language: 'hi-IN',
+    talkMode,
     getToken,
     pageHref: 'https://d1wto5gdh1yonf.cloudfront.net/projects/p1',
     on: {
@@ -254,6 +258,41 @@ describe('streaming', () => {
     session.stop('user');
     expect(ws.close).toHaveBeenCalledWith(1000, 'caller hung up');
     expect(ends[0]).toMatchObject({ reason: 'user' });
+  });
+});
+
+describe('hold to talk', () => {
+  const capturePort = () =>
+    (FakeNode.all.find((n) => n.name === 'sd-capture') as FakeNode).port;
+
+  it('asks for ?mode=ptt and silences the microphone until the button is held', async () => {
+    const { session } = startCall(undefined, 'ptt');
+    await flush();
+    const ws = FakeSocket.all[0];
+    expect(ws.url).toBe('wss://voice.example.in/ws?language=hi-IN&mode=ptt');
+    const port = capturePort();
+    expect(port.sent).toEqual([{ type: 'mute', value: true }]);
+    session.setHeld(true);
+    expect(port.sent.at(-1)).toEqual({ type: 'mute', value: false });
+    session.setHeld(false);
+    expect(port.sent.at(-1)).toEqual({ type: 'mute', value: true });
+  });
+
+  it('Mute still wins while the button is held', async () => {
+    const { session } = startCall(undefined, 'ptt');
+    await flush();
+    session.setHeld(true);
+    session.setMuted(true);
+    expect(capturePort().sent.at(-1)).toEqual({ type: 'mute', value: true });
+  });
+
+  it('hands-free (the default) sends no mode and keeps the microphone open', async () => {
+    const { session } = startCall();
+    await flush();
+    expect(FakeSocket.all[0].url).not.toContain('mode=');
+    expect(capturePort().sent).toEqual([{ type: 'mute', value: false }]);
+    session.setHeld(false);
+    expect(capturePort().sent.at(-1)).toEqual({ type: 'mute', value: false });
   });
 });
 

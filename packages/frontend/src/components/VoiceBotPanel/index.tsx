@@ -5,6 +5,11 @@ import { useNavigate } from '@tanstack/react-router';
 import { useAwsClient } from '../../hooks/useAwsClient';
 import type { Project } from '../ProjectSettingsModal';
 import type { CallLanguage } from '../../lib/voicebot/protocol';
+import {
+  TALK_MODE_KEY,
+  initialTalkMode,
+  type TalkMode,
+} from '../../lib/voicebot/talk';
 import VoiceBotView from './VoiceBotView';
 import { useVoiceBotCall } from './useVoiceBotCall';
 
@@ -24,6 +29,14 @@ export function findQaProject(
   );
 }
 
+function safeStorage(): Storage | null {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
 interface VoiceBotPanelProps {
   voiceBotUrl: string;
   onClose: () => void;
@@ -37,6 +50,17 @@ export default function VoiceBotPanel({
   const navigate = useNavigate();
   const { fetchApi } = useAwsClient();
   const [language, setLanguage] = useState<CallLanguage>('en-IN');
+  // Hold to talk by default on a desktop, so other voices in the room are not answered.
+  const [talkMode, setTalkMode] = useState<TalkMode>(() =>
+    initialTalkMode(safeStorage(), window.matchMedia?.bind(window)),
+  );
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(TALK_MODE_KEY, talkMode);
+    } catch {
+      /* storage blocked */
+    }
+  }, [talkMode]);
   const [qaProject, setQaProject] = useState<Project | undefined>();
 
   // The main app's current Cognito ID token (same user pool as the voice server).
@@ -84,6 +108,10 @@ export default function VoiceBotPanel({
     <VoiceBotView
       language={language}
       onLanguageChange={setLanguage}
+      talkMode={talkMode}
+      onTalkModeChange={setTalkMode}
+      held={call.held}
+      onHeldChange={call.setHeld}
       phase={call.phase}
       callLanguage={call.callLanguage}
       items={call.captions.items}
@@ -92,7 +120,7 @@ export default function VoiceBotPanel({
       end={call.end}
       qaHref={qaHref}
       maxCallMinutes={MAX_CALL_MINUTES}
-      onCall={() => call.start(language)}
+      onCall={() => call.start(language, talkMode)}
       onEnd={call.stop}
       onResumeAudio={call.resumeAudio}
       onOpenQa={() => {

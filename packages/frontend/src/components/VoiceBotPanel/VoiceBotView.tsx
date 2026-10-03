@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Copy, Check, Mic, PhoneOff, X } from 'lucide-react';
 import type { TimelineItem } from '../../lib/voicebot/captions';
 import {
@@ -8,6 +8,11 @@ import {
   type StringKey,
 } from '../../lib/voicebot/i18n';
 import { NO_CALL_ERRORS } from '../../lib/voicebot/outcome';
+import {
+  holdKeyHandlers,
+  holdPointerHandlers,
+  type TalkMode,
+} from '../../lib/voicebot/talk';
 import type { CallLanguage, ResultCard } from '../../lib/voicebot/protocol';
 import type { SessionEnd } from '../../lib/voicebot/session';
 import { copyText } from '../../lib/clipboard';
@@ -36,6 +41,12 @@ export interface VoiceBotViewProps {
   /** Picker value (also the language of the next call). */
   language: CallLanguage;
   onLanguageChange: (language: CallLanguage) => void;
+  /** Hold to talk or hands-free (the mode of the next call). */
+  talkMode: TalkMode;
+  onTalkModeChange: (mode: TalkMode) => void;
+  /** Hold to talk: the button (or Space) is down. */
+  held: boolean;
+  onHeldChange: (held: boolean) => void;
   phase: PanelPhase;
   /** The language the running call uses (the bot may switch it). */
   callLanguage: CallLanguage | null;
@@ -260,6 +271,10 @@ function TimelineEntry({
 export default function VoiceBotView({
   language,
   onLanguageChange,
+  talkMode,
+  onTalkModeChange,
+  held,
+  onHeldChange,
   phase,
   callLanguage,
   items,
@@ -275,6 +290,23 @@ export default function VoiceBotView({
   onClose,
 }: VoiceBotViewProps) {
   const inCall = phase !== 'idle' && phase !== 'ended';
+  const pttLive = phase === 'live' && talkMode === 'ptt';
+
+  // Hold to talk from the keyboard (Space); never stay open when the window loses focus.
+  useEffect(() => {
+    if (!pttLive) return undefined;
+    const { down, up } = holdKeyHandlers(onHeldChange);
+    const blur = () => onHeldChange(false);
+    window.addEventListener('keydown', down);
+    window.addEventListener('keyup', up);
+    window.addEventListener('blur', blur);
+    return () => {
+      window.removeEventListener('keydown', down);
+      window.removeEventListener('keyup', up);
+      window.removeEventListener('blur', blur);
+      onHeldChange(false);
+    };
+  }, [pttLive, onHeldChange]);
   const lang = (inCall && callLanguage) || language;
   const error = phase === 'ended' ? endMessage(lang, end, maxCallMinutes) : '';
   const postCall = phase === 'ended' && showPostCall(end);
@@ -285,6 +317,11 @@ export default function VoiceBotView({
   let status: string;
   if (phase === 'starting') status = vt(lang, 'statusAllowMic');
   else if (phase === 'connecting') status = vt(lang, 'statusConnecting');
+  else if (pttLive)
+    status = vt(
+      lang,
+      held ? 'statusTalking' : speaking ? 'statusSpeaking' : 'statusHoldToTalk',
+    );
   else if (phase === 'live')
     status = vt(lang, speaking ? 'statusSpeaking' : 'statusListening');
   else if (phase === 'ending') status = vt(lang, 'statusEnding');
@@ -349,6 +386,34 @@ export default function VoiceBotView({
               </label>
             ))}
           </fieldset>
+          <fieldset className="flex items-center gap-1" disabled={inCall}>
+            <legend className="sr-only">{vt(lang, 'talkMode')}</legend>
+            {(
+              [
+                ['ptt', 'modePtt'],
+                ['handsfree', 'modeHandsfree'],
+              ] as const
+            ).map(([mode, key]) => (
+              <label
+                key={mode}
+                className={`cursor-pointer rounded-lg px-2.5 py-1 text-xs font-medium ${
+                  talkMode === mode
+                    ? 'bg-slate-700 text-white dark:bg-slate-200 dark:text-slate-900'
+                    : 'bg-white/70 dark:bg-white/10 text-slate-700 dark:text-slate-200'
+                } ${inCall ? 'opacity-50 cursor-not-allowed' : ''}`}
+              >
+                <input
+                  type="radio"
+                  name="voicebot-talk-mode"
+                  value={mode}
+                  checked={talkMode === mode}
+                  onChange={() => onTalkModeChange(mode)}
+                  className="sr-only"
+                />
+                {vt(lang, key)}
+              </label>
+            ))}
+          </fieldset>
           {inCall ? (
             <button
               type="button"
@@ -378,6 +443,24 @@ export default function VoiceBotView({
         >
           {status}
         </p>
+        {pttLive ? (
+          <div className="flex justify-center px-5 pb-3">
+            <button
+              type="button"
+              aria-pressed={held}
+              {...holdPointerHandlers(onHeldChange)}
+              onContextMenu={(event) => event.preventDefault()}
+              className={`inline-flex min-w-[14rem] select-none touch-none items-center justify-center gap-2 rounded-2xl px-5 py-3 text-sm font-semibold ${
+                held
+                  ? 'bg-purple-600 text-white shadow-lg'
+                  : 'bg-white/80 text-slate-800 dark:bg-white/10 dark:text-slate-100 border border-black/10 dark:border-white/20'
+              }`}
+            >
+              <Mic className="w-4 h-4" aria-hidden="true" />
+              {vt(lang, held ? 'releaseToSend' : 'holdToTalk')}
+            </button>
+          </div>
+        ) : null}
         {audioSuspended ? (
           <div className="px-5 pb-2">
             <button

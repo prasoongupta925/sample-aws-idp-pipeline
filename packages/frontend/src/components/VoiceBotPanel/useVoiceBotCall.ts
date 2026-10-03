@@ -10,6 +10,7 @@ import {
   type CallPhase,
   type SessionEnd,
 } from '../../lib/voicebot/session';
+import type { TalkMode } from '../../lib/voicebot/talk';
 
 export type PanelPhase = 'idle' | CallPhase | 'ended';
 
@@ -23,7 +24,11 @@ export interface VoiceBotCall {
   end: SessionEnd | null;
   /** The bot reported the recording upload ("recording" event). */
   recorded: boolean;
-  start: (language: CallLanguage) => void;
+  /** Hold to talk: the button is down. */
+  held: boolean;
+  start: (language: CallLanguage, talkMode: TalkMode) => void;
+  /** Hold to talk: open (true) or close (false) the microphone. */
+  setHeld: (held: boolean) => void;
   stop: () => void;
   resumeAudio: () => void;
 }
@@ -43,6 +48,7 @@ export function useVoiceBotCall(
   const [audioSuspended, setAudioSuspended] = useState(false);
   const [end, setEnd] = useState<SessionEnd | null>(null);
   const [recorded, setRecorded] = useState(false);
+  const [held, setHeldState] = useState(false);
   const sessionRef = useRef<VoiceSession | null>(null);
   const getTokenRef = useRef(getToken);
   useEffect(() => {
@@ -50,8 +56,9 @@ export function useVoiceBotCall(
   }, [getToken]);
 
   const start = useCallback(
-    (language: CallLanguage) => {
+    (language: CallLanguage, talkMode: TalkMode) => {
       if (sessionRef.current && !sessionRef.current.ended) return;
+      setHeldState(false);
       dispatch({ type: 'reset' });
       setEnd(null);
       setRecorded(false);
@@ -61,6 +68,7 @@ export function useVoiceBotCall(
       const session = new VoiceSession({
         websocketUrl: voiceBotUrl,
         language,
+        talkMode,
         getToken: () => getTokenRef.current(),
         pageHref: window.location.href,
         on: {
@@ -81,6 +89,7 @@ export function useVoiceBotCall(
             dispatch({ type: 'end' });
             setSpeaking(false);
             setAudioSuspended(false);
+            setHeldState(false);
             setEnd(result);
             setPhase('ended');
           },
@@ -94,6 +103,10 @@ export function useVoiceBotCall(
 
   const stop = useCallback(() => sessionRef.current?.stop('user'), []);
   const resumeAudio = useCallback(() => sessionRef.current?.resumeAudio(), []);
+  const setHeld = useCallback((next: boolean) => {
+    setHeldState(next);
+    sessionRef.current?.setHeld(next);
+  }, []);
 
   // Closing the panel (or leaving the page) hangs up.
   useEffect(
@@ -112,7 +125,9 @@ export function useVoiceBotCall(
     audioSuspended,
     end,
     recorded,
+    held,
     start,
+    setHeld,
     stop,
     resumeAudio,
   };

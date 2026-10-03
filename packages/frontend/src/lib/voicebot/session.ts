@@ -18,6 +18,7 @@ import {
   type ServerMessage,
 } from './protocol';
 import { closeOutcome, type CallErrorKey, type CallOutcome } from './outcome';
+import { micSilenced, type TalkMode } from './talk';
 
 const CHUNK_MS = 100; // 1600 samples / 3200 bytes per media message
 const MAX_BUFFERED_BYTES = 1 << 20; // stop queueing audio if the network stalls (~25 s)
@@ -62,6 +63,8 @@ export interface SessionOptions {
   /** runtime config voiceBotUrl ("wss://host/ws") */
   websocketUrl: string;
   language: string;
+  /** 'ptt' (hold to talk, sent as ?mode=ptt: the microphone only while held) or 'handsfree' (default). */
+  talkMode?: TalkMode;
   /** The main app's current Cognito ID token. */
   getToken: () => Promise<string | null | undefined>;
   maxCallSeconds?: number;
@@ -172,6 +175,8 @@ export class VoiceSession {
   /** the outcome, while the bot's last words play out after it hung up */
   private draining: CallOutcome | null = null;
   private muted = false;
+  /** Hold to talk: the button is down. */
+  private held = false;
   private assistantEnded = false;
   private endedBy = '';
   private serverError = '';
@@ -271,8 +276,7 @@ export class VoiceSession {
     this.playback.connect(ctx.destination);
     this.capture.port.onmessage = (event) => this.handleCapture(event.data);
     this.playback.port.onmessage = (event) => this.handlePlayback(event.data);
-    if (this.muted)
-      this.capture.port.postMessage({ type: 'mute', value: true });
+    this.syncMic();
     ctx.onstatechange = () => {
       const state = ctx.state;
       this.emit(
@@ -298,7 +302,10 @@ export class VoiceSession {
     if (!protocols) throw new CallError('errAuth');
     const url = buildSocketUrl(
       this.options.websocketUrl,
-      { language: this.options.language },
+      {
+        language: this.options.language,
+        mode: this.talkMode === 'ptt' ? 'ptt' : undefined,
+      },
       this.options.pageHref,
     );
     // Token as a subprotocol: it never appears in the URL (load-balancer and proxy logs).
@@ -464,10 +471,29 @@ export class VoiceSession {
       this.ctx.resume().catch(() => undefined);
   }
 
+  get talkMode(): TalkMode {
+    return this.options.talkMode === 'ptt' ? 'ptt' : 'handsfree';
+  }
+
+  /** The worklet zeroes the samples while muted or, in hold to talk, while the button is up. */
+  private syncMic(): void {
+    const value = micSilenced({
+      muted: this.muted,
+      talkMode: this.talkMode,
+      held: this.held,
+    });
+    if (this.capture) this.capture.port.postMessage({ type: 'mute', value });
+  }
+
   setMuted(muted: boolean): void {
     this.muted = !!muted;
-    if (this.capture)
-      this.capture.port.postMessage({ type: 'mute', value: this.muted });
+    this.syncMic();
+  }
+
+  /** Hold to talk: the button went down (true) or up (false). */
+  setHeld(held: boolean): void {
+    this.held = !!held;
+    this.syncMic();
   }
 
   get seconds(): number {
