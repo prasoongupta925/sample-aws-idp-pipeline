@@ -1884,7 +1884,7 @@ export default function WorkflowDetailModal({
                         {t('workflow.created')}
                       </p>
                       <p className="text-sm text-slate-800 dark:text-slate-200">
-                        {new Date(workflow.created_at).toLocaleString('ko-KR')}
+                        {new Date(workflow.created_at).toLocaleString('en-IN')}
                       </p>
                     </div>
 

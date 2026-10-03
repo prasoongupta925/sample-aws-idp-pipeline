@@ -235,7 +235,7 @@ export default function DocumentUploadModal({
   const [transcribeSettings, setTranscribeSettings] =
     useState<TranscribeSettings>(() => ({
       transcribe_language_mode: 'auto',
-      transcribe_language_code: 'ko-KR',
+      transcribe_language_code: 'en-IN',
       transcribe_language_options: [],
     }));
 
@@ -425,7 +425,7 @@ export default function DocumentUploadModal({
       setShowTranscribe(false);
       setTranscribeSettings({
         transcribe_language_mode: 'auto',
-        transcribe_language_code: 'ko-KR',
+        transcribe_language_code: 'en-IN',
         transcribe_language_options: [],
       });
     } else if (activeTab === 'data') {
@@ -475,7 +475,7 @@ export default function DocumentUploadModal({
       setShowTranscribe(false);
       setTranscribeSettings({
         transcribe_language_mode: 'auto',
-        transcribe_language_code: 'ko-KR',
+        transcribe_language_code: 'en-IN',
         transcribe_language_options: [],
       });
       setWebUrl('');

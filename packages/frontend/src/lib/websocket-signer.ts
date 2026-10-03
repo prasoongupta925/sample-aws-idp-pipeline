@@ -16,7 +16,7 @@ interface SignedUrlParams {
 }
 
 /**
- * AWS SigV4 서명된 WebSocket URL 생성
+ * Build an AWS SigV4-signed WebSocket URL
  */
 export async function createSignedWebSocketUrl({
   websocketUrl,
@@ -45,7 +45,7 @@ export async function createSignedWebSocketUrl({
 
   const signedHttpRequest = await signatureV4.presign(httpRequest);
 
-  // presign으로 생성된 쿼리 파라미터를 URL에 추가
+  // Append the presigned query parameters to the URL
   const query = signedHttpRequest.query;
   if (query) {
     Object.keys(query).forEach((param) => {
