@@ -2,7 +2,7 @@
   "sample": true,
   "label": "sample policy — replace with your lender grid",
   "version": "2026-10-02-sample",
-  "note": "SAMPLE lender policies for a demo, not any lender's real grid: replace with your lender grid before real use. Every value (ROI, FOIR, multiplier, tenure, amounts, CIBIL and enquiry limits, employment types, company categories, income consideration) is sample data. Set 'sample' to false only for a real grid. roi is the annual rate in percent; foir is a fraction of the monthly income; multiplier multiplies the monthly income; amounts are rupees; income_consideration_pct is the percent of each other income a lender counts; calculation_tenure_months is the tenure the per-lakh EMI and the FOIR eligibility are calculated at (the sheet's Tenure Calculation; a shorter requested tenure is used instead), while the EMI is shown at max_tenure_months; foir_grid (optional) gives a listed company's FOIR by net monthly salary slab (the row of the largest slab_starts value at or below the net salary; below the first one is below the lender's minimum income) and company category (one FOIR per slab), instead of the category's own foir.",
+  "note": "SAMPLE lender policies for a demo, not any lender's real grid: replace with your lender grid before real use. Every value (ROI, FOIR, multiplier, tenure, amounts, CIBIL and enquiry limits, employment types, company categories, income consideration, processing fee) is sample data. Set 'sample' to false only for a real grid. roi is the annual rate in percent; foir is a fraction of the monthly income; multiplier multiplies the monthly income; amounts are rupees; income_consideration_pct is the percent of each other income a lender counts; calculation_tenure_months is the tenure the per-lakh EMI and the FOIR eligibility are calculated at (the sheet's Tenure Calculation; a shorter requested tenure is used instead), while the EMI is shown at max_tenure_months; foir_grid (optional) gives a listed company's FOIR by net monthly salary slab (the row of the largest slab_starts value at or below the net salary; below the first one is below the lender's minimum income) and company category (one FOIR per slab), instead of the category's own foir. processing_fee (optional) is pct percent of the loan, at least min_amount and at most max_amount rupees when set; it is counted in the APR and the total cost.",
   "lenders": [
     {
       "id": "hdfc_bank",
@@ -97,6 +97,11 @@
         "bonus": 50,
         "incentive": 50,
         "pension": 100
+      },
+      "processing_fee": {
+        "pct": 1.5,
+        "min_amount": 2500,
+        "max_amount": 25000
       }
     },
     {
@@ -146,6 +151,9 @@
         "bonus": 50,
         "incentive": 60,
         "pension": 80
+      },
+      "processing_fee": {
+        "pct": 2.0
       }
     },
     {
@@ -241,6 +249,9 @@
         "bonus": 50,
         "incentive": 50,
         "pension": 100
+      },
+      "processing_fee": {
+        "pct": 3.0
       }
     },
     {
@@ -291,6 +302,10 @@
         "bonus": 50,
         "incentive": 50,
         "pension": 75
+      },
+      "processing_fee": {
+        "pct": 2.5,
+        "min_amount": 3000
       }
     }
   ]

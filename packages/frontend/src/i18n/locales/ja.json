@@ -1256,6 +1256,14 @@
       "maxTenure": "最長期間",
       "maxAmount": "上限額",
       "minScore": "最低 CIBIL",
+      "apr": "APR (実質年率)",
+      "totalCost": "総コスト",
+      "totalInterest": "利息総額",
+      "processingFee": "手数料",
+      "feeNone": "ポリシーに手数料なし",
+      "feePct": "融資額の {{pct}}%",
+      "feeMin": "最低 {{value}}",
+      "feeMax": "最高 {{value}}",
       "statuses": {
         "eligible": "適格",
         "notServiceable": "対応不可",
@@ -1275,7 +1283,10 @@
         "multiplier": "倍率による適格額: {{income}} × {{multiplier}} = {{value}}",
         "eligible": "適格額: 2 つの値と貸し手の上限 {{max}} のうち最も低い値 = {{value}}",
         "computed": "計算式の結果は {{value}} (貸し手の上限 {{max}}) ですが、上記の理由で不適格です",
-        "emi": "EMI: {{amount}} を {{roi}}、{{months}} か月 = {{value}}"
+        "emi": "EMI: {{amount}} を {{roi}}、{{months}} か月 = {{value}}",
+        "apr": "APR: {{amount}} − 手数料 {{fee}} = {{net}} を {{emi}} の EMI {{months}} 回で返済。{{net}} = EMI × (1 − (1 + r)⁻ⁿ) ÷ r から r = 月 {{monthly}}、APR = 12 × r = {{value}}",
+        "aprNoFee": "APR: 手数料がないため APR は ROI と同じ {{value}}",
+        "totalCost": "総コスト: {{months}} × {{emi}} − {{amount}} + 手数料 {{fee}} = {{value}}"
       },
       "otherIncomeCounted": "認められたその他の収入:",
       "otherIncomeRow": "{{label}} {{monthly}} の {{pct}}% = {{value}}",
@@ -1330,6 +1341,11 @@
       "monthlyEmi": "Monthly EMI",
       "totalInterest": "Total interest",
       "totalPayable": "Total payable",
+      "fee": "Processing fee (optional)",
+      "feeRange": "Enter a fee of ₹0 or more, less than the loan amount.",
+      "processingFee": "Processing fee",
+      "apr": "APR",
+      "totalCost": "Total cost (interest + fee)",
       "principal": "Principal",
       "interest": "Interest",
       "splitLabel": "Principal and interest share of the total payable",
@@ -1351,7 +1367,8 @@
       "totalExtra": "Total extra cost",
       "btEmpty": "Enter the outstanding, the remaining tenure and both rates.",
       "btNote": "Over the remaining tenure, before the new lender's processing fee and any charge for closing the current loan.",
-      "formula": "EMI = P × r × (1 + r)ⁿ ÷ ((1 + r)ⁿ − 1), r = the yearly rate ÷ 12, n = months (reducing balance, as Excel's PMT), rounded to the rupee."
+      "formula": "EMI = P × r × (1 + r)ⁿ ÷ ((1 + r)ⁿ − 1), r = the yearly rate ÷ 12, n = months (reducing balance, as Excel's PMT), rounded to the rupee.",
+      "aprFormula": "APR = 12 × r, where r solves P − fee = EMI × (1 − (1 + r)⁻ⁿ) ÷ r (the annual percentage rate of a Key Fact Statement); with no fee it is the interest rate."
     },
     "branches": {
       "title": "Nearest branches",

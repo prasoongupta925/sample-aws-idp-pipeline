@@ -18,11 +18,13 @@ import type {
   EligibilityResult,
   LenderEligibility,
   LenderPolicy,
+  ProcessingFeePolicy,
   SourceKind,
   StillNeeded,
 } from '../../types/eligibility';
 import type { LenderLoginState } from '../../hooks/useEligibility';
 import {
+  formatApr,
   formatFoir,
   formatRoi,
   formatRupees,
@@ -102,7 +104,9 @@ const NUMBER_COLOR: Record<LenderTone, string> = {
 };
 // Shown when the panel is wide; the details row has them otherwise.
 const WIDE = 'hidden @3xl:table-cell';
-const COLUMNS = 9;
+const COLUMNS = 11;
+// The lender column and these first ones are shown at every width.
+const NARROW_COLUMNS = 6;
 
 function Metric({
   label,
@@ -141,6 +145,61 @@ function Metric({
     </div>
   );
 }
+
+/** '1.5% of the loan, at least ₹2,500, at most ₹25,000'; 'No fee in the policy'. */
+export function feeRule(
+  t: TFunction,
+  policy: ProcessingFeePolicy | null | undefined,
+): string {
+  if (!policy) return t('eligibility.lenders.feeNone');
+  const parts = [t('eligibility.lenders.feePct', { pct: policy.pct })];
+  if (policy.min_amount !== null) {
+    parts.push(
+      t('eligibility.lenders.feeMin', {
+        value: formatRupees(policy.min_amount),
+      }),
+    );
+  }
+  if (policy.max_amount !== null) {
+    parts.push(
+      t('eligibility.lenders.feeMax', {
+        value: formatRupees(policy.max_amount),
+      }),
+    );
+  }
+  return parts.join(', ');
+}
+
+/** The APR and total cost formulas with an eligible lender's numbers (Details). */
+export function costLines(t: TFunction, row: LenderEligibility): string[] {
+  if (row.apr == null || row.total_cost == null) return [];
+  const fee = row.processing_fee ?? 0;
+  const months = row.tenure_months ?? '–';
+  const apr =
+    fee > 0 && row.eligible_amount !== null
+      ? t('eligibility.lenders.how.apr', {
+          amount: formatRupees(row.eligible_amount),
+          fee: formatRupees(fee),
+          net: formatRupees(row.eligible_amount - fee),
+          months,
+          emi: formatRupees(row.emi),
+          monthly: `${INDIAN_NUMBER_4.format(row.apr / 12)}%`,
+          value: formatApr(row.apr),
+        })
+      : t('eligibility.lenders.how.aprNoFee', { value: formatApr(row.apr) });
+  const cost = t('eligibility.lenders.how.totalCost', {
+    months,
+    emi: formatRupees(row.emi),
+    amount: formatRupees(row.eligible_amount),
+    fee: formatRupees(fee),
+    value: formatRupees(row.total_cost),
+  });
+  return [apr, cost];
+}
+
+const INDIAN_NUMBER_4 = new Intl.NumberFormat('en-IN', {
+  maximumFractionDigits: 4,
+});
 
 /** The sheet's formulas with this lender's numbers, as the backend returned them. */
 function HowCalculated({ row }: { row: LenderEligibility }) {
@@ -189,6 +248,7 @@ function HowCalculated({ row }: { row: LenderEligibility }) {
         value: formatRupees(row.emi),
       }),
     );
+    lines.push(...costLines(t, row));
   }
   return (
     <div className="space-y-0.5" data-testid="how-calculated">
@@ -568,6 +628,12 @@ function LenderRows({
         <td className={td} data-col="emi">
           {formatRupees(row.emi)}
         </td>
+        <td className={td} data-col="apr">
+          {formatApr(row.apr)}
+        </td>
+        <td className={td} data-col="total_cost">
+          {formatRupees(row.total_cost)}
+        </td>
         <td className={`${td} ${WIDE}`} data-col="per_lakh_emi">
           {formatRupees(row.per_lakh_emi)}
         </td>
@@ -703,6 +769,34 @@ function LenderRows({
                   source={src('max_amount')}
                   kind={kind('max_amount')}
                 />
+                {lenderTone(row.status) === 'eligible' && (
+                  <>
+                    <Metric
+                      label={t('eligibility.lenders.processingFee')}
+                      value={formatRupees(row.processing_fee)}
+                      source={feeRule(t, row.processing_fee_policy)}
+                      kind={kind('processing_fee')}
+                    />
+                    <Metric
+                      label={t('eligibility.lenders.apr')}
+                      value={formatApr(row.apr)}
+                      source={src('apr')}
+                      kind={kind('apr')}
+                    />
+                    <Metric
+                      label={t('eligibility.lenders.totalInterest')}
+                      value={formatRupees(row.total_interest)}
+                      source={src('total_cost')}
+                      kind={kind('total_cost')}
+                    />
+                    <Metric
+                      label={t('eligibility.lenders.totalCost')}
+                      value={formatRupees(row.total_cost)}
+                      source={src('total_cost')}
+                      kind={kind('total_cost')}
+                    />
+                  </>
+                )}
               </dl>
               <HowCalculated row={row} />
               {row.other_income_considered.length > 0 && (
@@ -782,6 +876,9 @@ function PolicyTable({ lenders }: { lenders: LenderPolicy[] }) {
               <th scope="col" className={`${TH_CLASS} text-right`}>
                 {t('eligibility.lenders.minScore')}
               </th>
+              <th scope="col" className={TH_CLASS}>
+                {t('eligibility.lenders.processingFee')}
+              </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-black/[0.06] dark:divide-white/[0.06]">
@@ -810,6 +907,9 @@ function PolicyTable({ lenders }: { lenders: LenderPolicy[] }) {
                 </td>
                 <td className="px-2 py-1 text-right tabular-nums">
                   {p.min_cibil_score ?? '–'}
+                </td>
+                <td className="px-2 py-1" data-col="processing_fee">
+                  {feeRule(t, p.processing_fee)}
                 </td>
               </tr>
             ))}
@@ -902,6 +1002,8 @@ const COLUMN_SOURCES: readonly [string, SourceKind][] = [
   ['tenure_months', 'policy'],
   ['roi', 'policy'],
   ['emi', 'formula'],
+  ['apr', 'formula'],
+  ['total_cost', 'formula'],
   ['per_lakh_emi', 'formula'],
   ['foir_eligibility', 'formula'],
   ['multiplier_eligibility', 'formula'],
@@ -913,6 +1015,8 @@ const COLUMN_LABELS: Record<string, string> = {
   tenure_months: 'eligibility.lenders.tenure',
   roi: 'eligibility.lenders.roi',
   emi: 'eligibility.lenders.emi',
+  apr: 'eligibility.lenders.apr',
+  total_cost: 'eligibility.lenders.totalCost',
   per_lakh_emi: 'eligibility.lenders.perLakhEmi',
   foir_eligibility: 'eligibility.lenders.foirEligibility',
   multiplier_eligibility: 'eligibility.lenders.multiplierEligibility',
@@ -1153,7 +1257,7 @@ export default function LendersSection({
                       <th
                         key={col}
                         scope="col"
-                        className={`${TH_CLASS} ${i >= 4 ? WIDE : ''} text-right ${SOURCE_RULE_CLASS[kind]}`}
+                        className={`${TH_CLASS} ${i >= NARROW_COLUMNS ? WIDE : ''} text-right ${SOURCE_RULE_CLASS[kind]}`}
                         title={sourceLabel(t, kind)}
                         data-source={kind}
                       >

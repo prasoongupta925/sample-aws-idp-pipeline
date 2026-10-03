@@ -7,6 +7,7 @@ import { I18nextProvider, initReactI18next } from 'react-i18next';
 import en from '../../i18n/locales/en.json';
 import EligibilityPanel from '.';
 import EmiCalculator, {
+  aprOf,
   balanceTransfer,
   convertTenure,
   emiOf,
@@ -15,6 +16,7 @@ import EmiCalculator, {
   parseRate,
   roundRupees,
   tenureMonths,
+  validFee,
   yearlySchedule,
 } from './EmiCalculator';
 import { WORKED_EXAMPLE_RESPONSE } from './fixtures';
@@ -146,6 +148,51 @@ describe('EMI maths', () => {
   });
 });
 
+describe('APR and total cost', () => {
+  it('counts a 2,000 fee on 1,00,000 at 12% for 12 months (hand-worked)', () => {
+    // EMI 8,884.88 (1.01^12 = 1.126825); the borrower gets 98,000, so
+    // (1 − (1 + r)^−12) ÷ r = 98,000 ÷ 8,884.88 = 11.0300: 1.30% a month gives
+    // 11.0445 and 1.33% gives 11.0241, so r ≈ 1.321% and the APR ≈ 15.85%.
+    const plan = emiPlan(100000, 12, 12, 2000);
+    expect(plan.emi).toBe(8885);
+    expect(plan.apr).toBe(15.85);
+    // Interest 6,618.55 (12 × 8,884.88 − 1,00,000) + the 2,000 fee.
+    expect(plan.totalInterest).toBe(6619);
+    expect(plan.totalCost).toBe(8619);
+    expect(plan.fee).toBe(2000);
+  });
+
+  it('solves the Key Fact Statement equation', () => {
+    const r = (aprOf(100000, 12, 12, 2000) as number) / 1200;
+    const repaid = (emiOf(100000, 12, 12) * (1 - Math.pow(1 + r, -12))) / r;
+    expect(repaid).toBeCloseTo(98000, 4);
+  });
+
+  it('works at 0%: 1,20,000 over 12 months with a 1,200 fee', () => {
+    // EMI 10,000; factor 11.88 ≈ 12 × (1 − 6.5 r) -> r ≈ 0.154% a month.
+    const plan = emiPlan(120000, 0, 12, 1200);
+    expect(plan.apr).toBe(1.86);
+    expect(plan.totalCost).toBe(1200);
+  });
+
+  it('is the rate itself with no fee, as the backend', () => {
+    expect(aprOf(2058000, 11, 72)).toBe(11);
+    expect(emiPlan(2058000, 11, 72).apr).toBe(11);
+    // The backend's ICICI Bank row: 2% fee = 41,160 -> APR 11.75%.
+    expect(emiPlan(2058000, 11, 72, 41160).apr).toBe(11.75);
+    expect(emiPlan(1500000, 12, 60, 22500).apr).toBe(12.67);
+  });
+
+  it('refuses a fee below 0 or not below the loan', () => {
+    expect(aprOf(100000, 12, 12, -1)).toBeNull();
+    expect(aprOf(100000, 12, 12, 100000)).toBeNull();
+    expect(validFee(null, 100000)).toBe(0);
+    expect(validFee(5000, 100000)).toBe(5000);
+    expect(validFee(100000, 100000)).toBeNaN();
+    expect(validFee(-5, 100000)).toBeNaN();
+  });
+});
+
 describe('EMI inputs', () => {
   it.each([
     ['11', 11],
@@ -195,6 +242,7 @@ describe('EMI inputs', () => {
       amount: 2058000,
       ratePct: 11,
       months: 72,
+      fee: 41160,
     });
     expect(emiStartOf(null)).toBeNull();
     expect(emiStartOf({ ...RESULT, best_lender: null })).toBeNull();
@@ -227,6 +275,56 @@ describe('EmiCalculator', () => {
     expect(html.match(/<tr class="border-t/g)).toHaveLength(30);
     expect(html).toContain('value="1,00,00,000"');
     expect(text).toContain('Indicative: the lender decides.');
+  });
+
+  it('shows the APR, the fee and the total cost', () => {
+    const html = render(
+      <EmiCalculator
+        initialOpen
+        initialEmi={{
+          amount: 100000,
+          rate: '12',
+          tenure: '12',
+          unit: 'months',
+          fee: 2000,
+        }}
+      />,
+    );
+
+    expect(byTestId(html, 'emi-apr')).toBe('15.85%');
+    expect(byTestId(html, 'emi-fee-value')).toBe('₹2,000');
+    expect(byTestId(html, 'emi-total-cost')).toBe('₹8,619');
+    expect(plain(html)).toContain('APR = 12 × r, where r solves P − fee');
+  });
+
+  it('shows the rate as the APR without a fee', () => {
+    const html = render(
+      <EmiCalculator
+        initialOpen
+        initialEmi={{ amount: CRORE, rate: '16', tenure: '30', unit: 'years' }}
+      />,
+    );
+    expect(byTestId(html, 'emi-apr')).toBe('16%');
+    expect(byTestId(html, 'emi-total-cost')).toBe('₹3,84,11,252');
+  });
+
+  it('says what is wrong with a fee', () => {
+    const html = render(
+      <EmiCalculator
+        initialOpen
+        initialEmi={{
+          amount: 100000,
+          rate: '12',
+          tenure: '12',
+          unit: 'months',
+          fee: 100000,
+        }}
+      />,
+    );
+    expect(plain(html)).toContain(
+      'Enter a fee of ₹0 or more, less than the loan amount.',
+    );
+    expect(html).not.toContain('data-testid="emi-result"');
   });
 
   it("offers the best lender's result", () => {

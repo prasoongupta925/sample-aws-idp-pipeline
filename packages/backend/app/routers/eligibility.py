@@ -511,6 +511,12 @@ class UnlistedCompanyOut(BaseModel):
     multiplier: float | None = None
 
 
+class ProcessingFeeOut(BaseModel):
+    pct: float = Field(description="Percent of the loan")
+    min_amount: float | None = Field(default=None, description="At least this many rupees, when set")
+    max_amount: float | None = Field(default=None, description="At most this many rupees, when set")
+
+
 class LenderPolicyOut(BaseModel):
     id: str
     name: str
@@ -529,6 +535,9 @@ class LenderPolicyOut(BaseModel):
     unlisted_company: UnlistedCompanyOut
     income_consideration_pct: dict[str, float] = Field(
         description="Percent of each other income counted: rented_notary, rented_registered, bonus, incentive, pension"
+    )
+    processing_fee: ProcessingFeeOut | None = Field(
+        default=None, description="Counted in the APR and the total cost; none when not set"
     )
     serviceable_regions: list[str]
     sample: bool
@@ -705,6 +714,19 @@ class LenderEligibility(BaseModel):
     )
     emi_at_calculation_tenure: float = Field(description="EMI of eligible_amount over calculation_tenure_months")
     per_lakh_emi: float
+    processing_fee: float | None = Field(
+        default=None, description="The lender's processing fee on eligible_amount (0 with no fee); null unless eligible"
+    )
+    processing_fee_policy: ProcessingFeeOut | None = Field(default=None, description="The fee's policy, if any")
+    apr: float | None = Field(
+        default=None,
+        description="Annual percentage rate, percent: 12 × r where eligible_amount − fee = emi × (1 − (1 + r)^−n) ÷ r "
+        "over tenure_months; the ROI with no fee; null unless eligible",
+    )
+    total_interest: float | None = Field(default=None, description="emi × tenure_months − eligible_amount")
+    total_cost: float | None = Field(
+        default=None, description="Total interest plus the processing fee over tenure_months; null unless eligible"
+    )
     foir_eligibility: float | None
     multiplier_eligibility: float | None
     income_considered: float | None = Field(description="Net salary + other income at this lender's consideration %")

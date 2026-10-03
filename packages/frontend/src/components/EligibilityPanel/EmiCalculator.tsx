@@ -8,7 +8,12 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import type { EligibilityResult } from '../../types/eligibility';
-import { formatRupees, lenderTone, roiPercent } from '../../lib/eligibility';
+import {
+  formatApr,
+  formatRupees,
+  lenderTone,
+  roiPercent,
+} from '../../lib/eligibility';
 import {
   BUTTON_CLASS,
   CONTROL_CLASS,
@@ -93,21 +98,69 @@ export function yearlySchedule(
   return rows;
 }
 
+/** Present value of 1 a month for n months at r a month: (1 − (1 + r)^−n) ÷ r; n at 0. */
+function annuity(r: number, months: number): number {
+  return r === 0 ? months : (1 - Math.pow(1 + r, -months)) / r;
+}
+
+/**
+ * Annual percentage rate, percent: 12 × 100 × r, where r is the monthly rate
+ * at which the EMIs repay what the borrower gets, P − fee:
+ * P − fee = EMI × (1 − (1 + r)^−n) ÷ r (the Key Fact Statement's IRR,
+ * annualised by 12, as the backend's app/eligibility.apr). The rate itself
+ * with no fee; null for a fee below 0 or not below the principal.
+ */
+export function aprOf(
+  principal: number,
+  annualRatePct: number,
+  months: number,
+  fee = 0,
+): number | null {
+  if (!(principal > 0) || !(fee >= 0) || fee >= principal) return null;
+  if (fee === 0) return annualRatePct;
+  const payment = emiOf(principal, annualRatePct, months);
+  const net = principal - fee;
+  let low = annualRatePct / 1200;
+  let high = 1;
+  while (payment * annuity(high, months) > net) high *= 2;
+  for (let i = 0; i < 200 && high - low > 1e-15; i++) {
+    const mid = (low + high) / 2;
+    if (payment * annuity(mid, months) > net) low = mid;
+    else high = mid;
+  }
+  return ((low + high) / 2) * 1200;
+}
+
+/** An APR to 2 decimals (half up), as the backend shows it. */
+export function roundApr(value: number): number {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
 export interface EmiPlan {
   emi: number;
   totalInterest: number;
   totalPayable: number;
+  /** The processing fee entered (0 when none). */
+  fee: number;
+  /** Total interest plus the fee. */
+  totalCost: number;
+  /** Percent, to 2 decimals; the rate itself with no fee. */
+  apr: number;
   /** Shares of the total payable, adding up to 100. */
   principalPct: number;
   interestPct: number;
   schedule: ScheduleYear[];
 }
 
-/** EMI, totals (from the unrounded EMI), split and yearly schedule, in rupees. */
+/**
+ * EMI, totals (from the unrounded EMI), the APR and total cost with a
+ * processing fee (less than the principal), split and yearly schedule, in rupees.
+ */
 export function emiPlan(
   principal: number,
   annualRatePct: number,
   months: number,
+  fee = 0,
 ): EmiPlan {
   const exact = emiOf(principal, annualRatePct, months);
   const total = exact * months;
@@ -116,6 +169,11 @@ export function emiPlan(
     emi: roundRupees(exact),
     totalInterest: roundRupees(total - principal),
     totalPayable: roundRupees(total),
+    fee,
+    totalCost: roundRupees(total - principal + fee),
+    apr: roundApr(
+      aprOf(principal, annualRatePct, months, fee) ?? annualRatePct,
+    ),
     principalPct,
     interestPct: 100 - principalPct,
     schedule: yearlySchedule(principal, annualRatePct, months, exact),
@@ -209,6 +267,8 @@ export interface EmiStart {
   amount: number;
   ratePct: number;
   months: number;
+  /** The lender's processing fee on the amount (0 with none). */
+  fee: number;
 }
 
 /** The best eligible lender's amount, ROI and tenure (the EMI column's), if any. */
@@ -229,6 +289,7 @@ export function emiStartOf(result: EligibilityResult | null): EmiStart | null {
     amount: row.eligible_amount,
     ratePct,
     months: row.tenure_months,
+    fee: row.processing_fee ?? 0,
   };
 }
 
@@ -238,6 +299,8 @@ export type CalculatorMode = 'emi' | 'bt';
 
 export interface EmiForm {
   amount: number | null;
+  /** Processing fee, rupees (optional: blank is no fee). */
+  fee: number | null;
   rate: string;
   tenure: string;
   unit: TenureUnit;
@@ -253,6 +316,7 @@ export interface BtForm {
 
 const EMPTY_EMI: EmiForm = {
   amount: null,
+  fee: null,
   rate: '',
   tenure: '',
   unit: 'years',
@@ -510,6 +574,29 @@ function amountError(t: TFunction, value: number | null): string | null {
   return validAmount(value) === null ? t('eligibility.emi.amountRange') : null;
 }
 
+/** A fee of 0 or more, less than the loan amount; blank is no fee; else NaN. */
+export function validFee(
+  fee: number | null,
+  amount: number | null,
+): number | null {
+  if (fee === null) return 0;
+  if (Number.isNaN(fee) || fee < 0 || (amount !== null && fee >= amount)) {
+    return Number.NaN;
+  }
+  return fee;
+}
+
+function feeError(
+  t: TFunction,
+  fee: number | null,
+  amount: number | null,
+): string | null {
+  if (fee === null || Number.isNaN(fee)) return null; // blank, or the field says it
+  return Number.isNaN(validFee(fee, amount))
+    ? t('eligibility.emi.feeRange')
+    : null;
+}
+
 function rateError(t: TFunction, text: string): string | null {
   const rate = parseRate(text);
   if (rate === null) return null;
@@ -536,9 +623,14 @@ function EmiView({
   const amount = validAmount(form.amount);
   const rate = validRate(parseRate(form.rate));
   const months = tenureMonths(form.tenure, form.unit);
+  const fee = validFee(form.fee, amount);
   const plan =
-    amount !== null && rate !== null && months !== null && !Number.isNaN(months)
-      ? emiPlan(amount, rate, months)
+    amount !== null &&
+    rate !== null &&
+    months !== null &&
+    !Number.isNaN(months) &&
+    !Number.isNaN(fee)
+      ? emiPlan(amount, rate, months, fee ?? 0)
       : null;
   return (
     <div className="space-y-2.5">
@@ -548,6 +640,7 @@ function EmiView({
           onClick={() =>
             onChange({
               amount: start.amount,
+              fee: start.fee > 0 ? start.fee : null,
               rate: String(start.ratePct),
               tenure: String(start.months),
               unit: 'months',
@@ -561,7 +654,7 @@ function EmiView({
           {t('eligibility.emi.useOffer', { lender: start.lender })}
         </button>
       )}
-      <div className="grid gap-2 @md:grid-cols-2 @3xl:grid-cols-3">
+      <div className="grid gap-2 @md:grid-cols-2 @3xl:grid-cols-4">
         <Field
           label={t('eligibility.emi.amount')}
           error={amountError(t, form.amount)}
@@ -601,6 +694,21 @@ function EmiView({
           error={tenureError(t, form.tenure, form.unit)}
           testId="emi-tenure"
         />
+        <Field
+          label={t('eligibility.emi.fee')}
+          error={feeError(t, form.fee, amount)}
+        >
+          {({ id, describedBy }) => (
+            <NumberInput
+              id={id}
+              value={form.fee}
+              onChange={(value) => onChange({ ...form, fee: value })}
+              describedBy={describedBy}
+              invalid={feeError(t, form.fee, amount) !== null}
+              testId="emi-fee"
+            />
+          )}
+        </Field>
       </div>
       {plan && amount !== null ? (
         <div className="space-y-2" data-testid="emi-result">
@@ -620,6 +728,21 @@ function EmiView({
               label={t('eligibility.emi.totalPayable')}
               value={formatRupees(plan.totalPayable)}
               testId="emi-total-payable"
+            />
+            <Stat
+              label={t('eligibility.emi.apr')}
+              value={formatApr(plan.apr)}
+              testId="emi-apr"
+            />
+            <Stat
+              label={t('eligibility.emi.processingFee')}
+              value={formatRupees(plan.fee)}
+              testId="emi-fee-value"
+            />
+            <Stat
+              label={t('eligibility.emi.totalCost')}
+              value={formatRupees(plan.totalCost)}
+              testId="emi-total-cost"
             />
           </dl>
           <SplitBar plan={plan} principal={amount} />
@@ -831,7 +954,7 @@ export default function EmiCalculator({
           <div className="flex flex-wrap items-center gap-1.5">
             <IndicativeTag />
             <p className="min-w-0 flex-1 text-[9px] leading-snug text-slate-400">
-              {t('eligibility.emi.formula')}
+              {t('eligibility.emi.formula')} {t('eligibility.emi.aprFormula')}
             </p>
           </div>
         </div>

@@ -260,6 +260,58 @@ def emi(principal: Any, roi_pct: Any, months: int) -> Decimal:
         return p * r * growth / (growth - 1)
 
 
+def _annuity(r: Decimal, n: int) -> Decimal:
+    """Present value of 1 a month for n months at `r` a month: (1 − (1 + r)^−n) ÷ r; n at 0."""
+    if r == 0:
+        return Decimal(n)
+    return (1 - (1 + r) ** -n) / r
+
+
+def apr(principal: Any, roi_pct: Any, months: int, fee: Any = 0) -> Decimal:
+    """Annual percentage rate, percent (unrounded): 12 × 100 × r, where r is the monthly rate at which
+    the EMIs repay what the borrower gets, principal − fee: (P − fee) = EMI × (1 − (1 + r)^−n) ÷ r
+    (the RBI Key Fact Statement's IRR, annualised by 12). The ROI itself when there is no fee."""
+    n = int(months)
+    with localcontext() as ctx:
+        ctx.prec = PRECISION
+        p, charge = dec(principal), dec(fee)
+        if p <= 0:
+            raise ValueError("principal must be positive")
+        if not 0 <= charge < p:
+            raise ValueError("fee must be at least 0 and less than the principal")
+        if charge == 0:
+            return dec(roi_pct)
+        payment = emi(p, roi_pct, n)
+        net = p - charge
+        # The annuity factor falls as r rises: bisect between the ROI's rate and a rate high enough.
+        low, high = dec(roi_pct) / Decimal(1200), Decimal(1)
+        while payment * _annuity(high, n) > net:
+            high *= 2
+        for _ in range(200):
+            mid = (low + high) / 2
+            if payment * _annuity(mid, n) > net:
+                low = mid
+            else:
+                high = mid
+            if high - low < Decimal("1e-15"):
+                break
+        return (low + high) / 2 * 1200
+
+
+def total_cost(principal: Any, roi_pct: Any, months: int, fee: Any = 0) -> Decimal:
+    """Total interest plus fees over the tenure (unrounded): EMI × n − P + fee."""
+    with localcontext() as ctx:
+        ctx.prec = PRECISION
+        return emi(principal, roi_pct, months) * int(months) - dec(principal) + dec(fee)
+
+
+def percent(value: Any) -> float | None:
+    """Display rounding of a percent rate: to 2 decimals, half up."""
+    if value is None:
+        return None
+    return float(dec(value).quantize(PAISA, rounding=ROUND_HALF_UP))
+
+
 def money(value: Any) -> float | None:
     """Display rounding: to the paisa, half up."""
     if value is None:
@@ -471,6 +523,30 @@ class IncomeConsideration(_Data):
 
 
 @dataclass(frozen=True, kw_only=True)
+class ProcessingFee(_Data):
+    """The lender's processing fee: `pct` percent of the loan, at least `min_amount` and at most
+    `max_amount` rupees when set (never more than the loan)."""
+
+    pct: float = _spec(_real(ge=0, le=10))
+    min_amount: float | None = _spec(_optional(_real(ge=0)), None)
+    max_amount: float | None = _spec(_optional(_real(gt=0)), None)
+
+    def _consistent(self) -> None:
+        if self.min_amount is not None and self.max_amount is not None and self.min_amount > self.max_amount:
+            raise ValueError("min_amount is more than max_amount")
+
+    def amount(self, principal: Any) -> Decimal:
+        """The fee on `principal` rupees, unrounded."""
+        p = dec(principal)
+        fee = p * dec(self.pct) / 100
+        if self.min_amount is not None:
+            fee = max(fee, dec(self.min_amount))
+        if self.max_amount is not None:
+            fee = min(fee, dec(self.max_amount))
+        return min(fee, p)
+
+
+@dataclass(frozen=True, kw_only=True)
 class FoirGrid(_Data):
     """FOIR by net monthly salary slab (rows) and company category (columns): one FOIR per slab
     in each category's list, the slabs starting at `slab_starts` (rupees a month)."""
@@ -524,6 +600,8 @@ class LenderPolicy(_Data):
     company_categories: dict[str, CategoryPolicy] = _spec(_mapping(_record(CategoryPolicy)))
     unlisted_company: UnlistedCompanyPolicy = _spec(_record(UnlistedCompanyPolicy))
     income_consideration_pct: IncomeConsideration = _spec(_record(IncomeConsideration))
+    # Counted in the APR and the total cost; none when not set.
+    processing_fee: ProcessingFee | None = _spec(_optional(_record(ProcessingFee)), None)
 
     def _consistent(self) -> None:
         unknown = [t for t in self.employment_types if t not in EMPLOYMENT_TYPES]
@@ -1146,6 +1224,13 @@ def _lender_result(
     eligible = computed if status == "eligible" and computed is not None else Decimal(0)
     monthly_emi = emi(eligible, lender.roi, lender.max_tenure_months) if eligible > 0 else Decimal(0)
     calculation_emi = emi(eligible, lender.roi, tenure) if eligible > 0 else Decimal(0)
+    # APR and total cost of the offer: the eligible amount at the EMI column's tenure.
+    fee = annual_rate = cost = None
+    if eligible > 0:
+        fee = lender.processing_fee.amount(eligible) if lender.processing_fee else Decimal(0)
+        # A fee as large as the loan leaves the borrower nothing: no APR.
+        annual_rate = apr(eligible, lender.roi, lender.max_tenure_months, fee) if fee < eligible else None
+        cost = total_cost(eligible, lender.roi, lender.max_tenure_months, fee)
 
     requested_amount = loan.get("amount")
     covers_requested = None
@@ -1169,6 +1254,11 @@ def _lender_result(
         "calculation_tenure_months": tenure,
         "emi_at_calculation_tenure": money(calculation_emi),
         "per_lakh_emi": money(per_lakh),
+        "processing_fee": money(fee),
+        "processing_fee_policy": lender.processing_fee.model_dump() if lender.processing_fee else None,
+        "apr": percent(annual_rate),
+        "total_interest": money(cost - fee) if cost is not None else None,
+        "total_cost": money(cost),
         "foir_eligibility": money(foir_eligibility),
         "multiplier_eligibility": money(multiplier_eligibility),
         "income_considered": money(income_considered),
@@ -1202,6 +1292,9 @@ def _lender_result(
             "multiplier_eligibility": "formula",
             "eligible_amount": "formula",
             "emi": "formula",
+            "processing_fee": "policy",
+            "apr": "formula",
+            "total_cost": "formula",
         },
         "label": book.label,
     }

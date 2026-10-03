@@ -1382,6 +1382,14 @@
       "maxTenure": "Max tenure",
       "maxAmount": "Max amount",
       "minScore": "Min CIBIL",
+      "apr": "APR",
+      "totalCost": "Total cost",
+      "totalInterest": "Total interest",
+      "processingFee": "Processing fee",
+      "feeNone": "No fee in the policy",
+      "feePct": "{{pct}}% of the loan",
+      "feeMin": "at least {{value}}",
+      "feeMax": "at most {{value}}",
       "statuses": {
         "eligible": "Eligible",
         "notServiceable": "Not serviceable",
@@ -1401,7 +1409,10 @@
         "multiplier": "Multiplier eligibility: {{income}} × {{multiplier}} = {{value}}",
         "eligible": "Eligible amount: the lowest of the two and the lender's maximum {{max}} = {{value}}",
         "computed": "The formulas give {{value}} (lender maximum {{max}}), but the lender is not eligible for the reasons above",
-        "emi": "EMI: EMI of {{amount}} at {{roi}} over {{months}} months = {{value}}"
+        "emi": "EMI: EMI of {{amount}} at {{roi}} over {{months}} months = {{value}}",
+        "apr": "APR: {{amount}} − fee {{fee}} = {{net}} is repaid by {{months}} EMIs of {{emi}}; {{net}} = EMI × (1 − (1 + r)⁻ⁿ) ÷ r gives r = {{monthly}} a month, APR = 12 × r = {{value}}",
+        "aprNoFee": "APR: no processing fee, so the APR is the ROI, {{value}}",
+        "totalCost": "Total cost: {{months}} × {{emi}} − {{amount}} + fee {{fee}} = {{value}}"
       },
       "otherIncomeCounted": "Other income counted:",
       "otherIncomeRow": "{{label}} {{pct}}% of {{monthly}} = {{value}}",
@@ -1461,6 +1472,11 @@
       "monthlyEmi": "Monthly EMI",
       "totalInterest": "Total interest",
       "totalPayable": "Total payable",
+      "fee": "Processing fee (optional)",
+      "feeRange": "Enter a fee of ₹0 or more, less than the loan amount.",
+      "processingFee": "Processing fee",
+      "apr": "APR",
+      "totalCost": "Total cost (interest + fee)",
       "principal": "Principal",
       "interest": "Interest",
       "splitLabel": "Principal and interest share of the total payable",
@@ -1483,7 +1499,8 @@
       "totalExtra": "Total extra cost",
       "btEmpty": "Enter the outstanding, the remaining tenure and both rates.",
       "btNote": "Over the remaining tenure, before the new lender's processing fee and any charge for closing the current loan.",
-      "formula": "EMI = P × r × (1 + r)ⁿ ÷ ((1 + r)ⁿ − 1), r = the yearly rate ÷ 12, n = months (reducing balance, as Excel's PMT), rounded to the rupee."
+      "formula": "EMI = P × r × (1 + r)ⁿ ÷ ((1 + r)ⁿ − 1), r = the yearly rate ÷ 12, n = months (reducing balance, as Excel's PMT), rounded to the rupee.",
+      "aprFormula": "APR = 12 × r, where r solves P − fee = EMI × (1 − (1 + r)⁻ⁿ) ÷ r (the annual percentage rate of a Key Fact Statement); with no fee it is the interest rate."
     },
     "branches": {
       "title": "Nearest branches",
