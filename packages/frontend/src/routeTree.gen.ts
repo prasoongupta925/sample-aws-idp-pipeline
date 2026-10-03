@@ -15,6 +15,7 @@ import { Route as CallRecordingsRouteImport } from './routes/call-recordings'
 import { Route as ArtifactsRouteImport } from './routes/artifacts'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ProjectsProjectIdRouteImport } from './routes/projects/$projectId'
+import { Route as HelpCreditReportRouteImport } from './routes/help/credit-report'
 
 const TestRoute = TestRouteImport.update({
   id: '/test',
@@ -46,6 +47,11 @@ const ProjectsProjectIdRoute = ProjectsProjectIdRouteImport.update({
   path: '/projects/$projectId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const HelpCreditReportRoute = HelpCreditReportRouteImport.update({
+  id: '/help/credit-report',
+  path: '/help/credit-report',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -53,6 +59,7 @@ export interface FileRoutesByFullPath {
   '/call-recordings': typeof CallRecordingsRoute
   '/settings': typeof SettingsRoute
   '/test': typeof TestRoute
+  '/help/credit-report': typeof HelpCreditReportRoute
   '/projects/$projectId': typeof ProjectsProjectIdRoute
 }
 export interface FileRoutesByTo {
@@ -61,6 +68,7 @@ export interface FileRoutesByTo {
   '/call-recordings': typeof CallRecordingsRoute
   '/settings': typeof SettingsRoute
   '/test': typeof TestRoute
+  '/help/credit-report': typeof HelpCreditReportRoute
   '/projects/$projectId': typeof ProjectsProjectIdRoute
 }
 export interface FileRoutesById {
@@ -70,6 +78,7 @@ export interface FileRoutesById {
   '/call-recordings': typeof CallRecordingsRoute
   '/settings': typeof SettingsRoute
   '/test': typeof TestRoute
+  '/help/credit-report': typeof HelpCreditReportRoute
   '/projects/$projectId': typeof ProjectsProjectIdRoute
 }
 export interface FileRouteTypes {
@@ -80,6 +89,7 @@ export interface FileRouteTypes {
     | '/call-recordings'
     | '/settings'
     | '/test'
+    | '/help/credit-report'
     | '/projects/$projectId'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -88,6 +98,7 @@ export interface FileRouteTypes {
     | '/call-recordings'
     | '/settings'
     | '/test'
+    | '/help/credit-report'
     | '/projects/$projectId'
   id:
     | '__root__'
@@ -96,6 +107,7 @@ export interface FileRouteTypes {
     | '/call-recordings'
     | '/settings'
     | '/test'
+    | '/help/credit-report'
     | '/projects/$projectId'
   fileRoutesById: FileRoutesById
 }
@@ -105,6 +117,7 @@ export interface RootRouteChildren {
   CallRecordingsRoute: typeof CallRecordingsRoute
   SettingsRoute: typeof SettingsRoute
   TestRoute: typeof TestRoute
+  HelpCreditReportRoute: typeof HelpCreditReportRoute
   ProjectsProjectIdRoute: typeof ProjectsProjectIdRoute
 }
 
@@ -152,6 +165,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProjectsProjectIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/help/credit-report': {
+      id: '/help/credit-report'
+      path: '/help/credit-report'
+      fullPath: '/help/credit-report'
+      preLoaderRoute: typeof HelpCreditReportRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -161,6 +181,7 @@ const rootRouteChildren: RootRouteChildren = {
   CallRecordingsRoute: CallRecordingsRoute,
   SettingsRoute: SettingsRoute,
   TestRoute: TestRoute,
+  HelpCreditReportRoute: HelpCreditReportRoute,
   ProjectsProjectIdRoute: ProjectsProjectIdRoute,
 }
 export const routeTree = rootRouteImport

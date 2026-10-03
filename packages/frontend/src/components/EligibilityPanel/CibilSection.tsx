@@ -55,6 +55,7 @@ import {
   SourceNote,
   StillNeededList,
 } from './fields';
+import CreditReportHelpLink from '../CreditReportGuide/HelpLink';
 
 type Edit = (update: (inputs: EligibilityInputs) => EligibilityInputs) => void;
 
@@ -604,6 +605,7 @@ export default function CibilSection({
         disabled={disabled}
       />
       <ReportNote cibil={cibil} />
+      <CreditReportHelpLink />
 
       <section
         className={SECTION_CLASS}

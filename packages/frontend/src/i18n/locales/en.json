@@ -455,6 +455,9 @@
     "consent": "Upload only calls the customer was told are recorded.",
     "retention": "Recordings and transcripts are deleted automatically after 7 days."
   },
+  "creditGuide": {
+    "link": "How the customer gets a free credit report (English, हिन्दी, मराठी)"
+  },
   "analysis": {
     "title": "Document Analysis Instructions",
     "placeholder": "Enter custom instructions for document analysis (optional)\n\nExample:\n- Focus on extracting financial data and dates\n- Pay special attention to signature blocks\n- Extract all table data in structured format",
