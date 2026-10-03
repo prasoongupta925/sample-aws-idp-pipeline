@@ -6,8 +6,8 @@ describe('voiceBotUrlFrom', () => {
     expect(voiceBotUrlFrom('wss://d3aimkn7il0s92.cloudfront.net/ws')).toBe(
       'wss://d3aimkn7il0s92.cloudfront.net/ws',
     );
-    expect(voiceBotUrlFrom('  wss://voice.example.in/ws  ')).toBe(
-      'wss://voice.example.in/ws',
+    expect(voiceBotUrlFrom('  wss://d3aimkn7il0s92.cloudfront.net/ws  ')).toBe(
+      'wss://d3aimkn7il0s92.cloudfront.net/ws',
     );
   });
 
@@ -31,6 +31,8 @@ describe('voiceBotUrlFrom', () => {
       'wss://user:pw@voice.example.in/ws',
       'wss://voice.example.in/ws?token=x',
       'wss://voice.example.in/ws#x',
+      'wss://voice.example.in/ws',
+      'wss://evil.cloudfront.net.example.in/ws',
     ]) {
       expect(voiceBotUrlFrom(value)).toBe('');
     }
@@ -56,10 +58,10 @@ describe('loadVoiceBotUrl', () => {
       asked = String(input);
       return {
         ok: true,
-        json: async () => ({ voiceBotUrl: 'wss://v.example.in/ws' }),
+        json: async () => ({ voiceBotUrl: 'wss://v1.cloudfront.net/ws' }),
       };
     }) as unknown as typeof fetch;
-    expect(await loadVoiceBotUrl(fetcher)).toBe('wss://v.example.in/ws');
+    expect(await loadVoiceBotUrl(fetcher)).toBe('wss://v1.cloudfront.net/ws');
     expect(asked).toBe('/voicebot-config.json');
   });
 

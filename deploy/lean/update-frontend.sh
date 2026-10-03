@@ -28,11 +28,12 @@ DIST=$(aws cloudfront list-distributions --query "DistributionList.Items[?Domain
 # Voice bot panel: voicebot-config.json from the SSM parameter the voice deploy writes. Without the
 # parameter (or with an unexpected value) the file is {} and the app shows no Voice Chat entry.
 VOICE_URL=$(aws ssm get-parameter --name /idp-v2/voicebot/url --query Parameter.Value --output text 2>/dev/null || true)
-if [[ "$VOICE_URL" =~ ^wss://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$ ]]; then
+# Pinned to the voice CloudFront distribution's /ws.
+if [[ "$VOICE_URL" =~ ^wss://[a-z0-9-]+\.cloudfront\.net/ws$ ]]; then
   printf '{"voiceBotUrl": "%s"}\n' "$VOICE_URL" > "$BUNDLE/voicebot-config.json"
   echo "voice bot panel: $VOICE_URL"
 else
-  [ -z "$VOICE_URL" ] || echo "ignoring /idp-v2/voicebot/url: not a wss:// URL"
+  [ -z "$VOICE_URL" ] || echo "ignoring /idp-v2/voicebot/url: not wss://<id>.cloudfront.net/ws"
   echo '{}' > "$BUNDLE/voicebot-config.json"
   echo "voice bot panel: off (no /idp-v2/voicebot/url)"
 fi

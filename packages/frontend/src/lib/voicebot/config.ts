@@ -15,6 +15,8 @@ export function voiceBotUrlFrom(value: unknown): string {
   // wss only (the page is https); plain ws only for a voice server on this machine.
   if (url.protocol !== 'wss:' && !(url.protocol === 'ws:' && local)) return '';
   if (url.username || url.password || url.search || url.hash) return '';
+  // Pinned to the voice CloudFront distribution (or a local dev server).
+  if (!local && !/^[a-z0-9-]+\.cloudfront\.net$/.test(url.hostname)) return '';
   return url.toString();
 }
 
