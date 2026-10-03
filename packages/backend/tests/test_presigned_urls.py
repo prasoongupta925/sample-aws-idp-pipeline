@@ -250,8 +250,9 @@ class TestVideoUploads:
             ("site_visit.MOV", "video/quicktime"),
             ("kyc.avi", "video/x-msvideo"),
             ("kyc.mkv", "video/x-matroska"),
-            ("site_visit.webm", "video/webm"),
+            # .webm is video unless it is sent as audio/webm (test_call_recordings);
             # an untyped .webm is taken as video (type-detection's default)
+            ("site_visit.webm", "video/webm"),
             ("call.webm", "application/octet-stream"),
             ("site_visit.mp4", "application/octet-stream"),
         ],
@@ -271,8 +272,8 @@ class TestVideoUploads:
             ("call.mp3", "audio/mpeg"),
             ("call.flac", "audio/flac"),
             ("call.m4a", "audio/mp4"),
-            # phone call recorders; type-detection keeps a .webm declared as
-            # audio/webm as audio
+            # phone call recorders; a .webm declared as audio/webm is stored as
+            # .weba, which the pipeline reads as audio
             ("call.amr", "audio/amr"),
             ("call.ogg", "audio/ogg"),
             ("call.webm", "audio/webm"),

@@ -12,9 +12,11 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as TestRouteImport } from './routes/test'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as LaunchRouteImport } from './routes/launch'
+import { Route as CallRecordingsRouteImport } from './routes/call-recordings'
 import { Route as ArtifactsRouteImport } from './routes/artifacts'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ProjectsProjectIdRouteImport } from './routes/projects/$projectId'
+import { Route as HelpCreditReportRouteImport } from './routes/help/credit-report'
 
 const TestRoute = TestRouteImport.update({
   id: '/test',
@@ -29,6 +31,11 @@ const SettingsRoute = SettingsRouteImport.update({
 const LaunchRoute = LaunchRouteImport.update({
   id: '/launch',
   path: '/launch',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CallRecordingsRoute = CallRecordingsRouteImport.update({
+  id: '/call-recordings',
+  path: '/call-recordings',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ArtifactsRoute = ArtifactsRouteImport.update({
@@ -46,30 +53,41 @@ const ProjectsProjectIdRoute = ProjectsProjectIdRouteImport.update({
   path: '/projects/$projectId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const HelpCreditReportRoute = HelpCreditReportRouteImport.update({
+  id: '/help/credit-report',
+  path: '/help/credit-report',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/artifacts': typeof ArtifactsRoute
+  '/call-recordings': typeof CallRecordingsRoute
   '/launch': typeof LaunchRoute
   '/settings': typeof SettingsRoute
   '/test': typeof TestRoute
+  '/help/credit-report': typeof HelpCreditReportRoute
   '/projects/$projectId': typeof ProjectsProjectIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/artifacts': typeof ArtifactsRoute
+  '/call-recordings': typeof CallRecordingsRoute
   '/launch': typeof LaunchRoute
   '/settings': typeof SettingsRoute
   '/test': typeof TestRoute
+  '/help/credit-report': typeof HelpCreditReportRoute
   '/projects/$projectId': typeof ProjectsProjectIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/artifacts': typeof ArtifactsRoute
+  '/call-recordings': typeof CallRecordingsRoute
   '/launch': typeof LaunchRoute
   '/settings': typeof SettingsRoute
   '/test': typeof TestRoute
+  '/help/credit-report': typeof HelpCreditReportRoute
   '/projects/$projectId': typeof ProjectsProjectIdRoute
 }
 export interface FileRouteTypes {
@@ -77,34 +95,42 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/artifacts'
+    | '/call-recordings'
     | '/launch'
     | '/settings'
     | '/test'
+    | '/help/credit-report'
     | '/projects/$projectId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/artifacts'
+    | '/call-recordings'
     | '/launch'
     | '/settings'
     | '/test'
+    | '/help/credit-report'
     | '/projects/$projectId'
   id:
     | '__root__'
     | '/'
     | '/artifacts'
+    | '/call-recordings'
     | '/launch'
     | '/settings'
     | '/test'
+    | '/help/credit-report'
     | '/projects/$projectId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ArtifactsRoute: typeof ArtifactsRoute
+  CallRecordingsRoute: typeof CallRecordingsRoute
   LaunchRoute: typeof LaunchRoute
   SettingsRoute: typeof SettingsRoute
   TestRoute: typeof TestRoute
+  HelpCreditReportRoute: typeof HelpCreditReportRoute
   ProjectsProjectIdRoute: typeof ProjectsProjectIdRoute
 }
 
@@ -131,6 +157,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LaunchRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/call-recordings': {
+      id: '/call-recordings'
+      path: '/call-recordings'
+      fullPath: '/call-recordings'
+      preLoaderRoute: typeof CallRecordingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/artifacts': {
       id: '/artifacts'
       path: '/artifacts'
@@ -152,15 +185,24 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProjectsProjectIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/help/credit-report': {
+      id: '/help/credit-report'
+      path: '/help/credit-report'
+      fullPath: '/help/credit-report'
+      preLoaderRoute: typeof HelpCreditReportRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ArtifactsRoute: ArtifactsRoute,
+  CallRecordingsRoute: CallRecordingsRoute,
   LaunchRoute: LaunchRoute,
   SettingsRoute: SettingsRoute,
   TestRoute: TestRoute,
+  HelpCreditReportRoute: HelpCreditReportRoute,
   ProjectsProjectIdRoute: ProjectsProjectIdRoute,
 }
 export const routeTree = rootRouteImport

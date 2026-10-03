@@ -421,6 +421,43 @@
     "summaryDirect": "Direct",
     "summaryMulti": "Multi"
   },
+  "callRecordings": {
+    "nav": "Call recordings",
+    "back": "Projects",
+    "title": "Upload call recordings",
+    "intro": "Recordings from your phone's call recorder go to a Telecaller QA project: Amazon Transcribe writes the transcript (Indian English, Hindi or Marathi) and the Call QA Reviewer scores the call.",
+    "project": "Telecaller QA project",
+    "loading": "Loading projects…",
+    "loadFailed": "The projects could not be loaded. Reload the page to try again.",
+    "noProject": "No Telecaller QA project yet. Create a project named like \"Telecaller QA – Sample calls\", then come back here.",
+    "choose": "Choose recordings",
+    "chooseMore": "Add more recordings",
+    "formats": "MP3, M4A, WAV, AMR, OGG or WebM, up to 500 MB each",
+    "refused": "Not added:",
+    "problem": {
+      "format": "not a supported recording format",
+      "empty": "the file is empty",
+      "tooLarge": "larger than 500 MB"
+    },
+    "remove": "Remove {{name}}",
+    "status": {
+      "ready": "Ready",
+      "uploading": "Uploading {{percent}}%",
+      "done": "Uploaded",
+      "failed": "Failed: {{reason}}"
+    },
+    "upload_one": "Upload {{count}} recording",
+    "upload_other": "Upload {{count}} recordings",
+    "uploading": "Uploading…",
+    "done_one": "{{count}} recording uploaded. Its transcript is ready in a few minutes; then ask the Call QA Reviewer in the project's chat.",
+    "done_other": "{{count}} recordings uploaded. Their transcripts are ready in a few minutes; then ask the Call QA Reviewer in the project's chat.",
+    "openProject": "Open the project",
+    "consent": "Upload only calls the customer was told are recorded.",
+    "retention": "Recordings and transcripts are deleted automatically after 7 days."
+  },
+  "creditGuide": {
+    "link": "How the customer gets a free credit report (English, हिन्दी, मराठी)"
+  },
   "analysis": {
     "title": "Document Analysis Instructions",
     "placeholder": "Enter custom instructions for document analysis (optional)\n\nExample:\n- Focus on extracting financial data and dates\n- Pay special attention to signature blocks\n- Extract all table data in structured format",
