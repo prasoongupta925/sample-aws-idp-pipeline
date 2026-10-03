@@ -3,11 +3,13 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import access_log
 from app.routers import (
+    admin_users,
     agents,
     applicants,
     artifacts,
     branches,
     chat,
+    crm_launch,
     datasets,
     documents,
     eligibility,
@@ -55,11 +57,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(admin_users.router)
 app.include_router(agents.router)
 app.include_router(applicants.router)
 app.include_router(artifacts.router)
 app.include_router(branches.router)
 app.include_router(chat.router)
+app.include_router(crm_launch.router)
 app.include_router(datasets.router)
 app.include_router(documents.router)
 app.include_router(eligibility.router)

@@ -19,6 +19,9 @@ class ProjectData(BaseModel):
     document_prompt: str | None = None
     ocr_model: str | None = None
     ocr_options: dict[str, Any] | None = None
+    # The lead this project belongs to in the CRM (Smart Dial): set in the UI, by the
+    # signed launch link or through the API; sent with every webhook delivery.
+    crm_lead_id: str | None = None
 
 
 class Project(BaseModel):

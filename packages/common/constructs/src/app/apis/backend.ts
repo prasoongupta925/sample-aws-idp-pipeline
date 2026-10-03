@@ -320,6 +320,23 @@ export class Backend extends Construct {
       }),
     );
 
+    // The CRM launch-link secret (app/crm_launch.py) uses the same key with
+    // its own purpose. The backend verifies the links, so it must read this
+    // one back: Encrypt and Decrypt, for that purpose only.
+    role.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'CrmLaunchSecret',
+        actions: ['kms:Encrypt', 'kms:Decrypt'],
+        resources: [webhookSecretKeyArn],
+        conditions: {
+          StringEquals: {
+            'kms:EncryptionContext:purpose': 'crm-launch-secret',
+            'kms:EncryptionContext:crm': 'smartdial',
+          },
+        },
+      }),
+    );
+
     // Grant SQS send for graph deletion queue
     role.addToPrincipalPolicy(
       new PolicyStatement({

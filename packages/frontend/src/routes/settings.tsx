@@ -1,13 +1,25 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Power, PowerOff, Clock, RefreshCw, Server } from 'lucide-react';
+import { useAuth } from 'react-oidc-context';
+import {
+  Power,
+  PowerOff,
+  Clock,
+  RefreshCw,
+  Server,
+  Link2,
+  Users,
+} from 'lucide-react';
 import { useAwsClient } from '../hooks/useAwsClient';
 import {
   checkOcrEndpointAvailable,
   visibleSettingsSections,
   type SettingsSection,
 } from '../lib/ocrEndpoint';
+import CrmLaunchSettings from '../components/CrmLaunchSettings';
+import AdminUsersSettings from '../components/AdminUsersSettings';
+import { isAdmin } from '../lib/crmLaunch';
 
 export const Route = createFileRoute('/settings')({
   component: SettingsPage,
@@ -70,6 +82,13 @@ function SettingsPage() {
   // The OCR section waits until the backend confirms the endpoint exists
   // (it is opt-in; without it the sagemaker/* routes answer 404).
   const [ocrAvailable, setOcrAvailable] = useState<boolean | null>(null);
+  // Hides the admin sections only; the API enforces the role itself.
+  const profile = useAuth().user?.profile;
+  const admin = isAdmin(profile);
+  const username =
+    typeof profile?.['cognito:username'] === 'string'
+      ? profile['cognito:username']
+      : '';
   const [activeSection, setActiveSection] =
     useState<SettingsSection>('license');
 
@@ -165,7 +184,7 @@ function SettingsPage() {
     }
   };
 
-  const visibleSections = visibleSettingsSections(ocrAvailable);
+  const visibleSections = visibleSettingsSections(ocrAvailable, admin);
   const allMenuItems: {
     key: SettingsSection;
     label: string;
@@ -176,6 +195,20 @@ function SettingsPage() {
       label: t('settings.sagemaker', 'SageMaker'),
       icon: <Server className="w-5 h-5" />,
     },
+    ...(admin
+      ? [
+          {
+            key: 'integrations' as const,
+            label: t('crmLaunch.settings.menu'),
+            icon: <Link2 className="w-5 h-5" />,
+          },
+          {
+            key: 'users' as const,
+            label: t('adminUsers.menu'),
+            icon: <Users className="w-5 h-5" />,
+          },
+        ]
+      : []),
     {
       key: 'license',
       label: t('settings.license'),
@@ -451,6 +484,17 @@ function SettingsPage() {
                 </div>
               </div>
             </div>
+          )}
+
+          {activeSection === 'integrations' && admin && (
+            <CrmLaunchSettings fetchApi={fetchApi} />
+          )}
+
+          {activeSection === 'users' && admin && (
+            <AdminUsersSettings
+              fetchApi={fetchApi}
+              currentUsername={username}
+            />
           )}
 
           {activeSection === 'license' && (

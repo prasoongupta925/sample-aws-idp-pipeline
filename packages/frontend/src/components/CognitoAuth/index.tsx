@@ -3,6 +3,7 @@ import { AuthProvider, AuthProviderProps, useAuth } from 'react-oidc-context';
 import { Alert } from '../Alert';
 import CubeLoader from '../CubeLoader';
 import { useRuntimeConfig } from '../../hooks/useRuntimeConfig';
+import { launchReturnTo, safeLaunchReturn } from '../../lib/crmLaunch';
 
 /**
  * Sets up the Cognito auth.
@@ -33,7 +34,14 @@ const CognitoAuth: React.FC<PropsWithChildren> = ({ children }) => {
     redirect_uri: window.location.origin,
     response_type: 'code',
     scope: 'email openid profile',
-    onSigninCallback: () => {
+    onSigninCallback: (user) => {
+      // Signed in from a CRM launch link: reload on that link (the router
+      // already read the callback URL), so /launch can verify it.
+      const returnTo = safeLaunchReturn(user?.state);
+      if (returnTo) {
+        window.location.replace(returnTo);
+        return;
+      }
       // Remove OIDC callback params from URL and clean up stale state in localStorage
       window.history.replaceState({}, document.title, window.location.pathname);
     },
@@ -46,12 +54,21 @@ const CognitoAuth: React.FC<PropsWithChildren> = ({ children }) => {
   );
 };
 
+/** OIDC state of a sign-in: come back to a CRM launch link afterwards. */
+function signinState(): { returnTo: string } | undefined {
+  const returnTo = launchReturnTo(
+    window.location.pathname,
+    window.location.search,
+  );
+  return returnTo ? { returnTo } : undefined;
+}
+
 const CognitoAuthInternal: React.FC<PropsWithChildren> = ({ children }) => {
   const auth = useAuth();
 
   useEffect(() => {
     if (!auth.isAuthenticated && !auth.isLoading) {
-      auth.signinRedirect();
+      auth.signinRedirect({ state: signinState() });
     }
   }, [auth]);
 
@@ -61,7 +78,7 @@ const CognitoAuthInternal: React.FC<PropsWithChildren> = ({ children }) => {
       console.error('Auth error:', auth.error);
       // Clear any stale auth state and redirect to login
       auth.removeUser().then(() => {
-        auth.signinRedirect();
+        auth.signinRedirect({ state: signinState() });
       });
     }
   }, [auth, auth.error]);

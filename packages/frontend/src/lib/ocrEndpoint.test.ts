@@ -39,4 +39,22 @@ describe('Settings sections', () => {
     expect(visibleSettingsSections(false)).toEqual(['license']);
     expect(visibleSettingsSections(true)).toEqual(['sagemaker', 'license']);
   });
+
+  it('shows the admin sections to an admin only', () => {
+    expect(visibleSettingsSections(false, true)).toEqual([
+      'integrations',
+      'users',
+      'license',
+    ]);
+    expect(visibleSettingsSections(true, true)).toEqual([
+      'sagemaker',
+      'integrations',
+      'users',
+      'license',
+    ]);
+    expect(visibleSettingsSections(true, false)).toEqual([
+      'sagemaker',
+      'license',
+    ]);
+  });
 });

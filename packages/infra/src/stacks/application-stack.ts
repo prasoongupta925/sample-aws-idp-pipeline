@@ -107,6 +107,28 @@ export class ApplicationStack extends Stack {
 
     backend.restrictCorsTo(frontend);
 
+    // Caller roles (app/caller.py): the backend reads the signed-in user's
+    // Cognito groups (admin / handler / viewer) from this pool only.
+    backend.handler.addEnvironment(
+      'USER_POOL_ID',
+      userIdentity.userPool.userPoolId,
+    );
+    userIdentity.userPool.grant(
+      backend.handler,
+      'cognito-idp:ListUsers',
+      'cognito-idp:AdminListGroupsForUser',
+      // Admin Users page (app/admin_users.py), checked as admin-only in the API.
+      'cognito-idp:ListUsersInGroup',
+      'cognito-idp:AdminGetUser',
+      'cognito-idp:AdminCreateUser',
+      'cognito-idp:AdminDisableUser',
+      'cognito-idp:AdminEnableUser',
+      'cognito-idp:AdminUserGlobalSignOut',
+      'cognito-idp:AdminResetUserPassword',
+      'cognito-idp:AdminAddUserToGroup',
+      'cognito-idp:AdminRemoveUserFromGroup',
+    );
+
     // Cognito authenticated role (every signed-in user). It has NO S3
     // permissions: uploads and downloads use presigned URLs that the backend
     // issues for one object after its checks (project prefix, caller's

@@ -8,9 +8,11 @@ import {
   Globe,
   Palette,
   Webhook,
+  Link2,
 } from 'lucide-react';
 import { useModal } from '../hooks/useModal';
 import WebhookSettings from './WebhookSettings';
+import { apiErrorDetail } from '../lib/apiError';
 
 export interface Project {
   project_id: string;
@@ -21,6 +23,8 @@ export interface Project {
   language: string | null;
   color: number | null;
   document_prompt?: string | null;
+  /** The CRM (Smart Dial) lead this project belongs to; sent with every webhook. */
+  crm_lead_id?: string | null;
   started_at?: string;
   created_at?: string;
   updated_at?: string | null;
@@ -130,6 +134,26 @@ interface FormData {
   description: string;
   language: string;
   color: number;
+  crm_lead_id: string;
+}
+
+/** The backend's CRM lead id rule: 1-64 of letters, digits and . _ : - */
+export const CRM_LEAD_ID_PATTERN = /^[A-Za-z0-9._:-]{1,64}$/;
+
+/** Blank (no lead) or a valid lead id. */
+export function crmLeadIdValid(value: string): boolean {
+  const v = value.trim();
+  return v === '' || CRM_LEAD_ID_PATTERN.test(v);
+}
+
+/** What onSave sends for the lead id: omitted when blank on create, '' (removes it) when blank on edit. */
+export function crmLeadIdForSave(
+  value: string,
+  isCreating: boolean,
+): { crm_lead_id?: string } {
+  const v = value.trim();
+  if (v === '' && isCreating) return {};
+  return { crm_lead_id: v };
 }
 
 interface AdvancedSettings {
@@ -148,6 +172,7 @@ interface ProjectSettingsModalProps {
     language: string;
     color: number;
     document_prompt: string;
+    crm_lead_id?: string;
   }) => Promise<void>;
   isCreating?: boolean;
   /** Enables the Integrations section (the project's CRM webhook). */
@@ -164,6 +189,7 @@ export default function ProjectSettingsModal({
 }: ProjectSettingsModalProps) {
   const { t } = useTranslation();
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<SectionKey>('basic');
   // Integrations stays mounted once opened, so a new secret shown once is
   // not lost by switching sections (closing the modal forgets it).
@@ -175,6 +201,7 @@ export default function ProjectSettingsModal({
     description: '',
     language: 'en',
     color: 0,
+    crm_lead_id: '',
   });
 
   const [advancedSettings, setAdvancedSettings] = useState<AdvancedSettings>({
@@ -188,6 +215,7 @@ export default function ProjectSettingsModal({
         description: project.description || '',
         language: project.language || 'en',
         color: project.color ?? 0,
+        crm_lead_id: project.crm_lead_id || '',
       });
       setAdvancedSettings({
         document_prompt: project.document_prompt || '',
@@ -198,12 +226,14 @@ export default function ProjectSettingsModal({
         description: '',
         language: 'en',
         color: 0,
+        crm_lead_id: '',
       });
       setAdvancedSettings({
         document_prompt: '',
       });
     }
     setActiveSection('basic');
+    setSaveError(null);
   }, [project, isOpen]);
 
   // Closing the modal forgets the webhook section (and a secret it showed).
@@ -216,10 +246,12 @@ export default function ProjectSettingsModal({
     if (key === 'integrations') setIntegrationsOpened(true);
   };
 
+  const leadIdValid = crmLeadIdValid(formData.crm_lead_id);
   const handleSave = async () => {
-    if (!formData.name.trim()) return;
+    if (!formData.name.trim() || !leadIdValid) return;
 
     setSaving(true);
+    setSaveError(null);
     try {
       await onSave({
         name: formData.name.trim(),
@@ -227,10 +259,13 @@ export default function ProjectSettingsModal({
         language: formData.language,
         color: formData.color,
         document_prompt: advancedSettings.document_prompt,
+        ...crmLeadIdForSave(formData.crm_lead_id, isCreating),
       });
       onClose();
     } catch (error) {
       console.error('Failed to save project:', error);
+      // e.g. 409: the CRM lead id is linked to another project.
+      setSaveError(apiErrorDetail(error) ?? t('crm.saveFailed'));
     } finally {
       setSaving(false);
     }
@@ -417,6 +452,39 @@ export default function ProjectSettingsModal({
                 </div>
 
                 <div className="bento-form-group">
+                  <label
+                    className="bento-form-label"
+                    htmlFor="project-crm-lead-id"
+                  >
+                    <Link2 size={14} aria-hidden="true" />
+                    {t('crm.leadId')}
+                  </label>
+                  <input
+                    id="project-crm-lead-id"
+                    data-modal-input
+                    type="text"
+                    value={formData.crm_lead_id}
+                    onChange={(e) =>
+                      setFormData({ ...formData, crm_lead_id: e.target.value })
+                    }
+                    placeholder={t('crm.leadIdPlaceholder')}
+                    maxLength={64}
+                    aria-invalid={!leadIdValid}
+                    aria-describedby="project-crm-lead-id-hint"
+                    className="bento-form-input"
+                    data-testid="project-crm-lead-id"
+                  />
+                  <p
+                    id="project-crm-lead-id-hint"
+                    className="bento-form-hint"
+                    role={leadIdValid ? undefined : 'alert'}
+                    style={leadIdValid ? undefined : { color: '#ef4444' }}
+                  >
+                    {leadIdValid ? t('crm.leadIdHint') : t('crm.leadIdInvalid')}
+                  </p>
+                </div>
+
+                <div className="bento-form-group">
                   <label className="bento-form-label">
                     <Palette size={14} />
                     {t('projects.folderColor')}
@@ -489,12 +557,22 @@ export default function ProjectSettingsModal({
             </div>
           ) : (
             <div className="bento-modal-actions">
+              {saveError && (
+                <p
+                  role="alert"
+                  className="text-xs"
+                  style={{ color: '#ef4444', marginRight: 'auto' }}
+                  data-testid="project-save-error"
+                >
+                  {saveError}
+                </p>
+              )}
               <button onClick={onClose} className="bento-btn-cancel">
                 {t('common.cancel')}
               </button>
               <button
                 onClick={handleSave}
-                disabled={!formData.name.trim() || saving}
+                disabled={!formData.name.trim() || !leadIdValid || saving}
                 className="bento-btn-save"
               >
                 {saving

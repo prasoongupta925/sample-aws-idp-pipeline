@@ -3,7 +3,11 @@
 // sagemaker/availability first and only shows its OCR section when the
 // endpoint exists.
 
-export type SettingsSection = 'sagemaker' | 'license';
+export type SettingsSection =
+  | 'sagemaker'
+  | 'integrations'
+  | 'users'
+  | 'license';
 
 type FetchApi = <T>(path: string, options?: RequestInit) => Promise<T>;
 
@@ -21,9 +25,17 @@ export async function checkOcrEndpointAvailable(
   }
 }
 
-/** The Settings menu entries to show; the OCR one waits for a yes. */
+/**
+ * The Settings menu entries to show: the OCR one waits for a yes, the admin
+ * ones (integrations, users) only for an admin (the API enforces the role).
+ */
 export function visibleSettingsSections(
   ocrAvailable: boolean | null,
+  admin = false,
 ): SettingsSection[] {
-  return ocrAvailable === true ? ['sagemaker', 'license'] : ['license'];
+  return [
+    ...(ocrAvailable === true ? (['sagemaker'] as const) : []),
+    ...(admin ? (['integrations', 'users'] as const) : []),
+    'license',
+  ];
 }

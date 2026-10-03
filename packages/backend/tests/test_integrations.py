@@ -58,6 +58,22 @@ WEBHOOK_DIR = os.path.abspath(
 
 
 # ------------------------------------------------------------------ fakes
+
+
+def project(item, expression, names=None):
+    """DynamoDB projection of `item`: top-level names and one-level paths (#data.crm_lead_id)."""
+    out = {}
+    for path in (p.strip() for p in expression.split(",")):
+        parts = [(names or {}).get(part, part) for part in path.split(".")]
+        if parts[0] not in item:
+            continue
+        if len(parts) == 1:
+            out[parts[0]] = item[parts[0]]
+        elif isinstance(item[parts[0]], dict) and parts[1] in item[parts[0]]:
+            out.setdefault(parts[0], {})[parts[1]] = item[parts[0]][parts[1]]
+    return out
+
+
 def _matches(condition, item) -> bool:
     expr = condition.get_expression()
     op, values = expr["operator"], expr["values"]
@@ -90,13 +106,12 @@ class FakeTable:
     def item(self, pk, sk):
         return self.items.get((pk, sk))
 
-    def get_item(self, Key, ProjectionExpression=None, ConsistentRead=None):
+    def get_item(self, Key, ProjectionExpression=None, ConsistentRead=None, ExpressionAttributeNames=None):
         item = self.items.get((Key["PK"], Key["SK"]))
         if item is None:
             return {}
         if ProjectionExpression:
-            names = [n.strip() for n in ProjectionExpression.split(",")]
-            item = {n: item[n] for n in names if n in item}
+            item = project(item, ProjectionExpression, ExpressionAttributeNames)
         return {"Item": copy.deepcopy(item)}
 
     def put_item(self, Item):

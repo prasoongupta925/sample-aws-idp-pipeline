@@ -5,7 +5,7 @@ Every test runs isolated from AWS and from the other tests:
   config/credentials files, so a client a test forgets to stub can never reach
   a real account (this machine has real credentials in ~/.aws);
 - the module-level AWS clients the app caches (S3 and its presign client,
-  DynamoDB, the Lambda, Bedrock and KMS clients) are reset before and after
+  DynamoDB, the Lambda, Bedrock, KMS and Cognito clients, and the caller-role cache) are reset before and after
   each test, so a client created or stubbed in one test never leaks into the
   next; so are the webhook test-event rate limits;
 - the pause before a webhook invoke is sent again is skipped (a test that
@@ -16,6 +16,7 @@ import os
 
 import pytest
 
+import app.caller as caller
 import app.ddb.client as ddb_client
 import app.file_check as file_check
 import app.file_check_ask as file_check_ask
@@ -45,6 +46,8 @@ def _reset_cached_clients() -> None:
     lancedb._lambda_client = None
     graph_router._lambda_client = None
     webhook_secret._kms_client = None
+    caller._cognito_client = None
+    caller.reset_cache()
     webhook_delivery.reset_test_limits()
 
 

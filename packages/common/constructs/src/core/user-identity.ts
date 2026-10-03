@@ -7,6 +7,7 @@ import {
   AccountRecovery,
   CfnManagedLoginBranding,
   CfnUserPoolDomain,
+  CfnUserPoolGroup,
   FeaturePlan,
   Mfa,
   OAuthScope,
@@ -42,6 +43,7 @@ export class UserIdentity extends Construct {
     this.userPool = this.createUserPool();
     this.userPoolDomain = this.createUserPoolDomain(this.userPool);
     this.userPoolClient = this.createUserPoolClient(this.userPool);
+    this.createRoleGroups(this.userPool);
     this.identityPool = this.createIdentityPool(
       this.userPool,
       this.userPoolClient,
@@ -111,6 +113,28 @@ export class UserIdentity extends Construct {
         email: true,
       },
     });
+
+  /**
+   * App roles as Cognito groups (the ID token lists them in cognito:groups).
+   * The backend reads a caller's groups from the pool (app/caller.py) and
+   * enforces them; the web app only uses the token to hide pages. The first
+   * admin is added once by hand (see the deployment docs).
+   */
+  private createRoleGroups = (userPool: UserPool) => {
+    const roles: [string, string][] = [
+      ['admin', 'Admins: users, integrations and lender grids'],
+      ['handler', 'Loan file handlers'],
+      ['viewer', 'Read-only users'],
+    ];
+    roles.forEach(([groupName, description], index) => {
+      new CfnUserPoolGroup(this, `Group-${groupName}`, {
+        userPoolId: userPool.userPoolId,
+        groupName,
+        description,
+        precedence: index + 1,
+      });
+    });
+  };
 
   private createUserPoolDomain = (userPool: UserPool) =>
     new CfnUserPoolDomain(this, 'UserPoolDomain', {

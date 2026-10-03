@@ -39,6 +39,9 @@ class Config(BaseSettings):
     # KMS key (WebhookStack) that encrypts the webhook signing secrets; the
     # backend may only Encrypt with it (app/webhook_secret.py).
     webhook_secret_key_arn: str = ""
+    # Cognito user pool of the app (env USER_POOL_ID, ApplicationStack): the
+    # caller's groups (admin / handler / viewer) are read from it (app/caller.py).
+    user_pool_id: str = ""
     # Accept video uploads (env VIDEO_UPLOADS_ENABLED, set by the Backend
     # construct). False in the Mumbai build: no in-Region model reads video, so
     # the upload check refuses video files (audio still goes to Transcribe).

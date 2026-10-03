@@ -38,6 +38,9 @@ const ASSET_EXCLUDE = ['test_*.py', '__pycache__', '.pytest_cache', '*.pyc'];
  * backend may only Encrypt with it and this function is the only role allowed
  * to Decrypt, both only with the encryption context purpose
  * webhook-signing-secret (webhook_security.secret_encryption_context).
+ * The CRM launch-link secret uses the same key with the purpose
+ * crm-launch-secret, which the backend may Encrypt and Decrypt (it verifies
+ * the links itself; see the Backend construct).
  */
 export class WebhookStack extends Stack {
   public readonly deliveryFunction: lambda.Function;

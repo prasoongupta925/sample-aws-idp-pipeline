@@ -1639,5 +1639,97 @@
         "enquiries_d120": "Enquiries (120 days)"
       }
     }
+  },
+  "crm": {
+    "leadId": "CRM lead ID",
+    "leadIdPlaceholder": "e.g. SD-LEAD-0042",
+    "leadIdHint": "The Smart Dial lead this project belongs to. Sent with every webhook; the CRM launch link opens this project.",
+    "leadIdInvalid": "Use 1-64 letters, digits or . _ : - (no spaces).",
+    "saveFailed": "The project could not be saved. Try again."
+  },
+  "crmLaunch": {
+    "opening": "Opening the lead from the CRM…",
+    "failed": "This CRM link could not be opened",
+    "goHome": "Go to projects",
+    "errors": {
+      "forbidden": "Sign in with an account of this app to open CRM links.",
+      "notSetUp": "CRM launch links are not set up yet. Ask an admin to generate the launch secret in Settings → Integrations.",
+      "status": "The request was rejected (HTTP {{status}})."
+    },
+    "settings": {
+      "menu": "Integrations",
+      "title": "Smart Dial CRM launch link",
+      "intro": "The CRM opens a lead here with a signed link: /launch?lead=…&name=…&phone=…&exp=…&sig=…. Each link works once and for at most {{minutes}} minutes, and the user still signs in. See docs/crm-launch-link.md for the CRM code.",
+      "secretTitle": "Launch secret",
+      "set": "Set",
+      "notSet": "Not set",
+      "rotatedAt": "Last rotated {{at}} by {{by}}",
+      "generate": "Generate secret",
+      "rotate": "Rotate secret",
+      "confirmRotate": "Links signed with the current secret stop working at once. Put the new secret in the CRM straight away.",
+      "once": "Copy this secret into the CRM now. It is not shown again.",
+      "done": "Done",
+      "copyManual": "Copy it by hand (select the field, then Ctrl+C).",
+      "loadFailed": "Could not load the launch link settings: {{message}}",
+      "rotateFailed": "Could not rotate the secret: {{message}}"
+    }
+  },
+  "adminUsers": {
+    "title": "Users",
+    "menu": "Users",
+    "intro": "Everyone who can sign in to the app (the user pool is shared with the voice bot). Roles: admins manage users, integrations and lender grids; handlers work on loan files; viewers can only look.",
+    "refresh": "Refresh",
+    "empty": "No users yet.",
+    "user": "User",
+    "role": "Role",
+    "status": "Status",
+    "actions": "Actions",
+    "you": "(you)",
+    "roleOf": "Role of {{user}}",
+    "noRole": "No role",
+    "ownRole": "Ask another admin to change your own role.",
+    "ownDisable": "You cannot disable your own account.",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "invited": "Invited, not signed in yet",
+    "disable": "Disable",
+    "enable": "Enable",
+    "resetPassword": "Reset password",
+    "resendInvite": "Resend invite",
+    "yes": "Yes, go ahead",
+    "cancel": "Cancel",
+    "roles": {
+      "admin": "Admin",
+      "handler": "Handler",
+      "viewer": "Viewer"
+    },
+    "confirm": {
+      "disable": "Disable {{user}}? They are signed out and cannot sign in until enabled again.",
+      "reset": "Send {{user}} a new password email?"
+    },
+    "notice": {
+      "disabled": "{{user}} is disabled and signed out.",
+      "enabled": "{{user}} is enabled.",
+      "resetSent": "{{user}} was emailed a code to set a new password.",
+      "inviteResent": "{{user}} was sent the invitation again, with a new temporary password.",
+      "role": "{{user}} is now {{role}}.",
+      "invited": "Invited {{user}}: the login email went to {{email}}."
+    },
+    "invite": {
+      "title": "Invite a user",
+      "hint": "Cognito emails the username and a temporary password (valid 3 days). The username is made from the email address.",
+      "email": "Email",
+      "given_name": "First name",
+      "family_name": "Last name",
+      "submit": "Send invite",
+      "badEmail": "Enter a valid email address.",
+      "needName": "Enter the first and last name."
+    },
+    "truncated": "Only the first 1000 users are shown.",
+    "loadFailed": "Could not load the users: {{message}}",
+    "errors": {
+      "forbidden": "Only admins can manage users.",
+      "status": "The request was rejected (HTTP {{status}})."
+    }
   }
 }

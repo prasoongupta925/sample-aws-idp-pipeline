@@ -22,7 +22,8 @@ Input: {"project_id": "...", "document_id": "..." (optional), "login": {...} (fi
    (still pending, failed, without facts, unsupported, unassigned) gets one
    project-level result without applicant data. test: no file check and no applicant
    data (results = []). file_login.requested: no file check; results = [the login].
-3. POST {event, delivery_id, project_id, document_id, at, results} as JSON with the
+3. POST {event, delivery_id, project_id, document_id, at, results} (plus crm_lead_id when the
+   project has a CRM lead id, read from the META item's data.crm_lead_id) as JSON with the
    X-SmartDial-Event, X-SmartDial-Delivery and X-SmartDial-Signature headers
    (webhook_security.sign_payload): each attempt gets 5 s in total (connect, TLS,
    request and response headers; at most 2 addresses tried), up to 3 attempts (1 s and
@@ -93,6 +94,8 @@ MAX_APPLICANT_CHARS = 500
 FILE_CHECK_TOOL = "filecheck___run_file_check"
 
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+# The backend's CRM lead id pattern (app/routers/projects.py CRM_LEAD_ID_PATTERN).
+_LEAD_RE = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
 
 
 def _retention_days() -> int:
@@ -172,17 +175,22 @@ def load_webhook(project_id: str) -> dict | None:
     """URL, enabled flag and encrypted secret from the project META item; None when the project does not exist."""
     response = _get_table().get_item(
         Key={"PK": f"PROJ#{project_id}", "SK": "META"},
-        ProjectionExpression="PK, webhook_url, webhook_enabled, webhook_secret_enc",
+        # "data" is a DynamoDB reserved word: the project's CRM lead id is data.crm_lead_id.
+        ProjectionExpression="PK, webhook_url, webhook_enabled, webhook_secret_enc, #data.crm_lead_id",
+        ExpressionAttributeNames={"#data": "data"},
         ConsistentRead=True,
     )
     item = response.get("Item")
     if not item:
         return None
     url, secret_enc = item.get("webhook_url"), item.get("webhook_secret_enc")
+    lead = (item.get("data") or {}).get("crm_lead_id") if isinstance(item.get("data"), dict) else None
     return {
         "url": url if isinstance(url, str) and url else None,
         "enabled": item.get("webhook_enabled") is True,
         "secret_enc": secret_enc if isinstance(secret_enc, str) and secret_enc else None,
+        # Only a well-formed lead id is sent (the backend checks the same pattern).
+        "crm_lead_id": lead if isinstance(lead, str) and _LEAD_RE.match(lead) else None,
     }
 
 
@@ -665,6 +673,9 @@ def _handle(event: dict) -> dict:
             "at": at.astimezone(UTC).isoformat(timespec="microseconds"),
             "results": results,
         }
+        if webhook.get("crm_lead_id"):
+            # Only when the project has one: payloads of projects without a lead are unchanged.
+            payload["crm_lead_id"] = webhook["crm_lead_id"]
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         outcome = deliver(webhook["url"], secret, kind, delivery_id, body)
     names = ", ".join(str(r["applicant"]) for r in results if r.get("applicant"))

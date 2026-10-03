@@ -112,6 +112,38 @@ to private resources); deploy it with the rest (`--all`) or before
   results: [{applicant, verdict, summary, missing, checklist_id}]}` for the
   applicant(s) of that document (every applicant when the check cannot tell;
   one entry with `applicant: null` when there is none).
+- CRM lead id: a project can carry `crm_lead_id` (1-64 of `A-Z a-z 0-9 . _ : -`),
+  set in the project settings, by the signed launch link
+  ([crm-launch-link.md](../../../../crm-launch-link.md)) or with
+  `POST /projects` / `PUT /projects/{id}` `{"crm_lead_id": "SD-LEAD-0042"}`
+  (`""` removes it; a lead links to one project only, 409 otherwise). Every
+  delivery of such a project (`file_check.completed`, `file_login.requested`
+  and `test`) has a top-level `"crm_lead_id": "SD-LEAD-0042"`; projects without
+  one send the payload unchanged. The signature scheme is unchanged: the field
+  is part of the signed body.
+- CRM launch link: the CRM opens a lead with
+  `https://<app>/launch?lead=<id>&name=<name>&phone=<phone>&exp=<unix>&sig=<hex>`,
+  HMAC-SHA256 over the canonical query with the launch secret (one per CRM,
+  KMS-encrypted). The app checks the signature, an expiry of at most 5 minutes
+  and one use, after the normal Cognito sign-in, then opens (or creates) the
+  lead's project. An admin generates or rotates the secret in Settings →
+  Integrations. Format and ready-to-copy PHP / JavaScript:
+  [crm-launch-link.md](../../../../crm-launch-link.md).
+- Roles: the user pool has the groups `admin`, `handler` and `viewer`; admin
+  pages and APIs need `admin`, checked by the backend. Add the first admin once
+  after the deploy:
+  `aws cognito-idp admin-add-user-to-group --user-pool-id <pool id> --username <user> --group-name admin`
+  (the user signs in again to get the new token).
+- Users page (Settings → Users, admins only; enforced by the `/admin/users`
+  API): lists the pool's users, invites one (AdminCreateUser: Cognito sends the
+  pool's invitation email with the username and temporary password), disables
+  (and signs out) or enables a user, resets a password (or resends the invite
+  to a user who never signed in) and sets the role (exactly one of the three
+  groups). Admins cannot disable or change the role of their own account. The
+  backend role has only these cognito-idp actions, on this user pool only. The
+  pool is shared with the voice bot, so its users are listed too. A changed
+  role takes effect after the user signs in again (new token) and within a
+  minute in the API (role cache).
 - Headers: `X-SmartDial-Event`, `X-SmartDial-Delivery` (retries reuse it:
   deduplicate on it) and `X-SmartDial-Signature: t=<unix>,v1=<hex>`, the
   HMAC-SHA256 of `<t>.<raw body>` keyed with the secret. The receiver verifies

@@ -1,8 +1,8 @@
 import contextlib
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Header, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.cache import CacheKey, cached_query_projects, invalidate
 from app.config import get_config
@@ -31,6 +31,44 @@ from app.safe_ids import is_safe_segment
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
+# A CRM lead id (Smart Dial or any CRM): letters, digits and . _ : - only, so it is safe
+# to log, to put in a URL and to compare. "" in an update removes it.
+CRM_LEAD_ID_PATTERN = r"^[A-Za-z0-9._:-]{1,64}$"
+CrmLeadId = Annotated[
+    str | None,
+    Field(
+        default=None,
+        pattern=CRM_LEAD_ID_PATTERN,
+        description="The CRM lead this project belongs to (1-64 of A-Z a-z 0-9 . _ : -); sent in every webhook",
+    ),
+]
+CrmLeadIdUpdate = Annotated[
+    str | None,
+    Field(
+        default=None,
+        pattern=r"^$|" + CRM_LEAD_ID_PATTERN,
+        description='New CRM lead id; "" removes it, null (or absent) keeps it',
+    ),
+]
+
+
+def find_project_by_lead(projects: list[Project], crm_lead_id: str, exclude: str | None = None) -> Project | None:
+    """The most recently updated project with this CRM lead id (other than `exclude`), or None."""
+    matches = [p for p in projects if p.data.crm_lead_id == crm_lead_id and p.data.project_id != exclude]
+    return max(matches, key=lambda p: p.updated_at or p.created_at, default=None)
+
+
+async def _require_free_lead(crm_lead_id: str | None, project_id: str | None = None) -> None:
+    """409 when another project already has this lead id (a lead opens exactly one project)."""
+    if not crm_lead_id:
+        return
+    other = find_project_by_lead(await cached_query_projects(), crm_lead_id, exclude=project_id)
+    if other is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"CRM lead {crm_lead_id} is already linked to the project {other.data.name!r}",
+        )
+
 
 class WorkflowSummary(BaseModel):
     workflow_id: str
@@ -57,6 +95,7 @@ class ProjectCreate(BaseModel):
     document_prompt: str | None = None
     ocr_model: str | None = None
     ocr_options: dict[str, Any] | None = None
+    crm_lead_id: CrmLeadId = None
 
 
 class DeletedInfo(BaseModel):
@@ -84,6 +123,7 @@ class ProjectUpdate(BaseModel):
     document_prompt: str | None = None
     ocr_model: str | None = None
     ocr_options: dict[str, Any] | None = None
+    crm_lead_id: CrmLeadIdUpdate = None
 
 
 class ProjectResponse(BaseModel):
@@ -97,6 +137,7 @@ class ProjectResponse(BaseModel):
     document_prompt: str | None = None
     ocr_model: str | None = None
     ocr_options: dict[str, Any] | None = None
+    crm_lead_id: str | None = None
     created_at: str
     updated_at: str | None = None
 
@@ -113,6 +154,7 @@ class ProjectResponse(BaseModel):
             document_prompt=project.data.document_prompt,
             ocr_model=project.data.ocr_model,
             ocr_options=project.data.ocr_options,
+            crm_lead_id=project.data.crm_lead_id,
             created_at=project.created_at,
             updated_at=project.updated_at,
         )
@@ -173,6 +215,7 @@ def get_project(project_id: str) -> ProjectResponse:
 
 @router.post("")
 async def create_project(request: ProjectCreate) -> ProjectResponse:
+    await _require_free_lead(request.crm_lead_id)
     project_id = generate_project_id()
 
     now = now_iso()
@@ -187,6 +230,7 @@ async def create_project(request: ProjectCreate) -> ProjectResponse:
         document_prompt=request.document_prompt,
         ocr_model=request.ocr_model,
         ocr_options=request.ocr_options,
+        crm_lead_id=request.crm_lead_id,
     )
 
     put_project_item(project_id, data)
@@ -203,6 +247,7 @@ async def create_project(request: ProjectCreate) -> ProjectResponse:
         document_prompt=request.document_prompt,
         ocr_model=request.ocr_model,
         ocr_options=request.ocr_options,
+        crm_lead_id=request.crm_lead_id,
         created_at=now,
         updated_at=now,
     )
@@ -229,6 +274,9 @@ async def update_project(project_id: str, request: ProjectUpdate) -> ProjectResp
         data.ocr_model = request.ocr_model
     if request.ocr_options is not None:
         data.ocr_options = request.ocr_options
+    if request.crm_lead_id is not None and request.crm_lead_id != (data.crm_lead_id or ""):
+        await _require_free_lead(request.crm_lead_id, project_id)
+        data.crm_lead_id = request.crm_lead_id or None
 
     update_project_data(project_id, data)
     await invalidate(CacheKey.QUERY_PROJECTS)
