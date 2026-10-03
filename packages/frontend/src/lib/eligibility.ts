@@ -40,6 +40,7 @@ import type {
   OtherIncomeType,
   PincodeCheck,
   PrefillField,
+  ProcessingFeePolicy,
   RentAgreement,
   SourcedField,
   StillNeeded,
@@ -218,6 +219,12 @@ export function roiPercent(value: number | null | undefined): number | null {
 export function formatRoi(value: number | null | undefined): string {
   const pct = roiPercent(value);
   return pct === null ? '–' : `${INDIAN_NUMBER.format(pct)}%`;
+}
+
+/** An APR, always a percent (12.67 -> '12.67%', 0.5 -> '0.5%'); null -> '–'. */
+export function formatApr(value: number | null | undefined): string {
+  const n = finite(value);
+  return n === null ? '–' : `${INDIAN_NUMBER.format(n)}%`;
 }
 
 /** A FOIR (always a fraction in the API: 0.7) as '70%'; 1 -> '100%'. */
@@ -1311,6 +1318,19 @@ function otherIncomeConsidered(raw: unknown): OtherIncomeConsidered | null {
   };
 }
 
+/** A processing fee policy {pct, min_amount?, max_amount?}; null without a pct. */
+function processingFeePolicy(raw: unknown): ProcessingFeePolicy | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = obj(raw);
+  const pct = finite(o.pct);
+  if (pct === null) return null;
+  return {
+    pct,
+    min_amount: finite(o.min_amount),
+    max_amount: finite(o.max_amount),
+  };
+}
+
 function lenderRow(raw: unknown): LenderEligibility | null {
   const o = obj(raw);
   const lender = text(o.lender) ?? text(o.name);
@@ -1330,6 +1350,11 @@ function lenderRow(raw: unknown): LenderEligibility | null {
     emi: finite(o.emi),
     emi_at_calculation_tenure: finite(o.emi_at_calculation_tenure),
     per_lakh_emi: finite(o.per_lakh_emi),
+    processing_fee: finite(o.processing_fee),
+    processing_fee_policy: processingFeePolicy(o.processing_fee_policy),
+    apr: finite(o.apr),
+    total_interest: finite(o.total_interest),
+    total_cost: finite(o.total_cost),
     foir_eligibility: finite(o.foir_eligibility),
     multiplier_eligibility: finite(o.multiplier_eligibility),
     income_considered: finite(o.income_considered),
@@ -1513,6 +1538,7 @@ function policy(raw: unknown): LenderPolicy | null {
           multiplier: finite(unlisted.multiplier),
         }
       : null,
+    processing_fee: processingFeePolicy(o.processing_fee),
     serviceable_regions: strings(o.serviceable_regions),
   };
 }

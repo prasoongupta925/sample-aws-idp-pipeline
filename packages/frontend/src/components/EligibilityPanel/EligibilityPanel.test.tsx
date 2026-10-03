@@ -138,6 +138,60 @@ describe('Lenders table (the worked example)', () => {
     expect(cell(hdfc, 'multiplier_eligibility')).toBe('₹19,60,000');
   });
 
+  it('shows the APR and total cost columns', () => {
+    const html = lenders();
+    const icici = lenderBody(html, 'ICICI Bank');
+    // 20,58,000 at 11% over 72 months, fee 2% = 41,160 (backend values).
+    expect(cell(icici, 'apr')).toBe('11.75%');
+    expect(cell(icici, 'total_cost')).toBe('₹8,03,553.69');
+    const hdfc = lenderBody(html, 'HDFC Bank');
+    expect(cell(hdfc, 'apr')).toBe('12.67%');
+    expect(cell(hdfc, 'total_cost')).toBe('₹5,24,500.29');
+    // Not eligible: no offer, so no APR.
+    expect(cell(lenderBody(html, 'Axis Bank'), 'apr')).toBe('–');
+    expect(plain(html)).toContain('APR');
+    expect(plain(html)).toContain('Total cost');
+  });
+
+  it('shows the APR formula and the fee in the details', () => {
+    const icici = plain(lenderBody(lenders(), 'ICICI Bank'));
+    expect(icici).toContain(
+      'APR: ₹20,58,000 − fee ₹41,160 = ₹20,16,840 is repaid by 72 EMIs of ₹39,172.13; ₹20,16,840 = EMI × (1 − (1 + r)⁻ⁿ) ÷ r gives r = 0.9792% a month, APR = 12 × r = 11.75%',
+    );
+    expect(icici).toContain(
+      'Total cost: 72 × ₹39,172.13 − ₹20,58,000 + fee ₹41,160 = ₹8,03,553.69',
+    );
+    expect(icici).toContain('Processing fee ₹41,160 2% of the loan');
+    const hdfc = plain(
+      lenderBody(lenders({ initialExpanded: ['HDFC Bank'] }), 'HDFC Bank'),
+    );
+    expect(hdfc).toContain(
+      'Processing fee ₹22,500 1.5% of the loan, at least ₹2,500, at most ₹25,000',
+    );
+  });
+
+  it('says the APR is the ROI when there is no fee', () => {
+    const noFee = {
+      ...RESULT,
+      per_lender: RESULT.per_lender.map((r) =>
+        r.lender === 'ICICI Bank'
+          ? {
+              ...r,
+              processing_fee: 0,
+              processing_fee_policy: null,
+              apr: 11,
+              total_cost: r.total_interest,
+            }
+          : r,
+      ),
+    };
+    const icici = plain(lenderBody(lenders({ result: noFee }), 'ICICI Bank'));
+    expect(icici).toContain(
+      'APR: no processing fee, so the APR is the ROI, 11%',
+    );
+    expect(icici).toContain('No fee in the policy');
+  });
+
   it('highlights the best lender and explains its figures', () => {
     const html = lenders();
     const icici = lenderBody(html, 'ICICI Bank');

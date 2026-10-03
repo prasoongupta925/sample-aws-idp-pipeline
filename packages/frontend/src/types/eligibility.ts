@@ -324,6 +324,14 @@ export interface UnlistedCompanyPolicy {
   multiplier: number | null;
 }
 
+/** A lender's processing fee: pct of the loan, within min/max rupees when set. */
+export interface ProcessingFeePolicy {
+  /** Percent of the loan (1.5). */
+  pct: number;
+  min_amount: number | null;
+  max_amount: number | null;
+}
+
 /**
  * A SAMPLE lender policy (GET .../lenders, app/data/lender_policies.json);
  * every value is shown as returned.
@@ -350,6 +358,8 @@ export interface LenderPolicy {
     { foir: number | null; multiplier: number | null }
   >;
   unlisted_company: UnlistedCompanyPolicy | null;
+  /** Counted in the APR and the total cost; null when the policy has none. */
+  processing_fee?: ProcessingFeePolicy | null;
   serviceable_regions: string[];
 }
 
@@ -459,6 +469,19 @@ export interface LenderEligibility {
   /** The EMI over calculation_tenure_months; 0 unless eligible. */
   emi_at_calculation_tenure: number | null;
   per_lakh_emi: number | null;
+  /** The processing fee on the eligible amount (0 with no fee); null unless eligible. */
+  processing_fee?: number | null;
+  processing_fee_policy?: ProcessingFeePolicy | null;
+  /**
+   * Annual percentage rate, percent: 12 × r where eligible amount − fee =
+   * EMI × (1 − (1 + r)^−n) ÷ r over tenure_months; the ROI with no fee.
+   * null unless eligible.
+   */
+  apr?: number | null;
+  /** EMI × tenure_months − eligible amount; null unless eligible. */
+  total_interest?: number | null;
+  /** Total interest plus the processing fee; null unless eligible. */
+  total_cost?: number | null;
   foir_eligibility: number | null;
   multiplier_eligibility: number | null;
   /** Net salary plus the other income at this lender's consideration %. */

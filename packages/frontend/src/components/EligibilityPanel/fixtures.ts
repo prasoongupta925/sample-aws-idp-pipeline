@@ -119,6 +119,9 @@ const SOURCES = {
   multiplier_eligibility: 'formula',
   eligible_amount: 'formula',
   emi: 'formula',
+  processing_fee: 'policy',
+  apr: 'formula',
+  total_cost: 'formula',
 };
 
 const COMMON = {
@@ -192,6 +195,11 @@ export const WORKED_EXAMPLE_RESPONSE = {
       calculation_tenure_months: 60,
       emi_at_calculation_tenure: 44745.91,
       per_lakh_emi: 2174.24,
+      processing_fee: 41160,
+      processing_fee_policy: { pct: 2, min_amount: null, max_amount: null },
+      apr: 11.75,
+      total_interest: 762393.69,
+      total_cost: 803553.69,
       foir_eligibility: 2465226.61,
       multiplier_eligibility: 2058000,
       foir: 0.7,
@@ -218,6 +226,11 @@ export const WORKED_EXAMPLE_RESPONSE = {
       calculation_tenure_months: 60,
       emi_at_calculation_tenure: 33366.67,
       per_lakh_emi: 2224.44,
+      processing_fee: 22500,
+      processing_fee_policy: { pct: 1.5, min_amount: 2500, max_amount: 25000 },
+      apr: 12.67,
+      total_interest: 502000.29,
+      total_cost: 524500.29,
       foir_eligibility: 2409590.06,
       multiplier_eligibility: 1960000,
       foir: 0.7,
@@ -361,6 +374,7 @@ export const LENDERS_RESPONSE = {
       min_cibil_score: 750,
       max_enquiries_90d: 4,
       unlisted_company: { accepted: false },
+      processing_fee: { pct: 1.5, min_amount: 2500, max_amount: 25000 },
     },
     {
       id: 'icici_bank',

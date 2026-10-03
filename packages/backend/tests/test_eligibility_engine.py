@@ -156,6 +156,9 @@ class TestWorkedExample:
             "multiplier_eligibility": "formula",
             "eligible_amount": "formula",
             "emi": "formula",
+            "processing_fee": "policy",
+            "apr": "formula",
+            "total_cost": "formula",
         }
 
     def test_top_level_summary(self):
@@ -1180,3 +1183,99 @@ def test_the_engine_needs_only_the_standard_library():
     imported |= {n.module.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module}
 
     assert imported <= set(sys.stdlib_module_names), imported - set(sys.stdlib_module_names)
+
+
+class TestAprAndTotalCost:
+    """APR (the processing fee counted as the RBI Key Fact Statement does) and total cost, against
+    hand-worked examples."""
+
+    def test_a_one_lakh_loan_with_a_2000_fee(self):
+        # 1,00,000 at 12% over 12 months: EMI 8,884.88 (1.01^12 = 1.126825); 12 EMIs 1,06,618.55.
+        # The borrower gets 98,000: 98,000 = 8,884.88 × (1 − (1 + r)^−12) ÷ r -> r ≈ 1.321% a month
+        # (1.30% gives 11.0445, 1.33% gives 11.0241, the target factor is 11.0300), APR ≈ 15.85%.
+        assert el.money(el.emi(100000, 12, 12)) == 8884.88
+        assert el.percent(el.apr(100000, 12, 12, 2000)) == 15.85
+        # Interest 6,618.55 + fee 2,000.
+        assert el.money(el.total_cost(100000, 12, 12, 2000)) == 8618.55
+
+    def test_the_rate_solves_the_kfs_equation(self):
+        r = el.apr(100000, 12, 12, 2000) / 1200
+        repaid = el.emi(100000, 12, 12) * (1 - (1 + r) ** -12) / r
+        assert abs(repaid - 98000) < Decimal("0.0001")
+
+    def test_a_zero_rate_loan_with_a_fee(self):
+        # 1,20,000 at 0% over 12 months: EMI 10,000; the borrower gets 1,18,800, so the factor is
+        # 11.88; (1 − (1 + r)^−12) ÷ r ≈ 12 × (1 − 6.5 r) gives r ≈ 0.154%, the exact r 0.1547%: APR 1.86%.
+        assert el.percent(el.apr(120000, 0, 12, 1200)) == 1.86
+        assert el.money(el.total_cost(120000, 0, 12, 1200)) == 1200.0
+
+    def test_with_no_fee_the_apr_is_the_roi(self):
+        assert el.apr(100000, 11, 72) == Decimal(11)
+        assert el.apr(100000, 0, 12, 0) == Decimal(0)
+        # 36 EMIs of 3,273.89 (11%): interest 17,860.09, no fee.
+        assert el.money(el.total_cost(100000, 11, 36)) == el.money(el.emi(100000, 11, 36) * 36 - 100000)
+
+    @pytest.mark.parametrize("fee", [-1, 100000, 150000])
+    def test_a_fee_that_is_negative_or_the_whole_loan_is_refused(self, fee):
+        with pytest.raises(ValueError, match="fee must be"):
+            el.apr(100000, 12, 12, fee)
+
+    @pytest.mark.parametrize(
+        ("policy", "principal", "fee"),
+        [
+            ({"pct": 1.5, "min_amount": 2500, "max_amount": 25000}, 1500000, Decimal("22500")),
+            ({"pct": 1.5, "min_amount": 2500, "max_amount": 25000}, 100000, Decimal("2500")),  # 1,500 -> min
+            ({"pct": 1.5, "min_amount": 2500, "max_amount": 25000}, 2000000, Decimal("25000")),  # 30,000 -> cap
+            ({"pct": 2.0}, 2058000, Decimal("41160")),
+            ({"pct": 0, "min_amount": 5000}, 3000, Decimal("3000")),  # never more than the loan
+        ],
+    )
+    def test_the_processing_fee(self, policy, principal, fee):
+        assert el.ProcessingFee.model_validate(policy).amount(principal) == fee
+
+    def test_a_fee_min_above_its_max_is_refused(self):
+        with pytest.raises(ValueError, match="min_amount is more than max_amount"):
+            el.ProcessingFee.model_validate({"pct": 1, "min_amount": 5000, "max_amount": 1000})
+
+    def test_each_lender_row_has_the_apr_and_total_cost(self):
+        result = el.calculate(example())
+        hdfc, icici, axis = (at(result, i) for i in ("hdfc_bank", "icici_bank", "axis_bank"))
+
+        # HDFC Bank: 15,00,000 over 60 months at 12% (EMI 33,366.67); fee 1.5% = 22,500 (under the 25,000 cap).
+        assert (hdfc["processing_fee"], hdfc["apr"]) == (22500.0, 12.67)
+        assert hdfc["total_interest"] == el.money(el.emi(1500000, 12, 60) * 60 - 1500000)
+        assert hdfc["total_cost"] == el.money(el.emi(1500000, 12, 60) * 60 - 1500000 + 22500)
+        assert hdfc["processing_fee_policy"] == {"pct": 1.5, "min_amount": 2500, "max_amount": 25000}
+        # ICICI Bank: 20,58,000 over 72 months at 11%; fee 2% = 41,160.
+        assert (icici["processing_fee"], icici["apr"]) == (41160.0, 11.75)
+        assert icici["total_cost"] == el.money(el.emi(2058000, 11, 72) * 72 - 2058000 + 41160)
+        assert hdfc["sources"]["apr"] == hdfc["sources"]["total_cost"] == "formula"
+        assert hdfc["sources"]["processing_fee"] == "policy"
+        # Axis Bank does not serve the pincode: no offer, so no APR or cost.
+        assert axis["status"] == "not_serviceable"
+        assert (axis["processing_fee"], axis["apr"], axis["total_cost"]) == (None, None, None)
+
+    def test_a_lender_without_a_fee_has_its_roi_as_the_apr(self):
+        policy = BOOK.lender("icici_bank").model_dump()
+        policy["processing_fee"] = None
+        icici = el.LenderPolicy.model_validate(policy)
+        lenders = tuple(icici if lender.id == "icici_bank" else lender for lender in BOOK.lenders)
+        book = el.PolicyBook(BOOK.policies.model_copy(update={"lenders": lenders}), BOOK.pincodes, BOOK.companies)
+
+        row = at(el.calculate(example(), book=book), "icici_bank")
+
+        assert (row["processing_fee"], row["apr"], row["processing_fee_policy"]) == (0.0, 11.0, None)
+        assert row["total_cost"] == row["total_interest"]
+
+    def test_a_fee_as_large_as_the_offer_has_no_apr(self):
+        policy = BOOK.lender("icici_bank").model_dump()
+        policy["processing_fee"] = {"pct": 0, "min_amount": 5000000}
+        icici = el.LenderPolicy.model_validate(policy)
+        lenders = tuple(icici if lender.id == "icici_bank" else lender for lender in BOOK.lenders)
+        book = el.PolicyBook(BOOK.policies.model_copy(update={"lenders": lenders}), BOOK.pincodes, BOOK.companies)
+
+        row = at(el.calculate(example(), book=book), "icici_bank")
+
+        # The fee is capped at the 20,58,000 offer, which leaves the borrower nothing.
+        assert (row["processing_fee"], row["apr"]) == (2058000.0, None)
+        assert row["total_cost"] == el.money(el.emi(2058000, 11, 72) * 72)
