@@ -83,6 +83,11 @@ class DocumentResponse(BaseModel):
     transcribe_options: dict[str, object] | None = None
     source_url: str | None = None
     crawl_instruction: str | None = None
+    # "customer_link" for a customer's upload through an upload link.
+    source: str | None = None
+    upload_link_id: str | None = None
+    # A password-protected PDF waiting for its password (status password_required).
+    locked: bool = False
     created_at: str
     updated_at: str
 
@@ -106,6 +111,9 @@ class DocumentResponse(BaseModel):
             transcribe_options=doc.data.transcribe_options,
             source_url=doc.data.source_url,
             crawl_instruction=doc.data.crawl_instruction,
+            source=doc.data.source,
+            upload_link_id=doc.data.upload_link_id,
+            locked=doc.data.locked,
             created_at=doc.created_at,
             updated_at=doc.updated_at,
         )

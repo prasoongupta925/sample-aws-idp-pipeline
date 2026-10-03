@@ -45,6 +45,13 @@ class DocumentData(BaseModel):
     transcribe_options: dict[str, Any] | None = None
     source_url: str | None = None
     crawl_instruction: str | None = None
+    # "customer_link": uploaded by the customer through an upload link
+    # (app/upload_links.py); None for staff uploads.
+    source: str | None = None
+    upload_link_id: str | None = None
+    # A password-protected PDF waiting under its locked/ key for the password.
+    locked: bool = False
+    unlock_attempts: int = 0
 
 
 class Document(BaseModel):
