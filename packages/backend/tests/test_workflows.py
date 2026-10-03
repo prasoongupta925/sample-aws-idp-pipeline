@@ -209,14 +209,18 @@ def type_detection():
     """type-detection's index.py: the processing_type an upload gets (no AWS calls)."""
     if not TYPE_DETECTION.exists():
         pytest.skip("type-detection Lambda source not in this checkout")
-    functions = str(FUNCTIONS_DIR)  # the shared layer: shared.ddb_client
-    sys.path.insert(0, functions)
+    # As on Lambda: the shared layer (shared.ddb_client) and the function's own
+    # folder (index.py imports its sibling encrypted_pdf) are on sys.path.
+    paths = [str(FUNCTIONS_DIR), str(TYPE_DETECTION.parent)]
+    for path in paths:
+        sys.path.insert(0, path)
     try:
         spec = importlib.util.spec_from_file_location("type_detection_index", TYPE_DETECTION)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
     finally:
-        sys.path.remove(functions)
+        for path in paths:
+            sys.path.remove(path)
     return module
 
 

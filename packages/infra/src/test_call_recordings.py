@@ -30,9 +30,16 @@ from shared.ddb_client import PreprocessType, determine_preprocess_required  # n
 
 
 def _load(name: str, folder: str):
-    spec = importlib.util.spec_from_file_location(name, FUNCTIONS / 'preprocessing' / folder / 'index.py')
+    function_dir = FUNCTIONS / 'preprocessing' / folder
+    spec = importlib.util.spec_from_file_location(name, function_dir / 'index.py')
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    # As on Lambda, the function's own folder is importable (type-detection
+    # imports its sibling encrypted_pdf).
+    sys.path.insert(0, str(function_dir))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(function_dir))
     return module
 
 
