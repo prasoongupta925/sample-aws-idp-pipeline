@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app import access_log, public_guard
+from app import access_log, public_guard, validation_errors
 from app.routers import (
     admin_users,
     agents,
@@ -63,6 +63,7 @@ app.add_middleware(
 )
 # After CORS: added later, so it runs first and a refused call gets no CORS headers.
 public_guard.install(app)
+validation_errors.install(app)
 
 app.include_router(admin_users.router)
 app.include_router(agents.router)
