@@ -120,6 +120,14 @@ class TestUploadUrl:
         assert item["data"]["status"] == "uploading"
         assert item["data"]["file_type"] == "application/pdf"
 
+    def test_single_use_put_also_signs_if_none_match(self, config):
+        from app.s3 import presign_put
+
+        url = presign_put(DOC_BUCKET, "projects/proj-1/documents/d/d.pdf", "application/pdf", 10, if_none_match=True)
+        _, _, query = _url_parts(url)
+        # The browser must send If-None-Match: *; S3 then refuses a second PUT (412).
+        assert query["X-Amz-SignedHeaders"] == "content-length;content-type;host;if-none-match"
+
     def test_expiry_and_signed_headers_are_passed_to_s3(self, config, table):
         s3 = MagicMock()
         s3.generate_presigned_url.return_value = "https://example.invalid/put"

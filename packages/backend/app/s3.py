@@ -54,15 +54,23 @@ def get_s3_presign_client():
     )
 
 
-def presign_put(bucket: str, key: str, content_type: str, content_length: int) -> str:
+def presign_put(bucket: str, key: str, content_type: str, content_length: int, *, if_none_match: bool = False) -> str:
     """Presigned PUT for exactly one object, content type and size.
 
     Content-Type and Content-Length are signed headers: S3 rejects an upload
     whose type or size differs from what the backend validated.
+
+    With if_none_match the URL also signs ``If-None-Match: *`` (an S3
+    conditional write), so it creates the object once: a second PUT of the
+    same URL gets 412 instead of replacing the file and starting the pipeline
+    again. The client must send that header with exactly that value.
     """
+    params = {"Bucket": bucket, "Key": key, "ContentType": content_type, "ContentLength": content_length}
+    if if_none_match:
+        params["IfNoneMatch"] = "*"
     return get_s3_presign_client().generate_presigned_url(
         "put_object",
-        Params={"Bucket": bucket, "Key": key, "ContentType": content_type, "ContentLength": content_length},
+        Params=params,
         ExpiresIn=PRESIGNED_URL_EXPIRES_IN,
     )
 

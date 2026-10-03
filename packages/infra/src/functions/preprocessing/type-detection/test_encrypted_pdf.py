@@ -55,9 +55,10 @@ class FakeS3:
         self.copies: list[dict] = []
         self.deleted: list[tuple[str, str]] = []
         self.ranges: list[str | None] = []
+        self.metadata: dict[str, dict] = {}
 
     def head_object(self, Bucket, Key):
-        return {'ContentLength': len(self.objects[Key][-1][1])}
+        return {'ContentLength': len(self.objects[Key][-1][1]), 'Metadata': self.metadata.get(Key, {})}
 
     def get_object(self, Bucket, Key, Range=None):
         self.ranges.append(Range)
@@ -237,3 +238,49 @@ def test_handler_does_not_read_staff_uploads(monkeypatch, pipeline):
     type_detection.handler(_record(f'projects/{PROJECT}/documents/{DOC}/statement.pdf'), None)
 
     assert len(pipeline['workflows']) == 1
+
+
+# ---- the unlock Lambda's own output and repeat uploads -----------------------
+
+
+def test_the_unlocked_copy_is_never_held_again():
+    """A plain PDF whose content names /Encrypt comes back from the unlock Lambda tagged: no loop."""
+    s3 = FakeS3({KEY: ENCRYPTED_PDF})
+    s3.metadata[KEY] = {'unlocked': 'true'}
+    table = FakeTable()
+
+    assert not encrypted_pdf.is_encrypted_object(s3, BUCKET, KEY)
+    assert not encrypted_pdf.hold_if_encrypted(s3, table, BUCKET, KEY, PROJECT, DOC)
+    assert s3.ranges == [] and s3.copies == [] and table.updates == []
+
+
+def test_other_metadata_does_not_skip_the_check():
+    s3 = FakeS3({KEY: ENCRYPTED_PDF})
+    s3.metadata[KEY] = {'unlocked': 'yes'}
+
+    assert encrypted_pdf.is_encrypted_object(s3, BUCKET, KEY)
+
+
+@pytest.mark.parametrize('status', sorted(type_detection.PIPELINE_STARTED_STATUSES))
+def test_a_repeat_upload_starts_nothing(monkeypatch, pipeline, status):
+    """The same presigned PUT used again (or a repeated event) must not restart the pipeline."""
+    monkeypatch.setattr(type_detection, 'get_s3_client', lambda: FakeS3({KEY: PLAIN_PDF}))
+    monkeypatch.setattr(type_detection, 'get_document', lambda p, d: {'source': 'customer_link', 'status': status})
+
+    result = json.loads(type_detection.handler(_record(KEY), None)['body'])
+
+    assert result['results'] == [{'document_id': DOC, 'status': 'skipped_repeat'}]
+    assert pipeline['workflows'] == [] and pipeline['queued'] == []
+
+
+@pytest.mark.parametrize('status', [None, 'uploading', 'uploaded', 'password_required'])
+def test_a_first_upload_or_an_unlocked_copy_runs(monkeypatch, pipeline, status):
+    s3 = FakeS3({KEY: PLAIN_PDF})
+    s3.metadata[KEY] = {'unlocked': 'true'} if status == 'password_required' else {}
+    monkeypatch.setattr(type_detection, 'get_s3_client', lambda: s3)
+    document = {'source': 'customer_link'} | ({'status': status} if status else {})
+    monkeypatch.setattr(type_detection, 'get_document', lambda p, d: document)
+
+    type_detection.handler(_record(KEY), None)
+
+    assert len(pipeline['workflows']) == 1 and len(pipeline['queued']) == 1

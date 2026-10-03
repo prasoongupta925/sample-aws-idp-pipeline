@@ -11,6 +11,12 @@ then ask for the password) and no workflow starts.
 The check reads only the first and last 64 KB (no PDF library in this Lambda):
 an encrypted PDF names /Encrypt in its trailer (at the end; also near the start
 in a linearized file). The trailer is never compressed, also with xref streams.
+
+The PDF unlock Lambda writes its unlocked copy with the user metadata
+``unlocked: true`` (UNLOCKED_METADATA): that copy is never held again, even
+when "/Encrypt" happens to appear in a plain PDF's content (no password loop).
+A browser cannot set that metadata on a customer upload: the presigned PUT
+signs its headers, and S3 refuses unsigned x-amz-meta-* headers.
 """
 
 import re
@@ -20,6 +26,9 @@ from boto3.dynamodb.conditions import Attr
 SOURCE_CUSTOMER_LINK = 'customer_link'
 DOC_PASSWORD_REQUIRED = 'password_required'
 CHUNK_BYTES = 64 * 1024
+
+# User metadata of the unlocked copy (pdf-unlock index.py writes it).
+UNLOCKED_METADATA = ('unlocked', 'true')
 
 # "/Encrypt" as a name (followed by a delimiter), not a longer name like /EncryptMetadata.
 ENCRYPT_NAME = re.compile(rb'/Encrypt(?=[\s/<\[(0-9])')
@@ -46,7 +55,11 @@ def should_check(document: dict | None, object_key: str, project_id: str, docume
 
 
 def is_encrypted_object(s3, bucket: str, key: str) -> bool:
-    size = int(s3.head_object(Bucket=bucket, Key=key).get('ContentLength') or 0)
+    head = s3.head_object(Bucket=bucket, Key=key)
+    name, value = UNLOCKED_METADATA
+    if (head.get('Metadata') or {}).get(name) == value:
+        return False  # the unlock Lambda's own output
+    size = int(head.get('ContentLength') or 0)
     if size <= 2 * CHUNK_BYTES:
         return has_encrypt_dictionary(s3.get_object(Bucket=bucket, Key=key)['Body'].read())
     head = s3.get_object(Bucket=bucket, Key=key, Range=f'bytes=0-{CHUNK_BYTES - 1}')['Body'].read()

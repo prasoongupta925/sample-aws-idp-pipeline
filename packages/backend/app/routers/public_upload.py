@@ -9,7 +9,7 @@ accepted when that document was uploaded through this same link.
 
 - GET  /public/upload-link                          what the page shows
 - POST /public/upload-link/consent                  log the DPDP consent
-- POST /public/upload-link/files                    one presigned PUT (after consent)
+- POST /public/upload-link/files                    one single-use presigned PUT (after consent)
 - POST /public/upload-link/files/{doc}/unlock       password of a protected PDF
 - POST /public/upload-link/submit                   done: the link stops working
 """
@@ -23,7 +23,7 @@ from fastapi import APIRouter, Header, HTTPException, Path
 from pydantic import BaseModel, Field, SecretStr
 
 from app.config import get_config
-from app.ddb import DocumentData, get_document_item, put_document_item, query_documents
+from app.ddb import DocumentData, get_document_item, get_project_item, put_document_item, query_documents
 from app.ddb.upload_links import (
     close_link,
     count_unlock_attempt,
@@ -135,6 +135,10 @@ def _active_link(token: str | None) -> tuple[str, dict]:
     link = get_link(hashed)
     if not link or link.get("status") != STATUS_ACTIVE or int(link.get("expires_at") or 0) <= int(time.time()):
         raise HTTPException(status_code=404, detail=LINK_NOT_FOUND)
+    # The link lives in its own partition: once its project is deleted (which
+    # also revokes it), it must not add files to a project nobody can see.
+    if not get_project_item(link["project_id"]):
+        raise HTTPException(status_code=404, detail=LINK_NOT_FOUND)
     return hashed, link
 
 
@@ -199,7 +203,12 @@ def give_consent(
 
 @router.post("/files")
 def create_public_file(request: PublicFileRequest, x_upload_token: Token = None) -> PublicFileResponse:
-    """One file: a document record and a 5-minute presigned PUT for its key, type and size."""
+    """One file: a document record and a 5-minute presigned PUT for its key, type and size.
+
+    The PUT is single-use: it signs If-None-Match: * (the page sends that
+    header), so the link holder cannot upload over the file again and again
+    and restart the pipeline each time.
+    """
     hashed, link = _active_link(x_upload_token)
     if not link.get("consented_at"):
         raise HTTPException(status_code=403, detail="Consent is needed before uploading")
@@ -248,6 +257,7 @@ def create_public_file(request: PublicFileRequest, x_upload_token: Token = None)
         locked_key if request.encrypted else final_key,
         content_type=request.content_type,
         content_length=request.file_size,
+        if_none_match=True,
     )
     print(f"upload link presign put link={link['link_id']} project={project_id} document={document_id}")
     return PublicFileResponse(

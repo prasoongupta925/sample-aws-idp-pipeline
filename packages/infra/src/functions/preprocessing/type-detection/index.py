@@ -87,6 +87,21 @@ MIME_TYPE_MAP = {
     'dxf': 'application/dxf',
 }
 
+# Document statuses once its pipeline has started (shared WorkflowStatus values
+# and the backend's "reanalyzing"). Before that a document is "uploading" or
+# "uploaded", or "password_required" (a held customer PDF: its unlocked copy
+# arrives next and must start the pipeline).
+PIPELINE_STARTED_STATUSES = frozenset(
+    {'in_progress', 'completed', 'failed', 'skipped', 'needs_user_fix', 'reanalyzing'}
+)
+
+
+def pipeline_started(document: dict | None) -> bool:
+    """True when this document's pipeline already ran or runs: a new object on
+    its key (a presigned PUT used again, a repeated S3 event) starts nothing."""
+    return bool(document) and document.get('status') in PIPELINE_STARTED_STATUSES
+
+
 def get_sqs_client():
     global sqs_client
     if sqs_client is None:
@@ -329,6 +344,11 @@ def handler(event, context):
 
             # Get document settings
             document = get_document(project_id, document_id)
+
+            if pipeline_started(document):
+                print(f"Skipping repeat upload: document {document_id} is already {document.get('status')}")
+                results.append({'document_id': document_id, 'status': 'skipped_repeat'})
+                continue
 
             # A password-protected customer PDF that the upload page did not
             # flag: hold it for its password instead of starting the pipeline.
