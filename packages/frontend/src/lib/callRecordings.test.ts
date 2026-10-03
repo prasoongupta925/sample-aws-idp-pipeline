@@ -174,10 +174,11 @@ describe('uploading a recording', () => {
     expect(puts).toEqual(['https://s3.example/put call.ogg']);
   });
 
-  it('does not mark a document uploaded when the PUT fails', async () => {
+  it('deletes the record instead of marking it uploaded when the PUT fails', async () => {
     const paths: string[] = [];
-    const fetchApi = (async (path: string) => {
-      paths.push(path);
+    const fetchApi = (async (path: string, init?: RequestInit) => {
+      paths.push(`${init?.method} ${path}`);
+      if (init?.method === 'DELETE') throw new Error('offline');
       return { document_id: 'doc-1', upload_url: 'https://s3.example/put' };
     }) as FetchApi;
     const file = new File([new Uint8Array(1)], 'call.mp3', {
@@ -193,7 +194,11 @@ describe('uploading a recording', () => {
         () => Promise.reject(new Error('Failed to upload call.mp3 (403)')),
       ),
     ).rejects.toThrow('(403)');
-    expect(paths).toEqual(['projects/proj-calls/documents']);
+    // The delete is best effort: its own failure does not hide the PUT's.
+    expect(paths).toEqual([
+      'POST projects/proj-calls/documents',
+      'DELETE projects/proj-calls/documents/doc-1',
+    ]);
   });
 });
 

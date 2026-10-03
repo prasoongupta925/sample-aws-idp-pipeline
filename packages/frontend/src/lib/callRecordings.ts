@@ -144,7 +144,9 @@ export function putWithProgress(
 /**
  * Uploads one recording to a project the way the upload modal does: the
  * document record and its presigned URL, the PUT, then status "uploaded". The
- * S3 upload starts the pipeline (Transcribe, then the analysis). Returns the
+ * S3 upload starts the pipeline (Transcribe, then the analysis). When the PUT
+ * fails (a phone losing its network), the record it would have filled is
+ * deleted, so the project keeps no document stuck at "uploading". Returns the
  * document id.
  */
 export async function uploadRecording(
@@ -163,14 +165,17 @@ export async function uploadRecording(
       body: JSON.stringify(recordingUploadRequest(file)),
     },
   );
-  await put(info.upload_url, file, onProgress);
-  await fetchApi(
-    `${documents}/${encodeURIComponent(info.document_id)}/status`,
-    {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'uploaded' }),
-    },
-  );
+  const documentPath = `${documents}/${encodeURIComponent(info.document_id)}`;
+  try {
+    await put(info.upload_url, file, onProgress);
+  } catch (error) {
+    await fetchApi(documentPath, { method: 'DELETE' }).catch(() => undefined);
+    throw error;
+  }
+  await fetchApi(`${documentPath}/status`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'uploaded' }),
+  });
   return info.document_id;
 }
