@@ -665,13 +665,42 @@ class TestUploadedLists:
         assert response.status_code == 200
         result = response.json()
         assert at(result, "icici_bank")["status"] == "eligible"
-        assert (
-            "Your uploaded serviceability and company lists could not be read: the sample lists are used"
-            in (result["notes"])
-        )
+        assert "Your uploaded lists and lender grid could not be read: the sample data is used" in (result["notes"])
         check = client.get(f"{BASE}/pincodes/401202", headers=HEADERS)
         assert check.status_code == 200
         assert {row["source"] for row in check.json()["lenders"]} == {"sample"}
+
+    def test_a_lender_grid_replaces_the_sample_policy_of_its_lender(self, lists):
+        from tests.test_reference_data import grid_lines
+
+        sample_hdfc = at(calculate(inputs=example()).json(), "hdfc_bank")
+        # The sample HDFC grid with ROI 10.5-14%, CIBIL 780 and no processing fee.
+        upload_list(
+            "lender_grid",
+            *grid_lines(
+                ("HDFC Bank,roi_min", "10.5"),
+                ("HDFC Bank,roi_max", "14"),
+                ("HDFC Bank,min_cibil", "780"),
+                drop=("HDFC Bank,processing_fee",),
+            ),
+            filename="hdfc-grid.csv",
+        )
+
+        result = calculate(inputs=example()).json()
+
+        hdfc, icici = at(result, "hdfc_bank"), at(result, "icici_bank")
+        assert (hdfc["roi"], hdfc["roi_max"], hdfc["processing_fee"]) == (10.5, 14, None)
+        assert hdfc["status"] != "eligible" and sample_hdfc["status"] == "eligible"  # score 765 < 780
+        assert hdfc["label"] == "Your lender grid list (hdfc-grid.csv, uploaded 30 Sep 2026)"
+        assert icici["label"] == SAMPLE  # not in the grid: the sample policy
+        assert result["notes"][-1] == (
+            "Policy of HDFC Bank from your lender grid list (hdfc-grid.csv, uploaded 30 Sep 2026)"
+        )
+
+        lenders = {row["id"]: row for row in client.get(f"{BASE}/lenders", headers=HEADERS).json()["lenders"]}
+        assert (lenders["hdfc_bank"]["roi"], lenders["hdfc_bank"]["min_cibil_score"]) == (10.5, 780)
+        assert (lenders["hdfc_bank"]["sample"], lenders["icici_bank"]["sample"]) == (False, True)
+        assert lenders["hdfc_bank"]["processing_fee"] is None
 
     def test_without_lists_nothing_changes(self, lists):
         result = calculate(inputs=example()).json()

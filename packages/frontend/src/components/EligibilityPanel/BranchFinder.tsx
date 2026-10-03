@@ -16,7 +16,11 @@ import {
 } from 'lucide-react';
 import { useAwsClient } from '../../hooks/useAwsClient';
 import { ApiError, apiErrorDetail } from '../../lib/apiError';
-import { apiErrorStatus, downloadTextFile } from '../../lib/fileCheck';
+import {
+  apiErrorStatus,
+  downloadTextFile,
+  formatInr,
+} from '../../lib/fileCheck';
 import { describeEligibilityError } from './errors';
 import { BUTTON_CLASS, SECTION_CLASS, SectionTitle } from './fields';
 
@@ -34,12 +38,14 @@ export type BranchSource = 'dsa_list' | 'public_data' | 'sample';
 export type ReferenceKind =
   | 'pincode_serviceability'
   | 'lender_branches'
-  | 'company_categories';
+  | 'company_categories'
+  | 'lender_grid';
 
 export const REFERENCE_KINDS: readonly ReferenceKind[] = [
   'pincode_serviceability',
   'lender_branches',
   'company_categories',
+  'lender_grid',
 ];
 
 /** The API's limit on lenders per request. */
@@ -114,6 +120,38 @@ export interface ReferenceList {
   /** Upload answer only. */
   duplicates: number | null;
   notes: string[];
+  /** Checked but not saved (?preview=true). */
+  preview: boolean;
+  /** lender_grid upload or preview answer: the file's lender policies. */
+  grid: GridLender[] | null;
+  /** lender_grid: the API's template CSV (the sample HDFC grid). */
+  template: string | null;
+}
+
+/** One lender's policy as an uploaded lender grid gives it. */
+export interface GridLender {
+  lender_id: string;
+  lender: string;
+  roi: number;
+  roi_max: number | null;
+  min_cibil_score: number;
+  max_enquiries_90d: number;
+  min_tenure_months: number;
+  max_tenure_months: number;
+  min_amount: number;
+  max_amount: number;
+  /** Percent of the loan, with optional rupee bounds; null: no fee. */
+  processing_fee: {
+    pct: number;
+    min_amount: number | null;
+    max_amount: number | null;
+  } | null;
+  /** Per category: FOIR outside the grid's slabs and multiplier. */
+  categories: Record<string, { foir: number; multiplier: number }>;
+  /** Net monthly salary slab starts (rupees); empty: no FOIR grid. */
+  slab_starts: number[];
+  /** Per category, one FOIR (fraction) per slab. */
+  foir_grid: Record<string, number[]>;
 }
 
 export interface ReferenceLists {
@@ -224,6 +262,60 @@ export function parseBranches(raw: unknown): BranchesAnswer {
   };
 }
 
+function numbers(value: unknown): number[] {
+  return Array.isArray(value)
+    ? value.map(finite).filter((n): n is number => n !== null)
+    : [];
+}
+
+function gridLender(value: unknown): GridLender | null {
+  const o = obj(value);
+  const lenderId = text(o.lender_id);
+  const lender = text(o.lender);
+  const roi = finite(o.roi);
+  if (!lenderId || !lender || roi === null) return null;
+  const fee = o.processing_fee ? obj(o.processing_fee) : null;
+  const feePct = fee ? finite(fee.pct) : null;
+  const categories: GridLender['categories'] = {};
+  for (const [name, raw] of Object.entries(obj(o.categories))) {
+    const c = obj(raw);
+    const foir = finite(c.foir);
+    const multiplier = finite(c.multiplier);
+    if (foir !== null && multiplier !== null) {
+      categories[name] = { foir, multiplier };
+    }
+  }
+  const slabStarts = numbers(o.slab_starts);
+  const foirGrid: GridLender['foir_grid'] = {};
+  for (const [name, raw] of Object.entries(obj(o.foir_grid))) {
+    const column = numbers(raw);
+    if (column.length === slabStarts.length) foirGrid[name] = column;
+  }
+  return {
+    lender_id: lenderId,
+    lender,
+    roi,
+    roi_max: finite(o.roi_max),
+    min_cibil_score: finite(o.min_cibil_score) ?? 0,
+    max_enquiries_90d: finite(o.max_enquiries_90d) ?? 0,
+    min_tenure_months: finite(o.min_tenure_months) ?? 0,
+    max_tenure_months: finite(o.max_tenure_months) ?? 0,
+    min_amount: finite(o.min_amount) ?? 0,
+    max_amount: finite(o.max_amount) ?? 0,
+    processing_fee:
+      fee && feePct !== null
+        ? {
+            pct: feePct,
+            min_amount: finite(fee.min_amount),
+            max_amount: finite(fee.max_amount),
+          }
+        : null,
+    categories,
+    slab_starts: Object.keys(foirGrid).length ? slabStarts : [],
+    foir_grid: foirGrid,
+  };
+}
+
 function referenceList(value: unknown): ReferenceList | null {
   const o = obj(value);
   const kind = referenceKind(o.kind);
@@ -239,6 +331,13 @@ function referenceList(value: unknown): ReferenceList | null {
     expires_at: text(o.expires_at),
     duplicates: finite(o.duplicates),
     notes: strings(o.notes),
+    preview: o.preview === true,
+    grid: Array.isArray(o.grid)
+      ? o.grid.map(gridLender).filter((g): g is GridLender => g !== null)
+      : null,
+    // As it is: the CSV's final line break is kept.
+    template:
+      typeof o.template === 'string' && o.template.trim() ? o.template : null,
   };
 }
 
@@ -312,13 +411,14 @@ export async function uploadReferenceList(
   projectId: string,
   kind: ReferenceKind,
   file: Blob & { name?: string },
+  preview = false,
 ): Promise<ReferenceList> {
   const filename = (file.name ?? '')
     .replace(/[\\/]/g, ' ')
     .replace(/\p{Cc}/gu, ' ')
     .trim()
     .slice(0, 200);
-  const query = `kind=${kind}${filename ? `&filename=${encodeURIComponent(filename)}` : ''}`;
+  const query = `kind=${kind}${filename ? `&filename=${encodeURIComponent(filename)}` : ''}${preview ? '&preview=true' : ''}`;
   const raw = await fetchApi<unknown>(
     `${referenceDataPath(projectId)}?${query}`,
     {
@@ -343,8 +443,15 @@ export async function removeReferenceList(
   return obj(raw).deleted === true;
 }
 
-/** A CSV to start from: the columns and one example row (synthetic). */
-export function csvTemplate(kind: ReferenceKind): string {
+/**
+ * A CSV to start from: the columns and one example row (synthetic). The
+ * lender grid's is the API's (the sample HDFC grid) when it has been loaded.
+ */
+export function csvTemplate(
+  kind: ReferenceKind,
+  apiTemplate?: string | null,
+): string {
+  if (apiTemplate) return apiTemplate;
   const rows: Record<ReferenceKind, string[]> = {
     pincode_serviceability: [
       'lender,pincode,serviceable',
@@ -359,6 +466,8 @@ export function csvTemplate(kind: ReferenceKind): string {
       'lender,company,category',
       'HDFC Bank,Example Tech Private Limited,CAT A',
     ],
+    // The full template comes from the API; without it, only the columns.
+    lender_grid: ['lender,field,category,slab_from,value'],
   };
   return `${rows[kind].join('\r\n')}\r\n`;
 }
@@ -503,7 +612,12 @@ export interface ReferenceListsState {
   busy: ReferenceKind | null;
   /** The last upload or removal. */
   outcome: ListOutcome | null;
+  /** A lender grid checked and shown, waiting for Save. */
+  pending: { kind: ReferenceKind; file: File } | null;
 }
+
+/** Kinds checked and previewed before they are saved. */
+export const PREVIEWED_KINDS: readonly ReferenceKind[] = ['lender_grid'];
 
 function useReferenceLists(
   fetchApi: FetchApi,
@@ -517,6 +631,7 @@ function useReferenceLists(
     loadError: null,
     busy: null,
     outcome: null,
+    pending: null,
   });
   const seq = useRef(0);
   const projectRef = useRef(projectId);
@@ -532,6 +647,7 @@ function useReferenceLists(
       loadError: null,
       busy: null,
       outcome: null,
+      pending: null,
     });
   }, [projectId]);
 
@@ -552,8 +668,8 @@ function useReferenceLists(
     }
   }, [fetchApi, projectId]);
 
-  const upload = useCallback(
-    async (kind: ReferenceKind, file: File) => {
+  const send = useCallback(
+    async (kind: ReferenceKind, file: File, preview: boolean) => {
       const max = state.data?.max_upload_bytes ?? DEFAULT_MAX_UPLOAD_BYTES;
       if (file.size > max) {
         const mb = Math.floor(max / (1024 * 1024));
@@ -568,14 +684,22 @@ function useReferenceLists(
         }));
         return;
       }
-      setState((s) => ({ ...s, busy: kind, outcome: null }));
+      setState((s) => ({ ...s, busy: kind, outcome: null, pending: null }));
       try {
-        const list = await uploadReferenceList(fetchApi, projectId, kind, file);
+        const list = await uploadReferenceList(
+          fetchApi,
+          projectId,
+          kind,
+          file,
+          preview,
+        );
         setState((s) => ({
           ...s,
           busy: null,
           outcome: { kind, ok: true, list },
+          pending: preview ? { kind, file } : null,
         }));
+        if (preview) return;
         onChanged();
         await load();
       } catch (err) {
@@ -595,9 +719,25 @@ function useReferenceLists(
     [fetchApi, projectId, t, onChanged, load, state.data],
   );
 
+  /** Upload a list; a lender grid is first only checked and shown (save() keeps it). */
+  const upload = useCallback(
+    (kind: ReferenceKind, file: File) =>
+      send(kind, file, PREVIEWED_KINDS.includes(kind)),
+    [send],
+  );
+
+  const save = useCallback(async () => {
+    const pending = state.pending;
+    if (pending) await send(pending.kind, pending.file, false);
+  }, [send, state.pending]);
+
+  const cancel = useCallback(() => {
+    setState((s) => ({ ...s, pending: null, outcome: null }));
+  }, []);
+
   const remove = useCallback(
     async (kind: ReferenceKind) => {
-      setState((s) => ({ ...s, busy: kind, outcome: null }));
+      setState((s) => ({ ...s, busy: kind, outcome: null, pending: null }));
       try {
         await removeReferenceList(fetchApi, projectId, kind);
         setState((s) => ({
@@ -626,7 +766,7 @@ function useReferenceLists(
     [fetchApi, projectId, t, onChanged, load],
   );
 
-  return { state, load, upload, remove };
+  return { state, load, upload, save, cancel, remove };
 }
 
 // ------------------------------------------------------------------ view
@@ -933,13 +1073,161 @@ function expiresOn(iso: string | null): string | null {
     : null;
 }
 
+/** 0.55 -> '55%'; 10.5 (already percent) -> '10.5%'. */
+function percent(value: number, fraction: boolean): string {
+  const n = fraction ? value * 100 : value;
+  return `${Number(n.toFixed(2))}%`;
+}
+
+/** A lender grid's policies as the API read them, before Save. */
+export function GridPreview({ grid }: { grid: GridLender[] }) {
+  const { t } = useTranslation();
+  return (
+    <div className="space-y-2" data-testid="grid-preview">
+      {grid.map((lender) => {
+        const fee = lender.processing_fee;
+        const categories = Object.keys(lender.categories);
+        const roi =
+          lender.roi_max !== null && lender.roi_max !== lender.roi
+            ? `${percent(lender.roi, false)} – ${percent(lender.roi_max, false)}`
+            : percent(lender.roi, false);
+        const rules: [string, string][] = [
+          [t('eligibility.branches.lists.grid.roi'), roi],
+          [
+            t('eligibility.branches.lists.grid.minCibil'),
+            String(lender.min_cibil_score),
+          ],
+          [
+            t('eligibility.branches.lists.grid.maxEnquiries'),
+            String(lender.max_enquiries_90d),
+          ],
+          [
+            t('eligibility.branches.lists.grid.tenure'),
+            t('eligibility.branches.lists.grid.months', {
+              from: lender.min_tenure_months,
+              to: lender.max_tenure_months,
+            }),
+          ],
+          [
+            t('eligibility.branches.lists.grid.amount'),
+            `${formatInr(lender.min_amount)} – ${formatInr(lender.max_amount)}`,
+          ],
+          [
+            t('eligibility.branches.lists.grid.fee'),
+            fee
+              ? [
+                  percent(fee.pct, false),
+                  fee.min_amount !== null &&
+                    t('eligibility.branches.lists.grid.feeMin', {
+                      amount: formatInr(fee.min_amount),
+                    }),
+                  fee.max_amount !== null &&
+                    t('eligibility.branches.lists.grid.feeMax', {
+                      amount: formatInr(fee.max_amount),
+                    }),
+                ]
+                  .filter(Boolean)
+                  .join(', ')
+              : t('eligibility.branches.lists.grid.noFee'),
+          ],
+        ];
+        return (
+          <div
+            key={lender.lender_id}
+            className="space-y-1 text-[10px] text-slate-700 dark:text-slate-200"
+            data-lender={lender.lender_id}
+          >
+            <p className="font-semibold">{lender.lender}</p>
+            <dl className="grid grid-cols-[auto_1fr] gap-x-2">
+              {rules.map(([name, value]) => (
+                <div key={name} className="contents">
+                  <dt className="text-slate-500 dark:text-slate-400">{name}</dt>
+                  <dd>{value}</dd>
+                </div>
+              ))}
+            </dl>
+            <div className="overflow-x-auto">
+              <table className="min-w-full border-collapse text-[10px]">
+                <caption className="sr-only">
+                  {t('eligibility.branches.lists.grid.caption', {
+                    lender: lender.lender,
+                  })}
+                </caption>
+                <thead>
+                  <tr>
+                    <th scope="col" className="pr-2 text-left font-medium">
+                      {t('eligibility.branches.lists.grid.salary')}
+                    </th>
+                    {categories.map((c) => (
+                      <th
+                        key={c}
+                        scope="col"
+                        className="pr-2 text-right font-medium"
+                      >
+                        {c}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <th scope="row" className="pr-2 text-left font-normal">
+                      {t('eligibility.branches.lists.grid.multiplier')}
+                    </th>
+                    {categories.map((c) => (
+                      <td key={c} className="pr-2 text-right">
+                        {`${lender.categories[c].multiplier}×`}
+                      </td>
+                    ))}
+                  </tr>
+                  {lender.slab_starts.map((start, i) => (
+                    <tr key={start}>
+                      <th scope="row" className="pr-2 text-left font-normal">
+                        {t('eligibility.branches.lists.grid.slabFrom', {
+                          amount: formatInr(start),
+                        })}
+                      </th>
+                      {categories.map((c) => (
+                        <td key={c} className="pr-2 text-right">
+                          {lender.foir_grid[c]
+                            ? percent(lender.foir_grid[c][i], true)
+                            : percent(lender.categories[c].foir, true)}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                  <tr>
+                    <th scope="row" className="pr-2 text-left font-normal">
+                      {lender.slab_starts.length
+                        ? t('eligibility.branches.lists.grid.foirOutside')
+                        : t('eligibility.branches.lists.grid.foir')}
+                    </th>
+                    {categories.map((c) => (
+                      <td key={c} className="pr-2 text-right">
+                        {percent(lender.categories[c].foir, true)}
+                      </td>
+                    ))}
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function ListRow({
   kind,
   list,
   busy,
   disabled,
   outcome,
+  pending,
   onUpload,
+  onSave,
+  onCancel,
   onRemove,
 }: {
   kind: ReferenceKind;
@@ -947,7 +1235,11 @@ function ListRow({
   busy: boolean;
   disabled: boolean;
   outcome: ListOutcome | null;
+  /** A previewed file is waiting for Save. */
+  pending: boolean;
   onUpload: (kind: ReferenceKind, file: File) => void;
+  onSave: () => void;
+  onCancel: () => void;
   onRemove: (kind: ReferenceKind) => void;
 }) {
   const { t } = useTranslation();
@@ -999,7 +1291,10 @@ function ListRow({
         <button
           type="button"
           onClick={() =>
-            downloadTextFile(`${kind}-template.csv`, csvTemplate(kind))
+            downloadTextFile(
+              `${kind}-template.csv`,
+              csvTemplate(kind, list?.template),
+            )
           }
           className={BUTTON_CLASS}
           title={t('eligibility.branches.lists.templateHint')}
@@ -1063,7 +1358,45 @@ function ListRow({
             role="status"
             className="text-[10px] text-green-700 dark:text-green-400"
           >
-            {outcome.list ? (
+            {outcome.list?.preview ? (
+              <div className="space-y-1 text-slate-700 dark:text-slate-200">
+                <p className="font-medium">
+                  {t('eligibility.branches.lists.previewTitle', {
+                    file: outcome.list.filename ?? '',
+                    count: outcome.list.rows,
+                  })}
+                </p>
+                {outcome.list.grid && <GridPreview grid={outcome.list.grid} />}
+                {outcome.list.notes.map((note) => (
+                  <p
+                    key={note}
+                    className="break-words text-amber-700 dark:text-amber-400"
+                  >
+                    {note}
+                  </p>
+                ))}
+                {pending && (
+                  <div className="flex gap-1.5">
+                    <button
+                      type="button"
+                      onClick={onSave}
+                      disabled={disabled}
+                      className={BUTTON_CLASS}
+                    >
+                      {t('eligibility.branches.lists.save')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={onCancel}
+                      disabled={disabled}
+                      className={BUTTON_CLASS}
+                    >
+                      {t('eligibility.branches.lists.cancel')}
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : outcome.list ? (
               <>
                 <p>
                   {t('eligibility.branches.lists.saved', {
@@ -1115,6 +1448,8 @@ interface ReferenceListsPanelProps {
   state: ReferenceListsState;
   onRetry: () => void;
   onUpload: (kind: ReferenceKind, file: File) => void;
+  onSave: () => void;
+  onCancel: () => void;
   onRemove: (kind: ReferenceKind) => void;
 }
 
@@ -1125,11 +1460,13 @@ export function ReferenceListsPanel({
   state,
   onRetry,
   onUpload,
+  onSave,
+  onCancel,
   onRemove,
 }: ReferenceListsPanelProps) {
   const { t } = useTranslation();
   const panelId = useId();
-  const { data, loading, loadError, busy, outcome } = state;
+  const { data, loading, loadError, busy, outcome, pending } = state;
   const uploaded = data?.lists.filter((l) => l.uploaded).length ?? 0;
   return (
     <div className="space-y-1.5" data-testid="reference-lists">
@@ -1194,7 +1531,10 @@ export function ReferenceListsPanel({
                   busy={busy === kind}
                   disabled={busy !== null || !data}
                   outcome={outcome?.kind === kind ? outcome : null}
+                  pending={pending?.kind === kind}
                   onUpload={onUpload}
+                  onSave={onSave}
+                  onCancel={onCancel}
                   onRemove={onRemove}
                 />
               ))}
@@ -1274,6 +1614,8 @@ export default function BranchFinder({
         state={listsState}
         onRetry={loadLists}
         onUpload={lists.upload}
+        onSave={lists.save}
+        onCancel={lists.cancel}
         onRemove={lists.remove}
       />
     </section>

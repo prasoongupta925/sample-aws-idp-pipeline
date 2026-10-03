@@ -3,6 +3,7 @@
 GET    /projects/{project_id}/eligibility/branches?pincode=&lenders=  per lender: serviceable, source, nearest branches
 GET    /projects/{project_id}/eligibility/reference-data              the uploaded lists and each kind's columns
 POST   /projects/{project_id}/eligibility/reference-data?kind=        upload a CSV list (replaces that kind's list)
+POST   /projects/{project_id}/eligibility/reference-data?kind=&preview=true   check a CSV list and show it, not saved
 DELETE /projects/{project_id}/eligibility/reference-data/{kind}       remove an uploaded list
 
 Branches (app/branches.py) come from public open data, the India Post pincode directory
@@ -14,7 +15,10 @@ a lender in the uploaded serviceability list is serviceable exactly where it say
 serviceability is the SAMPLE pincode list the eligibility calculation uses.
 
 Uploads (app/reference_data.py): kind = pincode_serviceability | lender_branches |
-company_categories. The body is the CSV file itself (Content-Type text/csv, or what a browser
+company_categories | lender_grid (a lender policy grid: the eligibility calculation uses it for
+its lenders instead of the SAMPLE policy; the GET answer has its template, the sample HDFC
+grid). With ?preview=true the file is checked and shown (a grid as its lender policies) but not
+saved, so the UI shows a preview before Save. The body is the CSV file itself (Content-Type text/csv, or what a browser
 sends for a .csv file: application/vnd.ms-excel, application/octet-stream) with ?kind= and
 ?filename=, or multipart/form-data with a `file` part (and a `kind` part). A list replaces the
 previous list of its kind and is deleted after the retention period (default 7 days, DynamoDB
@@ -103,6 +107,33 @@ class BranchesResponse(BaseModel):
     notes: list[str]
 
 
+class GridCategoryOut(BaseModel):
+    foir: float = Field(description="The category's FOIR outside the grid's slabs")
+    multiplier: float
+
+
+class GridLenderOut(BaseModel):
+    """One lender's policy as an uploaded grid gives it."""
+
+    lender_id: str
+    lender: str
+    roi: float = Field(description="ROI from, percent a year (the calculation uses it)")
+    roi_max: float | None
+    min_cibil_score: int
+    max_enquiries_90d: int
+    min_tenure_months: int
+    max_tenure_months: int
+    calculation_tenure_months: int
+    min_amount: float
+    max_amount: float
+    foir: float = Field(description="Base FOIR (a company not in any category)")
+    multiplier: float
+    processing_fee: dict[str, float | None] | None = Field(description="pct, min_amount, max_amount; null: no fee")
+    categories: dict[str, GridCategoryOut]
+    slab_starts: list[int] = Field(description="The FOIR grid's net monthly salary slabs (rupees); empty: no grid")
+    foir_grid: dict[str, list[float]] = Field(description="Per category, one FOIR per slab")
+
+
 class ReferenceListOut(BaseModel):
     kind: reference_data.Kind
     label: str
@@ -119,6 +150,11 @@ class ReferenceListOut(BaseModel):
     notes: list[str] = Field(
         default=[], description="What to check in the accepted list, e.g. unknown pincodes (upload answer only)"
     )
+    preview: bool = Field(default=False, description="Checked but not saved (?preview=true)")
+    grid: list[GridLenderOut] | None = Field(
+        default=None, description="lender_grid upload or preview answer: the lender policies of the file"
+    )
+    template: str | None = Field(default=None, description="lender_grid: a template CSV (the sample HDFC grid)")
 
 
 class ReferenceDataResponse(BaseModel):
@@ -174,6 +210,38 @@ def _lender_names(value: str | None) -> list[str]:
     return list(names.values())
 
 
+def _grid_out(rows: list[list]) -> list[GridLenderOut]:
+    policies, _, _ = reference_data.grid_policies(rows, eligibility.load_policy_book())
+    out = []
+    for lender in policies.values():
+        grid = lender.foir_grid
+        out.append(
+            GridLenderOut(
+                lender_id=lender.id,
+                lender=lender.name,
+                roi=lender.roi,
+                roi_max=lender.roi_max,
+                min_cibil_score=lender.min_cibil_score,
+                max_enquiries_90d=lender.max_enquiries_90d,
+                min_tenure_months=lender.min_tenure_months,
+                max_tenure_months=lender.max_tenure_months,
+                calculation_tenure_months=lender.calculation_tenure,
+                min_amount=lender.min_amount,
+                max_amount=lender.max_amount,
+                foir=lender.foir,
+                multiplier=lender.multiplier,
+                processing_fee=lender.processing_fee.model_dump() if lender.processing_fee else None,
+                categories={
+                    c: GridCategoryOut(foir=policy.foir, multiplier=policy.multiplier)
+                    for c, policy in lender.company_categories.items()
+                },
+                slab_starts=list(grid.slab_starts) if grid else [],
+                foir_grid={c: list(v) for c, v in grid.categories.items()} if grid else {},
+            )
+        )
+    return out
+
+
 def _list_out(kind: reference_data.Kind, header: dict[str, Any] | None, **extra: Any) -> ReferenceListOut:
     required, optional = reference_data.COLUMNS[kind]
     base = {
@@ -182,6 +250,7 @@ def _list_out(kind: reference_data.Kind, header: dict[str, Any] | None, **extra:
         "description": reference_data.KIND_DESCRIPTIONS[kind],
         "columns": list(required),
         "optional_columns": list(optional),
+        "template": reference_data.grid_template() if kind == "lender_grid" else None,
     }
     if header is None:
         return ReferenceListOut(**base, uploaded=False, **extra)
@@ -265,7 +334,7 @@ def find_branches(
 @router.get(
     "/reference-data",
     responses={**_NOT_FOUND, **_STORAGE},
-    summary="Your uploaded lists (pincode serviceability, lender branches, company categories) and their columns",
+    summary="Your uploaded lists (pincode serviceability, lender branches, company categories, lender grid)",
 )
 def list_reference_data(project_id: ProjectId, user_id: UserId) -> ReferenceDataResponse:
     _require_project(project_id)
@@ -318,13 +387,18 @@ def upload_reference_data(
     upload: Annotated[CsvUpload, Depends(_read_upload)],
     kind: Annotated[
         reference_data.Kind | None,
-        Query(description="pincode_serviceability, lender_branches or company_categories (or the form's kind)"),
+        Query(
+            description="pincode_serviceability, lender_branches, company_categories or lender_grid "
+            "(or the form's kind)"
+        ),
     ] = None,
     filename: Annotated[str | None, Query(max_length=200, pattern=_LINE, description="The file's name, shown")] = None,
+    preview: Annotated[bool, Query(description="Check the file and show it without saving it")] = False,
 ) -> ReferenceListOut:
     """pincode_serviceability: lender, pincode[, serviceable]. lender_branches: lender, branch, pincode[, address,
-    city, district, state, ifsc]. company_categories: lender, company, category. A file with any bad row is
-    refused with its problems; nothing is half applied."""
+    city, district, state, ifsc]. company_categories: lender, company, category. lender_grid: lender, field,
+    value[, category, slab_from] (the template is in the GET answer). A file with any bad row is refused with its
+    problems; nothing is half applied."""
     _require_project(project_id)
     kind = kind or upload.kind
     if kind not in reference_data.KINDS:
@@ -338,6 +412,20 @@ def upload_reference_data(
     except reference_data.CsvError as e:
         print(f"reference-data upload refused user={user_id} project={project_id} kind={kind} problems={len(e.errors)}")
         raise HTTPException(status_code=400, detail={"message": e.message, "errors": e.errors}) from e
+    grid = _grid_out(parsed.rows) if kind == "lender_grid" else None
+    if preview:
+        print(f"reference-data preview user={user_id} project={project_id} kind={kind} rows={len(parsed.rows)}")
+        return _list_out(
+            kind,
+            None,
+            rows=len(parsed.rows),
+            lenders=parsed.lenders,
+            filename=_clean_filename(filename or upload.filename),
+            duplicates=parsed.duplicates,
+            notes=parsed.notes,
+            preview=True,
+            grid=grid,
+        )
     try:
         stored = reference_data.save(project_id, parsed, _clean_filename(filename or upload.filename), _now())
     except (BotoCoreError, ClientError) as e:
@@ -354,7 +442,7 @@ def upload_reference_data(
         "uploaded_at": stored.uploaded_at,
         TTL_ATTRIBUTE: stored.expires_at,
     }
-    return _list_out(kind, header, duplicates=parsed.duplicates, notes=parsed.notes)
+    return _list_out(kind, header, duplicates=parsed.duplicates, notes=parsed.notes, grid=grid)
 
 
 @router.delete(
