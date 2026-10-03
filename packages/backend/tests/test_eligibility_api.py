@@ -85,14 +85,25 @@ class FakeTable:
         self.updates = []
         self.fail_put_prefix = None
 
-    def get_item(self, Key, ConsistentRead=None, ProjectionExpression=None):
+    def get_item(self, Key, ConsistentRead=None, ProjectionExpression=None, ExpressionAttributeNames=None):
         item = self.items.get((Key["PK"], Key["SK"]))
         if item is None:
             return {}
         item = copy.deepcopy(item)
         if ProjectionExpression:
-            names = [n.strip() for n in ProjectionExpression.split(",")]
-            item = {n: item[n] for n in names if n in item}
+            aliases = ExpressionAttributeNames or {}
+            projected: dict = {}
+            for path in (n.strip() for n in ProjectionExpression.split(",")):
+                # Top-level names and one level of nesting (e.g. #data.crm_lead_id)
+                top, _, sub = path.partition(".")
+                top = aliases.get(top, top)
+                if top not in item:
+                    continue
+                if not sub:
+                    projected[top] = item[top]
+                elif isinstance(item[top], dict) and sub in item[top]:
+                    projected.setdefault(top, {})[sub] = item[top][sub]
+            item = projected
         return {"Item": item}
 
     def put_item(self, Item):

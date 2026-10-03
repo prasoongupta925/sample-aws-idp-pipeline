@@ -1,8 +1,11 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Power, PowerOff, Clock, RefreshCw, Server } from 'lucide-react';
+import { useAuth } from 'react-oidc-context';
+import { Power, PowerOff, Clock, RefreshCw, Server, Link2 } from 'lucide-react';
 import { useAwsClient } from '../hooks/useAwsClient';
+import CrmLaunchSettings from '../components/CrmLaunchSettings';
+import { isAdmin } from '../lib/crmLaunch';
 
 export const Route = createFileRoute('/settings')({
   component: SettingsPage,
@@ -48,7 +51,7 @@ EXCEPT AS PROHIBITED BY APPLICABLE LAW, IN NO EVENT AND UNDER NO LEGAL THEORY, W
 
 Effective Date - April 18, 2008 (c) 2008 Amazon.com, Inc. or its affiliates. All rights reserved.`;
 
-type SettingsSection = 'sagemaker' | 'license';
+type SettingsSection = 'sagemaker' | 'integrations' | 'license';
 
 interface EndpointStatus {
   endpoint_name: string;
@@ -64,6 +67,8 @@ interface ScaleInSettings {
 function SettingsPage() {
   const { t } = useTranslation();
   const { fetchApi } = useAwsClient();
+  // Hides the admin sections only; the API enforces the role itself.
+  const admin = isAdmin(useAuth().user?.profile);
   const [activeSection, setActiveSection] =
     useState<SettingsSection>('sagemaker');
 
@@ -157,6 +162,15 @@ function SettingsPage() {
       label: t('settings.sagemaker', 'SageMaker'),
       icon: <Server className="w-5 h-5" />,
     },
+    ...(admin
+      ? [
+          {
+            key: 'integrations' as const,
+            label: t('crmLaunch.settings.menu'),
+            icon: <Link2 className="w-5 h-5" />,
+          },
+        ]
+      : []),
     {
       key: 'license',
       label: t('settings.license'),
@@ -429,6 +443,10 @@ function SettingsPage() {
                 </div>
               </div>
             </div>
+          )}
+
+          {activeSection === 'integrations' && admin && (
+            <CrmLaunchSettings fetchApi={fetchApi} />
           )}
 
           {activeSection === 'license' && (

@@ -1509,5 +1509,32 @@
     "leadIdHint": "このプロジェクトが属する Smart Dial のリードです。すべての Webhook に含まれ、CRM の起動リンクでこのプロジェクトが開きます。",
     "leadIdInvalid": "英数字または . _ : - を 1-64 文字で入力してください（空白不可）。",
     "saveFailed": "プロジェクトを保存できませんでした。もう一度お試しください。"
+  },
+  "crmLaunch": {
+    "opening": "CRM からリードを開いています…",
+    "failed": "この CRM リンクを開けませんでした",
+    "goHome": "プロジェクトへ",
+    "errors": {
+      "forbidden": "CRM リンクを開くには、このアプリのアカウントでサインインしてください。",
+      "notSetUp": "CRM 起動リンクはまだ設定されていません。管理者に 設定 → 連携 で起動シークレットを生成するよう依頼してください。",
+      "status": "リクエストが拒否されました (HTTP {{status}})。"
+    },
+    "settings": {
+      "menu": "連携",
+      "title": "Smart Dial CRM 起動リンク",
+      "intro": "CRM は署名付きリンクでここにリードを開きます: /launch?lead=…&name=…&phone=…&exp=…&sig=…。各リンクは 1 回だけ、最大 {{minutes}} 分有効で、ユーザーはサインインが必要です。CRM 側のコードは docs/crm-launch-link.md を参照してください。",
+      "secretTitle": "起動シークレット",
+      "set": "設定済み",
+      "notSet": "未設定",
+      "rotatedAt": "最終更新 {{at}}（{{by}}）",
+      "generate": "シークレットを生成",
+      "rotate": "シークレットを更新",
+      "confirmRotate": "現在のシークレットで署名されたリンクはすぐに使えなくなります。新しいシークレットをすぐに CRM に設定してください。",
+      "once": "このシークレットを今すぐ CRM にコピーしてください。再表示されません。",
+      "done": "完了",
+      "copyManual": "手動でコピーしてください（フィールドを選択して Ctrl+C）。",
+      "loadFailed": "起動リンクの設定を読み込めませんでした: {{message}}",
+      "rotateFailed": "シークレットを更新できませんでした: {{message}}"
+    }
   }
 }

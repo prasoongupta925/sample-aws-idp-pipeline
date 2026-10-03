@@ -1646,5 +1646,32 @@
     "leadIdHint": "The Smart Dial lead this project belongs to. Sent with every webhook; the CRM launch link opens this project.",
     "leadIdInvalid": "Use 1-64 letters, digits or . _ : - (no spaces).",
     "saveFailed": "The project could not be saved. Try again."
+  },
+  "crmLaunch": {
+    "opening": "Opening the lead from the CRM…",
+    "failed": "This CRM link could not be opened",
+    "goHome": "Go to projects",
+    "errors": {
+      "forbidden": "Sign in with an account of this app to open CRM links.",
+      "notSetUp": "CRM launch links are not set up yet. Ask an admin to generate the launch secret in Settings → Integrations.",
+      "status": "The request was rejected (HTTP {{status}})."
+    },
+    "settings": {
+      "menu": "Integrations",
+      "title": "Smart Dial CRM launch link",
+      "intro": "The CRM opens a lead here with a signed link: /launch?lead=…&name=…&phone=…&exp=…&sig=…. Each link works once and for at most {{minutes}} minutes, and the user still signs in. See docs/crm-launch-link.md for the CRM code.",
+      "secretTitle": "Launch secret",
+      "set": "Set",
+      "notSet": "Not set",
+      "rotatedAt": "Last rotated {{at}} by {{by}}",
+      "generate": "Generate secret",
+      "rotate": "Rotate secret",
+      "confirmRotate": "Links signed with the current secret stop working at once. Put the new secret in the CRM straight away.",
+      "once": "Copy this secret into the CRM now. It is not shown again.",
+      "done": "Done",
+      "copyManual": "Copy it by hand (select the field, then Ctrl+C).",
+      "loadFailed": "Could not load the launch link settings: {{message}}",
+      "rotateFailed": "Could not rotate the secret: {{message}}"
+    }
   }
 }

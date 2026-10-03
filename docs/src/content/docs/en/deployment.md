@@ -121,6 +121,19 @@ to private resources); deploy it with the rest (`--all`) or before
   and `test`) has a top-level `"crm_lead_id": "SD-LEAD-0042"`; projects without
   one send the payload unchanged. The signature scheme is unchanged: the field
   is part of the signed body.
+- CRM launch link: the CRM opens a lead with
+  `https://<app>/launch?lead=<id>&name=<name>&phone=<phone>&exp=<unix>&sig=<hex>`,
+  HMAC-SHA256 over the canonical query with the launch secret (one per CRM,
+  KMS-encrypted). The app checks the signature, an expiry of at most 5 minutes
+  and one use, after the normal Cognito sign-in, then opens (or creates) the
+  lead's project. An admin generates or rotates the secret in Settings →
+  Integrations. Format and ready-to-copy PHP / JavaScript:
+  [crm-launch-link.md](../../../../crm-launch-link.md).
+- Roles: the user pool has the groups `admin`, `handler` and `viewer`; admin
+  pages and APIs need `admin`, checked by the backend. Add the first admin once
+  after the deploy:
+  `aws cognito-idp admin-add-user-to-group --user-pool-id <pool id> --username <user> --group-name admin`
+  (the user signs in again to get the new token).
 - Headers: `X-SmartDial-Event`, `X-SmartDial-Delivery` (retries reuse it:
   deduplicate on it) and `X-SmartDial-Signature: t=<unix>,v1=<hex>`, the
   HMAC-SHA256 of `<t>.<raw body>` keyed with the secret. The receiver verifies
