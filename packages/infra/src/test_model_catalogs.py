@@ -74,7 +74,8 @@ TITAN_EMBED_V2 = 'amazon.titan-embed-text-v2:0'
 
 FORBIDDEN_MODEL_ID = re.compile(
     r'\b(?:global\.|us\.|eu\.|apac\.)?'
-    r'(?:(?:anthropic|cohere|twelvelabs|stability|writer|luma|ai21)\.[a-z0-9]|openai\.gpt-[5-9])'
+    # Writer: its Palmyra ids only; a PDF writer object calling .write() is code, not a model id.
+    r'(?:(?:anthropic|cohere|twelvelabs|stability|luma|ai21)\.[a-z0-9]|writer\.palmyra|openai\.gpt-[5-9])'
 )
 # A cross-Region inference profile id (geography or global prefix): everything
 # runs in ap-south-1 (Mumbai), so no code may call one.
