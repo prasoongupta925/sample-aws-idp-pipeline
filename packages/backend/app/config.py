@@ -46,6 +46,12 @@ class Config(BaseSettings):
     # construct). False in the Mumbai build: no in-Region model reads video, so
     # the upload check refuses video files (audio still goes to Transcribe).
     video_uploads_enabled: bool = True
+    # Customer upload links: the business name the customer's page shows when
+    # the link does not set one (env DSA_NAME, set by the Backend construct).
+    dsa_name: str = "your loan advisor"
+    # PDF unlock Lambda (WorkflowStack, idp-v2-pdf-unlock): name or ARN. The
+    # customer upload page and staff unlock password-protected PDFs with it.
+    pdf_unlock_function_name: str = ""
 
 
 @lru_cache

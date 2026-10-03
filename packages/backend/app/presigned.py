@@ -70,6 +70,9 @@ UPLOAD_CONTENT_TYPES: dict[str, frozenset[str]] = {
     "wav": frozenset({"audio/wav", "audio/x-wav", "audio/wave", "audio/vnd.wave"}),
     "flac": frozenset({"audio/flac", "audio/x-flac"}),
     "m4a": frozenset({"audio/mp4", "audio/x-m4a", "audio/m4a"}),
+    # Phone call recorders (Amazon Transcribe reads both as they are).
+    "amr": frozenset({"audio/amr", "audio/x-amr", "audio/3gpp"}),
+    "ogg": frozenset({"audio/ogg", "application/ogg", "audio/x-ogg"}),
     "webreq": frozenset({"application/x-webreq"}),
     "dxf": frozenset({"application/dxf", "application/x-dxf", "image/vnd.dxf", "image/x-dxf"}),
 }
@@ -78,6 +81,10 @@ UPLOAD_CONTENT_TYPES: dict[str, frozenset[str]] = {
 # to the video analysis steps. A build without a video model (the Mumbai build:
 # no model in ap-south-1 reads video) refuses them with VIDEO_NOT_SUPPORTED.
 VIDEO_EXTENSIONS = frozenset({"mp4", "mov", "avi", "mkv", "webm"})
+# A .webm declared as audio/webm is an audio recording (browser and phone
+# recorders): the pipeline treats it as audio (type-detection reads the
+# document's type), so it is accepted without a video model.
+AUDIO_WEBM = "audio/webm"
 VIDEO_NOT_SUPPORTED = (
     "Video files are not supported in this deployment: no AI model in its AWS Region "
     "can read video. Upload the audio track instead (MP3, WAV or FLAC); audio is "
@@ -118,9 +125,6 @@ def check_upload(file_name: str, content_type: str, file_size: int, *, video_all
     allowed = UPLOAD_CONTENT_TYPES.get(ext.lower())
     if allowed is None:
         raise PresignError(400, f"Unsupported file type: .{ext}" if ext else "File name has no extension")
-    if not video_allowed and ext.lower() in VIDEO_EXTENSIONS:
-        raise PresignError(400, VIDEO_NOT_SUPPORTED)
-
     # fullmatch, not match + "$" (which also accepts a trailing newline), and no
     # control characters anywhere (a quoted parameter could carry CR/LF): the
     # value is signed as the Content-Type header and stored with the document.
@@ -130,6 +134,8 @@ def check_upload(file_name: str, content_type: str, file_size: int, *, video_all
     base = match.group("base").lower()
     if base != _OCTET_STREAM and base not in allowed:
         raise PresignError(400, f"Content type {base} does not match a .{ext.lower()} file")
+    if not video_allowed and ext.lower() in VIDEO_EXTENSIONS and not (ext.lower() == "webm" and base == AUDIO_WEBM):
+        raise PresignError(400, VIDEO_NOT_SUPPORTED)
     return ext
 
 

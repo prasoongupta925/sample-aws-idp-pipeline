@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app import access_log
+from app import access_log, public_guard
 from app.routers import (
     admin_users,
     agents,
@@ -19,7 +19,9 @@ from app.routers import (
     integrations,
     projects,
     prompts,
+    public_upload,
     sagemaker,
+    upload_links,
     workflows,
 )
 
@@ -42,6 +44,8 @@ app = FastAPI(
             "name": "file-check",
             "description": "Deterministic loan-file check (READY / NOT READY) for external systems such as a CRM",
         },
+        {"name": "upload-links", "description": "Customer upload links (staff side)"},
+        {"name": "public-upload", "description": "Customer upload page (no login; link token in X-Upload-Token)"},
         {
             "name": "eligibility",
             "description": "Per-lender loan eligibility (CIBIL page): fixed formulas, SAMPLE policies, indicative",
@@ -56,6 +60,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# After CORS: added later, so it runs first and a refused call gets no CORS headers.
+public_guard.install(app)
 
 app.include_router(admin_users.router)
 app.include_router(agents.router)
@@ -75,3 +81,5 @@ app.include_router(projects.router)
 app.include_router(prompts.router)
 app.include_router(sagemaker.router)
 app.include_router(workflows.router)
+app.include_router(upload_links.router)
+app.include_router(public_upload.router)

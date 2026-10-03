@@ -15,11 +15,15 @@ from shared.ddb_client import (
     get_project_ocr_settings,
     get_project_document_prompt,
     get_document,
+    get_table,
     PreprocessType,
 )
 
+import encrypted_pdf
+
 sqs_client = None
 autoscaling_client = None
+s3_client = None
 
 WORKFLOW_QUEUE_URL = os.environ.get('WORKFLOW_QUEUE_URL', '')
 SAGEMAKER_ENDPOINT_NAME = os.environ.get('SAGEMAKER_ENDPOINT_NAME', '')
@@ -84,6 +88,16 @@ def get_sqs_client():
             region_name=os.environ.get('AWS_REGION', 'us-east-1')
         )
     return sqs_client
+
+
+def get_s3_client():
+    global s3_client
+    if s3_client is None:
+        s3_client = boto3.client(
+            's3',
+            region_name=os.environ.get('AWS_REGION', 'us-east-1')
+        )
+    return s3_client
 
 
 def get_autoscaling_client():
@@ -308,6 +322,18 @@ def handler(event, context):
 
             # Get document settings
             document = get_document(project_id, document_id)
+
+            # A password-protected customer PDF that the upload page did not
+            # flag: hold it for its password instead of starting the pipeline.
+            object_key = file_uri.replace('s3://', '').split('/', 1)[1]
+            if encrypted_pdf.should_check(document, object_key, project_id, document_id):
+                bucket = file_uri.replace('s3://', '').split('/', 1)[0]
+                if encrypted_pdf.hold_if_encrypted(
+                    get_s3_client(), get_table(), bucket, object_key, project_id, document_id
+                ):
+                    print(f'Encrypted customer PDF held for its password: document {document_id}')
+                    results.append({'document_id': document_id, 'status': 'password_required'})
+                    continue
 
             # Resolve language: document override > project default
             language = (document.get('language') if document else None) or get_project_language(project_id)

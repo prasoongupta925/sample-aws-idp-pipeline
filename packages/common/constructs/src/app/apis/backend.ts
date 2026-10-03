@@ -15,6 +15,10 @@ import {
   FILE_CHECK_ASK_MODEL_ID,
   bedrockModelInvokeResources,
 } from '../../constants/bedrock.js';
+import {
+  PDF_UNLOCK_FUNCTION_NAME,
+  UPLOAD_TOKEN_HEADER,
+} from '../../constants/upload-links.js';
 import { getRetentionDays, toLogRetention } from '../retention-config.js';
 import { Bucket, IBucket } from 'aws-cdk-lib/aws-s3';
 import { Table, ITable } from 'aws-cdk-lib/aws-dynamodb';
@@ -25,6 +29,7 @@ import {
 } from 'aws-cdk-lib/aws-lambda';
 import {
   CfnApi,
+  CfnStage,
   CorsHttpMethod,
   HttpApi,
   HttpMethod,
@@ -67,7 +72,32 @@ export interface BackendProps {
    * @default true
    */
   videoUploadsEnabled?: boolean;
+  /**
+   * Business name a customer upload page shows when the link sets none
+   * (env DSA_NAME). Unset: the backend's default ("your loan advisor").
+   */
+  dsaName?: string;
 }
+
+/** Headers the web app sends: SigV4 (staff) and the upload link token (customer page). */
+const CORS_ALLOW_HEADERS = [
+  'authorization',
+  'content-type',
+  'x-amz-content-sha256',
+  'x-amz-date',
+  'x-amz-security-token',
+  'x-user-id',
+  UPLOAD_TOKEN_HEADER,
+];
+
+/** The customer upload page's routes: no authorizer, the link token is checked on every call. */
+export const PUBLIC_ROUTE_PATH = '/public/{proxy+}';
+
+/**
+ * Throttle of each public route (requests per second, burst). A real customer
+ * makes a few calls per file; this caps scripted traffic on the open routes.
+ */
+export const PUBLIC_ROUTE_THROTTLE = { rateLimit: 10, burstLimit: 20 };
 
 export class Backend extends Construct {
   /** The FastAPI app (packages/backend image) behind the HTTP API. */
@@ -154,6 +184,14 @@ export class Backend extends Construct {
       SSM_KEYS.WEBHOOK_SECRET_KEY_ARN,
     );
 
+    // PDF unlock Lambda (WorkflowStack, deployed before this stack).
+    const pdfUnlockFunctionArn = Stack.of(this).formatArn({
+      service: 'lambda',
+      resource: 'function',
+      resourceName: PDF_UNLOCK_FUNCTION_NAME,
+      arnFormat: ArnFormat.COLON_RESOURCE_NAME,
+    });
+
     // The FastAPI app runs unchanged on Lambda: the Lambda Web Adapter in the
     // image (packages/backend/Dockerfile) passes each API request to uvicorn
     // on port 8000. Nothing runs, or costs, while the API is idle. The HTTP API
@@ -195,6 +233,9 @@ export class Backend extends Construct {
         WEBHOOK_SECRET_KEY_ARN: webhookSecretKeyArn,
         // Upload check: refuse video files when the build has no video model.
         VIDEO_UPLOADS_ENABLED: String(videoUploadsEnabled),
+        // Customer upload links: unlock password-protected PDFs.
+        PDF_UNLOCK_FUNCTION_NAME: pdfUnlockFunctionArn,
+        ...(props.dsaName ? { DSA_NAME: props.dsaName } : {}),
       },
     });
 
@@ -296,6 +337,15 @@ export class Backend extends Construct {
       }),
     );
 
+    // Customer upload links: the PDF unlock function only.
+    role.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'InvokePdfUnlock',
+        actions: ['lambda:InvokeFunction'],
+        resources: [pdfUnlockFunctionArn],
+      }),
+    );
+
     // CRM webhook test event: invoke only the webhook delivery function.
     role.addToPrincipalPolicy(
       new PolicyStatement({
@@ -371,14 +421,7 @@ export class Backend extends Construct {
       corsPreflight: {
         allowOrigins: ['*'],
         allowMethods: [CorsHttpMethod.ANY],
-        allowHeaders: [
-          'authorization',
-          'content-type',
-          'x-amz-content-sha256',
-          'x-amz-date',
-          'x-amz-security-token',
-          'x-user-id',
-        ],
+        allowHeaders: CORS_ALLOW_HEADERS,
       },
     });
 
@@ -407,6 +450,32 @@ export class Backend extends Construct {
       methods: [HttpMethod.OPTIONS],
       integration,
     });
+
+    // The customer upload page (no Cognito): GET and POST under /public/ only,
+    // without an authorizer. The backend checks the link token on every call
+    // and its public guard (app/public_guard.py) answers 403 to an
+    // unauthenticated request for any other path. More specific than
+    // /{proxy+}, so API Gateway picks this route for /public/... paths.
+    const publicMethods = [HttpMethod.GET, HttpMethod.POST];
+    this.api.addRoutes({
+      path: PUBLIC_ROUTE_PATH,
+      methods: publicMethods,
+      integration,
+    });
+    const stage = this.api.defaultStage?.node.defaultChild;
+    if (!(stage instanceof CfnStage)) {
+      throw new Error('Unable to throttle public routes: no default CfnStage');
+    }
+    // routeSettings is raw JSON: CloudFormation's (PascalCase) key names.
+    stage.routeSettings = Object.fromEntries(
+      publicMethods.map((method) => [
+        `${method} ${PUBLIC_ROUTE_PATH}`,
+        {
+          ThrottlingRateLimit: PUBLIC_ROUTE_THROTTLE.rateLimit,
+          ThrottlingBurstLimit: PUBLIC_ROUTE_THROTTLE.burstLimit,
+        },
+      ]),
+    );
 
     new CfnOutput(this, 'BackendUrl', {
       value: this.api.url ?? '',
@@ -446,14 +515,7 @@ export class Backend extends Construct {
         ...allowedOrigins,
       ],
       allowMethods: [CorsHttpMethod.ANY],
-      allowHeaders: [
-        'authorization',
-        'content-type',
-        'x-amz-content-sha256',
-        'x-amz-date',
-        'x-amz-security-token',
-        'x-user-id',
-      ],
+      allowHeaders: CORS_ALLOW_HEADERS,
       allowCredentials: true,
     };
   }
