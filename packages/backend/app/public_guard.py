@@ -45,12 +45,21 @@ def allowed(path: str, context_header: str | None) -> bool:
     return path.startswith(PUBLIC_PATH_PREFIX) or has_iam_identity(context_header)
 
 
+def is_cors_preflight(request: Request) -> bool:
+    """A browser's CORS preflight: OPTIONS with Access-Control-Request-Method.
+
+    Browsers never sign a preflight, so it reaches us through the OPTIONS route
+    without an IAM identity. It runs no endpoint: CORSMiddleware answers it.
+    """
+    return request.method == "OPTIONS" and "access-control-request-method" in request.headers
+
+
 def install(app: FastAPI) -> None:
     @app.middleware("http")
     async def public_guard(request: Request, call_next):
         values = request.headers.getlist(REQUEST_CONTEXT_HEADER)
         # A repeated header (the adapter replaces the caller's one) counts as no identity.
         context = values[0] if len(values) == 1 else (None if not values else "")
-        if not allowed(request.url.path, context):
+        if not is_cors_preflight(request) and not allowed(request.url.path, context):
             return JSONResponse(status_code=403, content={"detail": "Forbidden"})
         return await call_next(request)

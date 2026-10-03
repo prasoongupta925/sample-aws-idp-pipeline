@@ -650,6 +650,22 @@ class TestPublicGuard:
         headers = {**hdr(token), "x-amzn-request-context": OPEN_CONTEXT}
         assert client.get("/public/upload-link", headers=headers).status_code == 200
 
+    def test_browser_cors_preflight_to_a_staff_route_is_answered(self, store):
+        # Browsers never sign a preflight: it arrives through the OPTIONS route without an IAM identity.
+        headers = {
+            "x-amzn-request-context": OPEN_CONTEXT,
+            "origin": "https://d1wto5gdh1yonf.cloudfront.net",
+            "access-control-request-method": "GET",
+            "access-control-request-headers": "authorization,x-amz-date,x-user-id",
+        }
+        response = client.options("/projects", headers=headers)
+        assert response.status_code == 200
+        assert response.headers.get("access-control-allow-origin")
+
+    def test_plain_unauthenticated_options_call_is_still_refused(self, store):
+        response = client.options("/projects", headers={"x-amzn-request-context": OPEN_CONTEXT})
+        assert response.status_code == 403
+
 
 # --- DynamoDB conditions -----------------------------------------------------
 
