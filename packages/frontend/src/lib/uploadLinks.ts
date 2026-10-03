@@ -50,6 +50,9 @@ const LANGS: UploadLinkLanguage[] = ['en', 'hi', 'mr'];
 const CODE_RE = /^[A-Z0-9_]{1,40}$/;
 const TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
 
+/** A well-formed link token (32 random bytes, base64url). */
+export const isUploadToken = (token: string): boolean => TOKEN_RE.test(token);
+
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
 const num = (v: unknown): number =>
   typeof v === 'number' && Number.isFinite(v) ? v : 0;
