@@ -3,6 +3,11 @@ import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Power, PowerOff, Clock, RefreshCw, Server } from 'lucide-react';
 import { useAwsClient } from '../hooks/useAwsClient';
+import {
+  checkOcrEndpointAvailable,
+  visibleSettingsSections,
+  type SettingsSection,
+} from '../lib/ocrEndpoint';
 
 export const Route = createFileRoute('/settings')({
   component: SettingsPage,
@@ -48,8 +53,6 @@ EXCEPT AS PROHIBITED BY APPLICABLE LAW, IN NO EVENT AND UNDER NO LEGAL THEORY, W
 
 Effective Date - April 18, 2008 (c) 2008 Amazon.com, Inc. or its affiliates. All rights reserved.`;
 
-type SettingsSection = 'sagemaker' | 'license';
-
 interface EndpointStatus {
   endpoint_name: string;
   status: string;
@@ -64,8 +67,11 @@ interface ScaleInSettings {
 function SettingsPage() {
   const { t } = useTranslation();
   const { fetchApi } = useAwsClient();
+  // The OCR section waits until the backend confirms the endpoint exists
+  // (it is opt-in; without it the sagemaker/* routes answer 404).
+  const [ocrAvailable, setOcrAvailable] = useState<boolean | null>(null);
   const [activeSection, setActiveSection] =
-    useState<SettingsSection>('sagemaker');
+    useState<SettingsSection>('license');
 
   // SageMaker state
   const [endpointStatus, setEndpointStatus] = useState<EndpointStatus | null>(
@@ -97,10 +103,22 @@ function SettingsPage() {
   }, [fetchApi]);
 
   useEffect(() => {
-    if (activeSection === 'sagemaker') {
+    let cancelled = false;
+    checkOcrEndpointAvailable(fetchApi).then((available) => {
+      if (cancelled) return;
+      setOcrAvailable(available);
+      if (available) setActiveSection('sagemaker');
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchApi]);
+
+  useEffect(() => {
+    if (activeSection === 'sagemaker' && ocrAvailable) {
       fetchSageMakerStatus();
     }
-  }, [activeSection, fetchSageMakerStatus]);
+  }, [activeSection, ocrAvailable, fetchSageMakerStatus]);
 
   const handleStartEndpoint = async () => {
     setActionLoading(true);
@@ -147,7 +165,8 @@ function SettingsPage() {
     }
   };
 
-  const menuItems: {
+  const visibleSections = visibleSettingsSections(ocrAvailable);
+  const allMenuItems: {
     key: SettingsSection;
     label: string;
     icon: React.ReactNode;
@@ -179,6 +198,9 @@ function SettingsPage() {
       ),
     },
   ];
+  const menuItems = allMenuItems.filter((item) =>
+    visibleSections.includes(item.key),
+  );
 
   return (
     <div className="min-h-screen bento-page" style={{ paddingTop: '0.5rem' }}>
@@ -218,7 +240,7 @@ function SettingsPage() {
 
         {/* Content */}
         <div className="flex-1 pt-1">
-          {activeSection === 'sagemaker' && (
+          {activeSection === 'sagemaker' && ocrAvailable && (
             <div>
               <div className="flex items-center justify-between mb-4">
                 <h3
