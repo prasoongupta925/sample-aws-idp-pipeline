@@ -97,8 +97,10 @@ export const PUBLIC_ROUTE_PATH = '/public/{proxy+}';
 /**
  * Throttle of each public route (requests per second, burst). A real customer
  * makes a few calls per file; this caps scripted traffic on the open routes.
+ * The cap is shared by every customer (not per IP), so it leaves room for
+ * several customers uploading at once.
  */
-export const PUBLIC_ROUTE_THROTTLE = { rateLimit: 10, burstLimit: 20 };
+export const PUBLIC_ROUTE_THROTTLE = { rateLimit: 50, burstLimit: 100 };
 
 export class Backend extends Construct {
   /** The FastAPI app (packages/backend image) behind the HTTP API. */
