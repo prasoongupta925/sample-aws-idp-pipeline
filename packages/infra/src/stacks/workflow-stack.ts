@@ -19,6 +19,7 @@ import {
   bedrockModelInvokeResources,
   getRegionConfig,
   PADDLEOCR_ENDPOINT_NAME_VALUE,
+  PDF_UNLOCK_FUNCTION_NAME,
   SSM_KEYS,
 } from ':idp-v2/common-constructs';
 import models from '../models.json' with { type: 'json' };
@@ -1019,6 +1020,68 @@ export class WorkflowStack extends Stack {
     lancedbService.grantInvoke(qaRegenerator);
     graphService.grantInvoke(qaRegenerator);
     entityExtractor.grantInvoke(qaRegenerator);
+
+    // ========================================
+    // PDF unlock (customer upload links)
+    // ========================================
+    // The backend invokes it with a customer's PDF password: it writes the
+    // unprotected copy to the document's normal key (which starts the
+    // pipeline) and deletes every version of the protected copy under
+    // locked/. The password is in the invoke payload only: never stored, never
+    // logged (the function does not print its event).
+    const pdfUnlockLayer = new lambda.LayerVersion(this, 'PdfUnlockLayer', {
+      layerVersionName: 'idp-v2-pdf-unlock-libs',
+      description: 'pypdf with cryptography (AES-encrypted PDFs)',
+      compatibleRuntimes: [lambda.Runtime.PYTHON_3_14],
+      compatibleArchitectures: [lambda.Architecture.ARM_64],
+      code: createLayerCode(['pypdf', 'cryptography'], 'pdf-unlock'),
+    });
+    const pdfUnlock = new lambda.Function(this, 'PdfUnlock', {
+      functionName: PDF_UNLOCK_FUNCTION_NAME,
+      description: 'Unlock a password-protected customer PDF',
+      runtime: lambda.Runtime.PYTHON_3_14,
+      architecture: lambda.Architecture.ARM_64,
+      handler: 'index.handler',
+      timeout: Duration.minutes(1),
+      memorySize: 1024,
+      code: lambda.Code.fromAsset(
+        path.join(__dirname, '../functions/pdf-unlock'),
+        { exclude: ['test_*.py', '__pycache__', '.pytest_cache'] },
+      ),
+      layers: [pdfUnlockLayer],
+      environment: {
+        DOCUMENT_STORAGE_BUCKET_NAME: this.documentBucket.bucketName,
+      },
+    });
+    // Read and delete the locked copies only; write the documents' normal keys.
+    pdfUnlock.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'ReadAndDeleteLockedPdfs',
+        actions: ['s3:GetObject', 's3:DeleteObject', 's3:DeleteObjectVersion'],
+        resources: [
+          this.documentBucket.arnForObjects('projects/*/documents/*/locked/*'),
+        ],
+      }),
+    );
+    pdfUnlock.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'WriteUnlockedPdfs',
+        actions: ['s3:PutObject'],
+        resources: [
+          this.documentBucket.arnForObjects('projects/*/documents/*'),
+        ],
+      }),
+    );
+    pdfUnlock.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'ListLockedPdfVersions',
+        actions: ['s3:ListBucketVersions'],
+        resources: [this.documentBucket.bucketArn],
+        conditions: {
+          StringLike: { 's3:prefix': ['projects/*/documents/*/locked/*'] },
+        },
+      }),
+    );
 
     // SQS trigger for LanceDB Writer
     lancedbWriter.addEventSourceMapping('LanceDBWriteQueueTrigger', {

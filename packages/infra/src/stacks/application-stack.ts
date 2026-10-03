@@ -79,6 +79,8 @@ export class ApplicationStack extends Stack {
 
     const backend = new Backend(this, 'Backend', {
       videoUploadsEnabled: VIDEO_ANALYSIS_ENABLED,
+      // Customer upload links: the business name their page shows (context dsaName).
+      dsaName: this.node.tryGetContext('dsaName'),
     });
 
     const frontend = new Frontend(this, 'Frontend');

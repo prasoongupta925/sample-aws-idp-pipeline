@@ -16,6 +16,7 @@ import { fileURLToPath } from 'url';
 import {
   SSM_KEYS,
   PADDLEOCR_ENDPOINT_NAME_VALUE,
+  UPLOAD_RULE_IGNORED_KEYS,
   getRetentionDays,
 } from ':idp-v2/common-constructs';
 
@@ -162,8 +163,10 @@ export class EventStack extends Stack {
           object: {
             key: [
               {
+                // Not the derived files under a document's folder, nor a
+                // locked customer PDF (.../documents/<d>/locked/<d>.pdf).
                 'anything-but': {
-                  wildcard: 'projects/*/documents/*/*/*',
+                  wildcard: UPLOAD_RULE_IGNORED_KEYS,
                 },
               },
             ],
@@ -212,6 +215,7 @@ export class EventStack extends Stack {
       memorySize: 512,
       code: lambda.Code.fromAsset(
         path.join(__dirname, '../functions/preprocessing/type-detection'),
+        { exclude: ['test_*.py', '__pycache__', '.pytest_cache'] },
       ),
       layers: [sharedLayer],
       environment: {
@@ -225,6 +229,36 @@ export class EventStack extends Stack {
     backendTable.grantReadWriteData(typeDetection);
     documentBucket.grantRead(typeDetection);
     this.workflowQueue.grantSendMessages(typeDetection);
+
+    // A password-protected customer PDF that reached its normal key unflagged
+    // moves to its locked/ key (type-detection/encrypted_pdf.py): copy there,
+    // then delete every version of the normal key.
+    typeDetection.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'HoldEncryptedCustomerPdfs',
+        actions: ['s3:PutObject'],
+        resources: [
+          documentBucket.arnForObjects('projects/*/documents/*/locked/*'),
+        ],
+      }),
+    );
+    typeDetection.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'DeleteUnflaggedEncryptedPdfs',
+        actions: ['s3:DeleteObject', 's3:DeleteObjectVersion'],
+        resources: [documentBucket.arnForObjects('projects/*/documents/*')],
+      }),
+    );
+    typeDetection.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'ListDocumentVersions',
+        actions: ['s3:ListBucketVersions'],
+        resources: [documentBucket.bucketArn],
+        conditions: {
+          StringLike: { 's3:prefix': ['projects/*/documents/*'] },
+        },
+      }),
+    );
 
     // Grant permission to trigger SageMaker scale-out
     typeDetection.addToRolePolicy(
