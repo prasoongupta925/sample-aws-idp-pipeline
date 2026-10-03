@@ -250,8 +250,9 @@ class TestVideoUploads:
             ("site_visit.MOV", "video/quicktime"),
             ("kyc.avi", "video/x-msvideo"),
             ("kyc.mkv", "video/x-matroska"),
-            # type-detection maps .webm to video/webm, whatever the browser says
-            ("call.webm", "audio/webm"),
+            ("site_visit.webm", "video/webm"),
+            # an untyped .webm is taken as video (type-detection's default)
+            ("call.webm", "application/octet-stream"),
             ("site_visit.mp4", "application/octet-stream"),
         ],
     )
@@ -270,6 +271,11 @@ class TestVideoUploads:
             ("call.mp3", "audio/mpeg"),
             ("call.flac", "audio/flac"),
             ("call.m4a", "audio/mp4"),
+            # phone call recorders; type-detection keeps a .webm declared as
+            # audio/webm as audio
+            ("call.amr", "audio/amr"),
+            ("call.ogg", "audio/ogg"),
+            ("call.webm", "audio/webm"),
             ("bank_statement.pdf", "application/pdf"),
             ("pan.jpg", "image/jpeg"),
         ],
