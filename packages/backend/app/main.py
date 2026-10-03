@@ -7,6 +7,7 @@ from app.routers import (
     applicants,
     artifacts,
     branches,
+    bureau,
     chat,
     datasets,
     documents,
@@ -59,6 +60,7 @@ app.include_router(agents.router)
 app.include_router(applicants.router)
 app.include_router(artifacts.router)
 app.include_router(branches.router)
+app.include_router(bureau.router)
 app.include_router(chat.router)
 app.include_router(datasets.router)
 app.include_router(documents.router)

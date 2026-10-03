@@ -1,0 +1,56 @@
+// A credit report pull as the API answers it (packages/backend/app/routers/bureau.py,
+// mock provider): synthetic data of the demo applicant Rahul Vijay Deshmukh.
+
+/** POST .../bureau/fetch for Rahul (mock provider), as the API answers it. */
+export const RAHUL_PULL_RESPONSE = {
+  applicant: 'BQXPD4821K',
+  provider: 'mock',
+  sample: true,
+  found: true,
+  consent_id: '3f2a9c1e5b7d4e8fa0b1c2d3e4f50617',
+  requested_at: '2026-10-02T20:00:00.000000+00:00',
+  cibil: {
+    score: 771,
+    enquiries: { d30: 0, d60: 1, d90: 1, d120: 2 },
+    tradelines: [
+      {
+        loan_type: 'car',
+        lender: 'Mulshi Auto Finance Ltd (sample)',
+        sanction_amount: 450000,
+        outstanding: 165127,
+        emi: 8200,
+        status: 'active',
+        account_number: 'XXXX4512',
+        overdue: 0,
+        emis_paid: 50,
+        emis_pending: 22,
+        open_date: '2022-07-25',
+        last_payment_date: '2026-09-20',
+        action: 'obligate',
+        source: 'bureau',
+      },
+      {
+        loan_type: 'credit_card',
+        lender: 'Sahyadri Urban Co-op Bank',
+        sanction_amount: 150000,
+        outstanding: 12400,
+        emi: null,
+        status: 'active',
+        account_number: 'XXXX7731',
+        overdue: 0,
+        emis_paid: null,
+        emis_pending: null,
+        open_date: '2019-03-29',
+        last_payment_date: '2026-08-31',
+        action: 'obligate',
+        source: 'bureau',
+      },
+    ],
+    source: 'bureau',
+    report_date: '2026-10-03',
+  },
+  name_on_report: 'Rahul Vijay Deshmukh',
+  notes: [
+    'SAMPLE report of the mock bureau (synthetic data) of 2026-10-03: active loans are marked Obligate and closed ones Close; check each loan, then save',
+  ],
+};

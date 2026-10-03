@@ -43,6 +43,10 @@ class Config(BaseSettings):
     # construct). False in the Mumbai build: no in-Region model reads video, so
     # the upload check refuses video files (audio still goes to Transcribe).
     video_uploads_enabled: bool = True
+    # Credit bureau of the CIBIL page's "Fetch credit report" (app/bureau.py): none (default,
+    # no bureau connected) or mock (SAMPLE reports for the demo applicants). Env BUREAU_PROVIDER,
+    # set by the Backend construct from CDK context bureauProvider.
+    bureau_provider: str = "none"
 
 
 @lru_cache
