@@ -2,9 +2,18 @@ import { createFileRoute } from '@tanstack/react-router';
 import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from 'react-oidc-context';
-import { Power, PowerOff, Clock, RefreshCw, Server, Link2 } from 'lucide-react';
+import {
+  Power,
+  PowerOff,
+  Clock,
+  RefreshCw,
+  Server,
+  Link2,
+  Users,
+} from 'lucide-react';
 import { useAwsClient } from '../hooks/useAwsClient';
 import CrmLaunchSettings from '../components/CrmLaunchSettings';
+import AdminUsersSettings from '../components/AdminUsersSettings';
 import { isAdmin } from '../lib/crmLaunch';
 
 export const Route = createFileRoute('/settings')({
@@ -51,7 +60,7 @@ EXCEPT AS PROHIBITED BY APPLICABLE LAW, IN NO EVENT AND UNDER NO LEGAL THEORY, W
 
 Effective Date - April 18, 2008 (c) 2008 Amazon.com, Inc. or its affiliates. All rights reserved.`;
 
-type SettingsSection = 'sagemaker' | 'integrations' | 'license';
+type SettingsSection = 'sagemaker' | 'integrations' | 'users' | 'license';
 
 interface EndpointStatus {
   endpoint_name: string;
@@ -68,7 +77,12 @@ function SettingsPage() {
   const { t } = useTranslation();
   const { fetchApi } = useAwsClient();
   // Hides the admin sections only; the API enforces the role itself.
-  const admin = isAdmin(useAuth().user?.profile);
+  const profile = useAuth().user?.profile;
+  const admin = isAdmin(profile);
+  const username =
+    typeof profile?.['cognito:username'] === 'string'
+      ? profile['cognito:username']
+      : '';
   const [activeSection, setActiveSection] =
     useState<SettingsSection>('sagemaker');
 
@@ -168,6 +182,11 @@ function SettingsPage() {
             key: 'integrations' as const,
             label: t('crmLaunch.settings.menu'),
             icon: <Link2 className="w-5 h-5" />,
+          },
+          {
+            key: 'users' as const,
+            label: t('adminUsers.menu'),
+            icon: <Users className="w-5 h-5" />,
           },
         ]
       : []),
@@ -447,6 +466,13 @@ function SettingsPage() {
 
           {activeSection === 'integrations' && admin && (
             <CrmLaunchSettings fetchApi={fetchApi} />
+          )}
+
+          {activeSection === 'users' && admin && (
+            <AdminUsersSettings
+              fetchApi={fetchApi}
+              currentUsername={username}
+            />
           )}
 
           {activeSection === 'license' && (

@@ -391,6 +391,7 @@ sample-aws-idp-pipeline/
 | GET | `/projects/{id}/graph` | Project knowledge graph |
 | GET | `/projects/{id}/graph/documents/{id}` | Document-level graph |
 | GET/PUT | `/prompts/system` | System prompt management |
+| GET/POST/PUT | `/admin/users/*` | Admins: list, invite, disable/enable, reset password, set role (Cognito) |
 | GET/POST/PUT | `/sagemaker/*` | SageMaker endpoint management |
 
 ## Tech Stack

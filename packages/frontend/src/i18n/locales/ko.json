@@ -1536,5 +1536,63 @@
       "loadFailed": "실행 링크 설정을 불러올 수 없습니다: {{message}}",
       "rotateFailed": "비밀 키를 교체할 수 없습니다: {{message}}"
     }
+  },
+  "adminUsers": {
+    "title": "사용자",
+    "menu": "사용자",
+    "intro": "앱에 로그인할 수 있는 사용자입니다(사용자 풀은 음성 봇과 공유). 관리자는 사용자·연동·대출사 그리드를 관리하고, 담당자는 대출 파일을 처리하며, 열람자는 보기만 할 수 있습니다.",
+    "refresh": "새로고침",
+    "empty": "아직 사용자가 없습니다.",
+    "user": "사용자",
+    "role": "역할",
+    "status": "상태",
+    "actions": "작업",
+    "you": "(나)",
+    "roleOf": "{{user}}의 역할",
+    "noRole": "역할 없음",
+    "ownRole": "자신의 역할은 다른 관리자에게 변경을 요청하세요.",
+    "ownDisable": "자신의 계정은 비활성화할 수 없습니다.",
+    "enabled": "활성",
+    "disabled": "비활성",
+    "invited": "초대됨, 아직 로그인 안 함",
+    "disable": "비활성화",
+    "enable": "활성화",
+    "resetPassword": "비밀번호 재설정",
+    "resendInvite": "초대 다시 보내기",
+    "yes": "진행",
+    "cancel": "취소",
+    "roles": {
+      "admin": "관리자",
+      "handler": "담당자",
+      "viewer": "열람자"
+    },
+    "confirm": {
+      "disable": "{{user}}을(를) 비활성화할까요? 로그아웃되며 다시 활성화할 때까지 로그인할 수 없습니다.",
+      "reset": "{{user}}에게 새 비밀번호 메일을 보낼까요?"
+    },
+    "notice": {
+      "disabled": "{{user}}을(를) 비활성화하고 로그아웃했습니다.",
+      "enabled": "{{user}}을(를) 활성화했습니다.",
+      "resetSent": "{{user}}에게 새 비밀번호 설정 코드를 보냈습니다.",
+      "inviteResent": "{{user}}에게 새 임시 비밀번호와 함께 초대를 다시 보냈습니다.",
+      "role": "{{user}}의 역할이 {{role}}(으)로 바뀌었습니다.",
+      "invited": "{{user}}을(를) 초대했습니다: 로그인 메일을 {{email}}(으)로 보냈습니다."
+    },
+    "invite": {
+      "title": "사용자 초대",
+      "hint": "Cognito가 사용자 이름과 임시 비밀번호(3일 유효)를 메일로 보냅니다. 사용자 이름은 이메일 주소로 만들어집니다.",
+      "email": "이메일",
+      "given_name": "이름",
+      "family_name": "성",
+      "submit": "초대 보내기",
+      "badEmail": "올바른 이메일 주소를 입력하세요.",
+      "needName": "이름과 성을 입력하세요."
+    },
+    "truncated": "처음 1000명의 사용자만 표시됩니다.",
+    "loadFailed": "사용자를 불러오지 못했습니다: {{message}}",
+    "errors": {
+      "forbidden": "관리자만 사용자를 관리할 수 있습니다.",
+      "status": "요청이 거부되었습니다 (HTTP {{status}})."
+    }
   }
 }

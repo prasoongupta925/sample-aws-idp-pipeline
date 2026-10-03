@@ -1536,5 +1536,63 @@
       "loadFailed": "起動リンクの設定を読み込めませんでした: {{message}}",
       "rotateFailed": "シークレットを更新できませんでした: {{message}}"
     }
+  },
+  "adminUsers": {
+    "title": "ユーザー",
+    "menu": "ユーザー",
+    "intro": "アプリにサインインできるユーザーです（ユーザープールは音声ボットと共有）。管理者はユーザー・連携・貸し手グリッドを管理し、担当者はローン案件を扱い、閲覧者は閲覧のみです。",
+    "refresh": "更新",
+    "empty": "ユーザーはまだいません。",
+    "user": "ユーザー",
+    "role": "ロール",
+    "status": "状態",
+    "actions": "操作",
+    "you": "（あなた）",
+    "roleOf": "{{user}} のロール",
+    "noRole": "ロールなし",
+    "ownRole": "自分のロールは別の管理者に変更を依頼してください。",
+    "ownDisable": "自分のアカウントは無効にできません。",
+    "enabled": "有効",
+    "disabled": "無効",
+    "invited": "招待済み・未サインイン",
+    "disable": "無効にする",
+    "enable": "有効にする",
+    "resetPassword": "パスワードをリセット",
+    "resendInvite": "招待を再送",
+    "yes": "実行する",
+    "cancel": "キャンセル",
+    "roles": {
+      "admin": "管理者",
+      "handler": "担当者",
+      "viewer": "閲覧者"
+    },
+    "confirm": {
+      "disable": "{{user}} を無効にしますか？サインアウトされ、再度有効にするまでサインインできません。",
+      "reset": "{{user}} に新しいパスワードのメールを送りますか？"
+    },
+    "notice": {
+      "disabled": "{{user}} を無効にし、サインアウトしました。",
+      "enabled": "{{user}} を有効にしました。",
+      "resetSent": "{{user}} に新しいパスワード設定用のコードを送りました。",
+      "inviteResent": "{{user}} に新しい仮パスワード付きの招待を再送しました。",
+      "role": "{{user}} は {{role}} になりました。",
+      "invited": "{{user}} を招待しました: ログインメールを {{email}} に送りました。"
+    },
+    "invite": {
+      "title": "ユーザーを招待",
+      "hint": "Cognito がユーザー名と仮パスワード（3 日間有効）をメールで送ります。ユーザー名はメールアドレスから作成されます。",
+      "email": "メール",
+      "given_name": "名",
+      "family_name": "姓",
+      "submit": "招待を送信",
+      "badEmail": "有効なメールアドレスを入力してください。",
+      "needName": "姓と名を入力してください。"
+    },
+    "truncated": "最初の 1000 ユーザーのみ表示しています。",
+    "loadFailed": "ユーザーを読み込めませんでした: {{message}}",
+    "errors": {
+      "forbidden": "ユーザーを管理できるのは管理者のみです。",
+      "status": "リクエストが拒否されました (HTTP {{status}})。"
+    }
   }
 }

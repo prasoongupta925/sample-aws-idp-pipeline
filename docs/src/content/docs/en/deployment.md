@@ -134,6 +134,16 @@ to private resources); deploy it with the rest (`--all`) or before
   after the deploy:
   `aws cognito-idp admin-add-user-to-group --user-pool-id <pool id> --username <user> --group-name admin`
   (the user signs in again to get the new token).
+- Users page (Settings → Users, admins only; enforced by the `/admin/users`
+  API): lists the pool's users, invites one (AdminCreateUser: Cognito sends the
+  pool's invitation email with the username and temporary password), disables
+  (and signs out) or enables a user, resets a password (or resends the invite
+  to a user who never signed in) and sets the role (exactly one of the three
+  groups). Admins cannot disable or change the role of their own account. The
+  backend role has only these cognito-idp actions, on this user pool only. The
+  pool is shared with the voice bot, so its users are listed too. A changed
+  role takes effect after the user signs in again (new token) and within a
+  minute in the API (role cache).
 - Headers: `X-SmartDial-Event`, `X-SmartDial-Delivery` (retries reuse it:
   deduplicate on it) and `X-SmartDial-Signature: t=<unix>,v1=<hex>`, the
   HMAC-SHA256 of `<t>.<raw body>` keyed with the secret. The receiver verifies

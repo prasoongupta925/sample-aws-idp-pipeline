@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import access_log
 from app.routers import (
+    admin_users,
     agents,
     applicants,
     artifacts,
@@ -56,6 +57,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(admin_users.router)
 app.include_router(agents.router)
 app.include_router(applicants.router)
 app.include_router(artifacts.router)

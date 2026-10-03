@@ -117,6 +117,16 @@ export class ApplicationStack extends Stack {
       backend.handler,
       'cognito-idp:ListUsers',
       'cognito-idp:AdminListGroupsForUser',
+      // Admin Users page (app/admin_users.py), checked as admin-only in the API.
+      'cognito-idp:ListUsersInGroup',
+      'cognito-idp:AdminGetUser',
+      'cognito-idp:AdminCreateUser',
+      'cognito-idp:AdminDisableUser',
+      'cognito-idp:AdminEnableUser',
+      'cognito-idp:AdminUserGlobalSignOut',
+      'cognito-idp:AdminResetUserPassword',
+      'cognito-idp:AdminAddUserToGroup',
+      'cognito-idp:AdminRemoveUserFromGroup',
     );
 
     // Cognito authenticated role (every signed-in user). It has NO S3
