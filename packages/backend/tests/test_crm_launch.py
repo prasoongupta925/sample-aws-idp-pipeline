@@ -8,9 +8,13 @@ decrypt with the context they were made with, and Cognito a fake user pool with 
 import base64
 import copy
 import json
+import re
+import shutil
+import subprocess
 import time
+from pathlib import Path
 from unittest.mock import patch
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import pytest
 from botocore.exceptions import ClientError
@@ -119,7 +123,8 @@ def link(secret: str, **overrides) -> str:
     params.update(overrides)
     params = {k: v for k, v in params.items() if v is not None}
     params["sig"] = crm_launch.sign(secret, params)
-    return "?" + urlencode(params)
+    # What the /launch page posts: the URL fragment (the link is /launch#...).
+    return "#" + urlencode(params)
 
 
 def open_link(query: str, headers=HANDLER):
@@ -149,6 +154,67 @@ def test_link_made_by_the_documented_php_and_js_code_verifies():
     )
     launch = crm_launch.verify(crm_launch.parse_query(query), "test-secret", now=1_789_999_900)
     assert (launch.lead, launch.name, launch.phone) == ("SD-LEAD-0042", "Asha Verma (R&D)!", "+91 98765 43210")
+
+
+DOC = Path(__file__).resolve().parents[3] / "docs" / "crm-launch-link.md"
+NODE = shutil.which("node")
+PHP = shutil.which("php")
+
+
+def _doc_block(language: str) -> str:
+    """The function of a fenced code block of docs/crm-launch-link.md (its usage lines cut off)."""
+    match = re.search(rf"```{language}\n(.*?)```", DOC.read_text(encoding="utf-8"), re.S)
+    assert match, f"no {language} block in {DOC.name}"
+    return match.group(1).split("// Usage")[0]
+
+
+def _check_documented_url(url: str) -> None:
+    """A URL from the documented CRM code: parameters only in the fragment, and the verifier accepts it."""
+    parts = urlsplit(url)
+    assert (parts.scheme, parts.netloc, parts.path, parts.query) == ("https", "app.example", "/launch", "")
+    launch = crm_launch.verify(crm_launch.parse_query(parts.fragment), "test-secret")
+    assert (launch.lead, launch.name, launch.phone) == ("SD-LEAD-0042", "Asha Verma (R&D)!", "+91 98765 43210")
+
+
+def test_the_documented_link_has_its_parameters_in_the_fragment():
+    text = DOC.read_text(encoding="utf-8")
+    assert "/launch?" not in text
+    assert "https://<app>/launch#lead=<id>&name=<name>&phone=<phone>&exp=<unix>&sig=<hex>" in text
+    assert "'/launch#' . $canonical" in _doc_block("php")
+    assert "/launch#${canonical}" in _doc_block("js")
+
+
+@pytest.mark.skipif(PHP is None, reason="php is not installed")
+def test_the_documented_php_code_makes_a_link_that_verifies():
+    code = _doc_block("php") + (
+        "echo smartdial_launch_url('https://app.example/', 'test-secret', 'SD-LEAD-0042',"
+        " 'Asha Verma (R&D)!', '+91 98765 43210');\n"
+    )
+    out = subprocess.run([PHP, "-d", "display_errors=stderr"], input=code, capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    _check_documented_url(out.stdout.strip())
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_the_documented_js_code_makes_a_link_that_verifies():
+    code = _doc_block("js") + (
+        "console.log(smartdialLaunchUrl('https://app.example/', 'test-secret', 'SD-LEAD-0042',"
+        " { name: 'Asha Verma (R&D)!', phone: '+91 98765 43210' }));\n"
+    )
+    out = subprocess.run(
+        [NODE, "--input-type=module", "-e", code], capture_output=True, text=True, timeout=30
+    )
+    assert out.returncode == 0, out.stderr
+    _check_documented_url(out.stdout.strip())
+
+
+def test_fragment_and_query_prefixes_are_the_same_link():
+    secret = "s"
+    params = {"lead": "L", "name": "Asha Verma", "exp": str(int(time.time()) + 60)}
+    params["sig"] = crm_launch.sign(secret, params)
+    body = urlencode(params)
+    for raw in (f"#{body}", f"?{body}", body):
+        assert crm_launch.verify(crm_launch.parse_query(raw), secret).name == "Asha Verma"
 
 
 def test_plus_and_percent_20_are_the_same_space():
@@ -219,6 +285,13 @@ def test_groups_are_cached(env):
     assert caller_mod.resolve_caller(ADMIN["x-amzn-request-context"]).is_admin
     assert caller_mod.resolve_caller(ADMIN["x-amzn-request-context"]).username == "asha.verma"
     assert cognito.lookups == 1
+
+
+def test_a_repeated_context_header_is_no_identity(env):
+    value = ADMIN["x-amzn-request-context"]
+    headers = [("x-amzn-request-context", value), ("x-amzn-request-context", value)]
+    assert client.get("/integrations/crm-launch", headers=headers).status_code == 403
+    assert client.get("/integrations/crm-launch", headers=ADMIN).status_code == 200
 
 
 # ------------------------------------------------------------------ settings API (admins only)

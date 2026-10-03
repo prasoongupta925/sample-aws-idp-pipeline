@@ -48,6 +48,9 @@ def allowed(path: str, context_header: str | None) -> bool:
 def install(app: FastAPI) -> None:
     @app.middleware("http")
     async def public_guard(request: Request, call_next):
-        if not allowed(request.url.path, request.headers.get(REQUEST_CONTEXT_HEADER)):
+        values = request.headers.getlist(REQUEST_CONTEXT_HEADER)
+        # A repeated header (the adapter replaces the caller's one) counts as no identity.
+        context = values[0] if len(values) == 1 else (None if not values else "")
+        if not allowed(request.url.path, context):
             return JSONResponse(status_code=403, content={"detail": "Forbidden"})
         return await call_next(request)

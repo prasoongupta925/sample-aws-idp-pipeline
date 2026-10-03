@@ -280,6 +280,17 @@ def test_admin_cannot_disable_or_demote_themselves(pool):
     assert not pool.calls
 
 
+def test_self_check_compares_the_sub_not_only_the_username(pool):
+    # A name that Cognito resolves to the caller (an alias): AdminGetUser answers with the same user.
+    real_get = pool.admin_get_user
+    pool.admin_get_user = lambda UserPoolId, Username: real_get(
+        UserPoolId, "asha.verma" if Username == "asha.alias" else Username
+    )
+    assert client.post("/admin/users/asha.alias/disable", headers=ADMIN).status_code == 409
+    assert client.put("/admin/users/asha.alias/role", headers=ADMIN, json={"role": "viewer"}).status_code == 409
+    assert not pool.calls
+
+
 def test_unknown_user_is_404(pool):
     assert client.post("/admin/users/nobody/disable", headers=ADMIN).status_code == 404
     assert client.post("/admin/users/nobody/reset-password", headers=ADMIN).status_code == 404

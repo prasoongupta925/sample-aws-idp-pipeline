@@ -18,6 +18,9 @@ FROM public.ecr.aws/docker/library/python:3.12-slim
 # AWS Lambda Web Adapter: on Lambda it turns each invocation into an HTTP
 # request to uvicorn (PORT) once GET /health answers. Outside Lambda it never
 # starts, so the image still runs as a plain container.
+# Keep the adapter pinned: app/caller.py and app/public_guard.py rely on it
+# replacing any x-amzn-request-context header the caller sends (a repeated
+# header is refused as no identity). Re-check that before bumping it.
 COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:0.9.1 /lambda-adapter /opt/extensions/lambda-adapter
 ENV PORT=8000
 ENV AWS_LWA_READINESS_CHECK_PATH=/health

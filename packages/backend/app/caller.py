@@ -25,7 +25,7 @@ from typing import Annotated
 import boto3
 from botocore.config import Config as BotoConfig
 from botocore.exceptions import BotoCoreError, ClientError
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, HTTPException, Request
 
 from app.config import get_config
 
@@ -128,12 +128,20 @@ def resolve_caller(request_context: str | None) -> Caller | None:
     return caller
 
 
-RequestContext = Annotated[str | None, Header(alias="x-amzn-request-context", include_in_schema=False)]
+def single_request_context(request: Request) -> str | None:
+    """The one x-amzn-request-context header, or None when there is none or more than one.
+
+    The Lambda Web Adapter (pinned in the Dockerfile) replaces a header of that
+    name sent by the caller; a repeated header would mean that stopped holding,
+    so it counts as no identity.
+    """
+    values = request.headers.getlist("x-amzn-request-context")
+    return values[0] if len(values) == 1 else None
 
 
-def current_caller(request_context: RequestContext = None) -> Caller:
+def current_caller(request: Request) -> Caller:
     """Dependency: the signed-in user; 403 when the request has no user pool identity."""
-    caller = resolve_caller(request_context)
+    caller = resolve_caller(single_request_context(request))
     if caller is None:
         raise HTTPException(status_code=403, detail="This needs a signed-in user of the app")
     return caller

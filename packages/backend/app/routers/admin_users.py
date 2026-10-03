@@ -81,8 +81,16 @@ def _out(user: admin_users.PoolUser) -> UserResponse:
 
 
 def _not_self(caller: Caller, username: str, what: str) -> None:
+    """409 when the target is the caller: by username, and by sub (an alias resolves to the same user)."""
+    own = HTTPException(status_code=409, detail=f"You cannot {what} your own account; ask another admin")
     if username.lower() == caller.username.lower():
-        raise HTTPException(status_code=409, detail=f"You cannot {what} your own account; ask another admin")
+        raise own
+    try:
+        target_sub = admin_users.user_sub(username)
+    except admin_users.AdminUsersError:
+        return  # unknown user: the action itself answers (404)
+    if target_sub and caller.sub and target_sub == caller.sub.lower():
+        raise own
 
 
 def _call(fn, *args):

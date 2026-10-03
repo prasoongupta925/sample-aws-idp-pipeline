@@ -157,6 +157,16 @@ def get_user(username: str) -> PoolUser:
     return _to_user(user, role)
 
 
+def user_sub(username: str) -> str | None:
+    """The sub of a pool user (AdminGetUser also resolves aliases), lower case, or None."""
+    try:
+        user = get_cognito_client().admin_get_user(UserPoolId=_pool_id(), Username=username)
+    except ClientError as e:
+        raise _error(e, "read the user") from e
+    sub = _attrs(user).get("sub")
+    return sub.lower() if sub else None
+
+
 def _groups_of(pool: str, username: str) -> list[str]:
     client = get_cognito_client()
     groups: list[str] = []
