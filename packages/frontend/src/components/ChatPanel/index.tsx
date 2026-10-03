@@ -8,6 +8,8 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAwsClient } from '../../hooks/useAwsClient';
+import { useRuntimeConfig } from '../../hooks/useRuntimeConfig';
+import VoiceBotPanel from '../VoiceBotPanel';
 import { useToast } from '../Toast';
 import ImageModal from '../ImageModal';
 import ToolResultDetailModal from '../ToolResultDetailModal';
@@ -68,6 +70,11 @@ export default function ChatPanel({
   const { t } = useTranslation();
   const { getArtifactDownloadUrl } = useAwsClient();
   const { showToast } = useToast();
+  // The voice bot panel (one login: it uses this app's Cognito token).
+  const { voiceBotUrl } = useRuntimeConfig();
+  const [voiceBotOpen, setVoiceBotOpen] = useState(false);
+  const openVoiceBot = useCallback(() => setVoiceBotOpen(true), []);
+  const closeVoiceBot = useCallback(() => setVoiceBotOpen(false), []);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLDivElement>(null);
@@ -420,6 +427,7 @@ export default function ChatPanel({
         handleDisable: handleNovaSonicDisable,
         handleEnable: handleNovaSonicEnable,
       }}
+      onOpenVoiceBot={voiceBotUrl ? openVoiceBot : undefined}
       messagesLength={messages.length}
       setPendingAgentChange={(val) => setPendingAgentChange(val)}
       setShowRemoveAgentConfirm={(val) => setShowRemoveAgentConfirm(val)}
@@ -602,6 +610,9 @@ export default function ChatPanel({
         confirmText={t('agent.startNewChat')}
         variant="warning"
       />
+      {voiceBotOpen && voiceBotUrl && (
+        <VoiceBotPanel voiceBotUrl={voiceBotUrl} onClose={closeVoiceBot} />
+      )}
     </div>
   );
 }
