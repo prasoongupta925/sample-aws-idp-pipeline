@@ -2,6 +2,8 @@
 # Publish only the web app: local Vite build -> S3 -> CloudFront invalidation. No build server, ~1-2 min.
 #   deploy/lean/update-frontend.sh            # build + publish
 #   deploy/lean/update-frontend.sh --no-build # publish the existing dist/packages/frontend/bundle
+#   deploy/lean/update-frontend.sh --config-only # only (re)write voicebot-config.json (deploy.sh runs this
+#                                                # after a full deploy, whose website upload prunes the file)
 # runtime-config.json (Cognito ids, API URLs) is written by the stack and is never overwritten here;
 # voicebot-config.json (the voice panel URL) is written here from SSM /idp-v2/voicebot/url.
 set -euo pipefail
@@ -9,12 +11,14 @@ export AWS_PROFILE="${AWS_PROFILE:-idp-demo}" AWS_REGION="${AWS_REGION:-ap-south
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BUNDLE="$ROOT/dist/packages/frontend/bundle"
 cd "$ROOT"
-if [ "${1:-}" != "--no-build" ]; then
+CONFIG_ONLY=false
+[ "${1:-}" != "--config-only" ] || { CONFIG_ONLY=true; BUNDLE=$(mktemp -d); trap 'rm -rf "$BUNDLE"' EXIT; }
+if [ "${1:-}" != "--no-build" ] && ! $CONFIG_ONLY; then
   T=$(date +%s)
   NODE_OPTIONS=--max-old-space-size=6144 pnpm nx run @idp-v2/frontend:bundle --skip-nx-cache >/dev/null
   echo "built in $(( $(date +%s) - T ))s"
 fi
-[ -f "$BUNDLE/index.html" ] || { echo "no bundle at $BUNDLE"; exit 1; }
+$CONFIG_ONLY || [ -f "$BUNDLE/index.html" ] || { echo "no bundle at $BUNDLE"; exit 1; }
 out() { aws cloudformation describe-stacks --stack-name IDP-V2-Application \
   --query "Stacks[0].Outputs[?contains(OutputKey,\`$1\`)].OutputValue" --output text; }
 BUCKET=$(out WebsiteBucketName)
@@ -31,6 +35,12 @@ else
   [ -z "$VOICE_URL" ] || echo "ignoring /idp-v2/voicebot/url: not a wss:// URL"
   echo '{}' > "$BUNDLE/voicebot-config.json"
   echo "voice bot panel: off (no /idp-v2/voicebot/url)"
+fi
+if $CONFIG_ONLY; then
+  aws s3 cp "$BUNDLE/voicebot-config.json" "s3://$BUCKET/voicebot-config.json" --cache-control "no-cache" --only-show-errors
+  INV=$(aws cloudfront create-invalidation --distribution-id "$DIST" --paths "/voicebot-config.json" --query 'Invalidation.Id' --output text)
+  echo "voicebot-config.json published (invalidation $INV)"
+  exit 0
 fi
 # Hashed assets first (long cache), then index.html and the rest (no cache), so no page ever points at a missing file.
 # The entry files are always copied: sync would skip an index.html of the same size that is older than the S3 copy

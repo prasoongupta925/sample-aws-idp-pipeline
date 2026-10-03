@@ -194,4 +194,6 @@ done
 trap - INT
 echo "builds: $BUILDS"
 say "result: $RESULT after $N build(s), $(( ($(date +%s) - T0) / 60 )) min"
+# The website upload prunes files the build does not make: put the voice panel config back.
+if [ "$RESULT" = "SUCCEEDED" ]; then "$HERE/update-frontend.sh" --config-only || say "voicebot-config.json not written; run update-frontend.sh --config-only"; fi
 [ "$RESULT" = "SUCCEEDED" ]
