@@ -333,6 +333,7 @@ class TestErase:
             "failed",
             "delivery_log_redacted",
             "eligibility_inputs_deleted",
+            "upload_links_revoked",
             "not_erased",
             "erased_at",
         }
@@ -380,6 +381,24 @@ class TestErase:
             "lists, or the retention sweep deletes them after 7 days",
             "Verdicts and login requests the CRM webhook already delivered: erase them in the CRM",
         ]
+
+    def test_the_projects_upload_links_are_revoked(self, world):
+        """A live customer link would let the erased applicant's documents come back."""
+        with patch("app.routers.applicants.revoke_project_links", return_value=2) as revoke:
+            data = _erase().json()
+
+        assert revoke.call_args.args == (PROJECT_ID, "revoked")
+        assert data["upload_links_revoked"] == 2
+
+    def test_a_failed_link_revoke_does_not_fail_the_erase(self, world, capsys):
+        failure = ClientError({"Error": {"Code": "InternalServerError"}}, "Query")
+        with patch("app.routers.applicants.revoke_project_links", side_effect=failure):
+            response = _erase()
+
+        assert response.status_code == 200
+        assert response.json()["upload_links_revoked"] is None
+        assert len(response.json()["documents_deleted"]) == 7
+        assert "upload links not revoked" in capsys.readouterr().out
 
     def test_saved_eligibility_inputs_are_erased_too(self, world):
         """The CIBIL page's inputs (PAN, mobile, DOB, income, loans) go with the documents, by PAN or name."""
@@ -872,6 +891,7 @@ def test_openapi_documents_the_contract():
         "failed",
         "delivery_log_redacted",
         "eligibility_inputs_deleted",
+        "upload_links_revoked",
         "not_erased",
         "erased_at",
     }

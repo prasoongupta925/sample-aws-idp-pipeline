@@ -18,6 +18,7 @@ from app.ddb import (
     update_project_data,
 )
 from app.ddb.documents import query_documents
+from app.ddb.upload_links import revoke_project_links
 from app.ddb.workflows import delete_workflow_item, query_workflows
 from app.lancedb import (
     DeleteGraphKeywordsByProjectIdInput,
@@ -28,6 +29,7 @@ from app.lancedb import delete_graph_keywords_by_project_id as lancedb_delete_gr
 from app.lancedb import drop_table as lancedb_drop_table
 from app.s3 import delete_s3_prefix
 from app.safe_ids import is_safe_segment
+from app.upload_links import STATUS_REVOKED
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -108,6 +110,7 @@ class DeletedInfo(BaseModel):
     session_objects_deleted: int = 0
     agent_objects_deleted: int = 0
     project_items_deleted: int = 0
+    upload_links_revoked: int = 0
 
 
 class DeleteProjectResponse(BaseModel):
@@ -284,6 +287,19 @@ async def update_project(project_id: str, request: ProjectUpdate) -> ProjectResp
     return get_project(project_id)
 
 
+def _revoke_upload_links(project_id: str) -> int:
+    """Revoke every active upload link of the project; how many were closed.
+
+    A failure is logged and the deletion goes on: the public endpoints also
+    refuse a link whose project no longer exists.
+    """
+    try:
+        return revoke_project_links(project_id, STATUS_REVOKED, at=now_iso())
+    except Exception as e:  # the project is deleted anyway
+        print(f"project delete: upload links not revoked project={project_id} ({type(e).__name__})")
+        return 0
+
+
 @router.delete("/{project_id}")
 async def delete_project(project_id: str, user_id: str = Header(alias="x-user-id")) -> DeleteProjectResponse:
     """Delete a project and all related data (documents, workflows, S3, LanceDB, sessions)."""
@@ -294,6 +310,11 @@ async def delete_project(project_id: str, user_id: str = Header(alias="x-user-id
         raise HTTPException(status_code=404, detail="Project not found")
 
     deleted_info = DeletedInfo(project_id=project_id)
+
+    # 0. Close the project's customer upload links first. Each link lives in its
+    # own ULINK#<token hash> partition, so deleting the project's items would
+    # leave the customer's page able to add files to the deleted project.
+    deleted_info.upload_links_revoked = _revoke_upload_links(project_id)
 
     # 1. Get all items under this project
     project_items = query_all_project_items(project_id)

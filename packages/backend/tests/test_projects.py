@@ -511,6 +511,8 @@ class TestListProjectWorkflows:
 
 
 class TestDeleteProject:
+    @patch("app.ddb.upload_links.close_link", return_value=True)
+    @patch("app.ddb.upload_links.query_pointers", return_value=[{"link_id": "ul_1", "token_hash": "h" * 64}])
     @patch("app.routers.projects.lancedb_delete_graph_keywords")
     @patch("app.routers.projects.lancedb_drop_table")
     @patch("app.ddb.workflows.get_table")
@@ -525,6 +527,8 @@ class TestDeleteProject:
         mock_wf_get_table,
         mock_lancedb_drop_table,
         mock_lancedb_delete_graph_keywords,
+        mock_query_pointers,
+        mock_close_link,
     ):
         mock_table = MagicMock()
         mock_table.get_item.return_value = {
@@ -566,6 +570,10 @@ class TestDeleteProject:
         assert response.status_code == 200
         data = response.json()
         assert "deleted" in data["message"].lower()
+        # The project's customer upload links are revoked (they live outside PROJ#).
+        mock_query_pointers.assert_called_once_with("proj-1")
+        assert mock_close_link.call_args.args == ("h" * 64, "revoked")
+        assert data["details"]["upload_links_revoked"] == 1
 
     @patch("app.ddb.projects.get_table")
     def test_delete_project_not_found(self, mock_get_table):

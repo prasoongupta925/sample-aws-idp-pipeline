@@ -24,7 +24,8 @@ The caller must repeat the applicant's name, as the verdict shows it, in
 `confirm`, and list the documents it confirmed in `document_ids`: the grouping
 is done again at request time, so when documents joined or left the applicant
 since the check, nothing is deleted (409). The applicant's name is also
-removed from the project's webhook delivery log (WHDLV# items). Not erased
+removed from the project's webhook delivery log (WHDLV# items), and the
+project's active customer upload links are revoked. Not erased
 here, and listed in `not_erased`: chat conversations and artifacts that
 mention the applicant (the retention sweep deletes them after the retention
 period) and verdicts the webhook already sent to the CRM.
@@ -47,6 +48,7 @@ from app.config import get_config
 from app.ddb import get_project_item, get_table
 from app.ddb.ask_usage import TTL_ATTRIBUTE
 from app.ddb.file_check_confirmations import delete_applicant_confirmations
+from app.ddb.upload_links import revoke_project_links
 from app.ddb.webhooks import DELIVERY_SK_PREFIX
 from app.file_check import (
     FileCheckNotConfiguredError,
@@ -59,6 +61,7 @@ from app.routers.documents import delete_document
 from app.routers.eligibility import erase_applicant_eligibility
 from app.routers.file_check import ErrorResponse, ProjectId, UserId
 from app.safe_ids import is_safe_segment
+from app.upload_links import STATUS_REVOKED
 
 router = APIRouter(prefix="/projects/{project_id}/applicants", tags=["applicants"])
 
@@ -137,6 +140,13 @@ class EraseResponse(BaseModel):
         description=(
             "Saved eligibility inputs (CIBIL page) of the applicant deleted; null when that failed "
             "(they then expire after the retention period, see not_erased)"
+        ),
+    )
+    upload_links_revoked: int | None = Field(
+        default=None,
+        description=(
+            "Customer upload links of the project closed so the erased applicant cannot add files again; "
+            "null when that failed (staff can revoke them in the project's upload links)"
         ),
     )
     not_erased: list[str] = Field(
@@ -318,6 +328,15 @@ def _not_erased(
     return items
 
 
+def _revoke_upload_links(project_id: str) -> int | None:
+    """Close the project's active customer upload links; how many, None on failure."""
+    try:
+        return revoke_project_links(project_id, STATUS_REVOKED, at=dt.datetime.now(dt.UTC).isoformat())
+    except (ClientError, BotoCoreError) as e:
+        print(f"applicant erase: upload links not revoked project={project_id} ({type(e).__name__})")
+        return None
+
+
 def _write_audit(
     project_id: str,
     erased_at: dt.datetime,
@@ -407,6 +426,8 @@ def erase_applicant(project_id: ProjectId, user_id: UserId, request: EraseReques
     # Saved under the identifier the page used (the PAN when known, else the name).
     eligibility_deleted = _erase_eligibility(project_id, request.applicant, found.applicant_name)
     confirmations_deleted = _erase_confirmations(project_id, sorted(current), request.applicant, found.applicant_name)
+    # A live customer link would let the erased applicant's documents come back.
+    links_revoked = _revoke_upload_links(project_id)
     erased_at = dt.datetime.now(dt.UTC)
     _write_audit(
         project_id,
@@ -422,7 +443,8 @@ def erase_applicant(project_id: ProjectId, user_id: UserId, request: EraseReques
     print(
         f"applicant erase user={user_id} project={project_id} documents={len(found.documents)} "
         f"deleted={len(deleted)} failed={len(failed)} delivery_log_redacted={redacted} "
-        f"eligibility_inputs_deleted={eligibility_deleted} review_confirmations_deleted={confirmations_deleted}"
+        f"eligibility_inputs_deleted={eligibility_deleted} review_confirmations_deleted={confirmations_deleted} "
+        f"upload_links_revoked={links_revoked}"
     )
     return EraseResponse(
         applicant=found.applicant_name,
@@ -430,6 +452,7 @@ def erase_applicant(project_id: ProjectId, user_id: UserId, request: EraseReques
         failed=failed,
         delivery_log_redacted=redacted,
         eligibility_inputs_deleted=eligibility_deleted,
+        upload_links_revoked=links_revoked,
         not_erased=_not_erased(redacted, eligibility_deleted, confirmations_deleted),
         erased_at=erased_at,
     )

@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 import app.ddb.upload_links as ddb_links
 import app.pdf_unlock as pdf_unlock
+import app.routers.projects as projects_router
 import app.routers.public_upload as public_router
 import app.routers.upload_links as staff_router
 from app import public_guard
@@ -50,6 +51,10 @@ class FakeStore:
         self.pointers: dict[tuple[str, str], dict] = {}
         self.consents: list[dict] = []
         self.docs: dict[tuple[str, str], DocumentData] = {}
+        self.projects: set[str] = {PROJECT}
+
+    def get_project_item(self, project_id):
+        return {"project_id": project_id} if project_id in self.projects else None
 
     # app.ddb.upload_links
     def put_link(self, hashed, link):
@@ -143,7 +148,8 @@ def store(monkeypatch):
         monkeypatch.setattr(staff_router, name, getattr(s, name))
     for name in ("set_document_fields", "set_document_status_if"):
         monkeypatch.setattr(staff_router, name, getattr(s, name))
-    monkeypatch.setattr(staff_router, "get_project_item", lambda pid: {"project_id": pid} if pid == PROJECT else None)
+    monkeypatch.setattr(staff_router, "get_project_item", s.get_project_item)
+    monkeypatch.setattr(public_router, "get_project_item", s.get_project_item)
     monkeypatch.setattr(staff_router, "get_document_item", s.get_document_item)
     monkeypatch.setattr(staff_router, "mark_project_updated", lambda pid: None)
     for name in ("get_link", "close_link", "reserve_file_slot", "record_consent", "count_unlock_attempt"):
@@ -374,7 +380,10 @@ class TestPublicLink:
         assert response.status_code == 200, response.text
         doc_id = response.json()["document_id"]
         key = f"projects/{PROJECT}/documents/{doc_id}/{doc_id}.jpg"
-        store.presign.assert_called_once_with("doc-bucket", key, content_type="image/jpeg", content_length=2048)
+        # Single-use: the URL signs If-None-Match: *, a second PUT gets 412.
+        store.presign.assert_called_once_with(
+            "doc-bucket", key, content_type="image/jpeg", content_length=2048, if_none_match=True
+        )
         data = store.docs[(PROJECT, doc_id)]
         assert data.source == "customer_link"
         assert data.upload_link_id == body["link_id"]
@@ -408,6 +417,37 @@ class TestPublicLink:
         response = add_file(token)
         assert response.status_code == 409
         assert len(store.docs) == MAX_FILES
+
+    def test_link_of_a_deleted_project_is_404(self, store):
+        token = create_link()["token"]
+        consent(token)
+        store.projects.discard(PROJECT)
+        response = client.get("/public/upload-link", headers=hdr(token))
+        assert response.status_code == 404
+        assert response.json()["detail"] == public_router.LINK_NOT_FOUND
+        assert add_file(token).status_code == 404
+        assert client.post("/public/upload-link/submit", headers=hdr(token)).status_code == 404
+        store.presign.assert_not_called()
+        assert store.docs == {}
+
+    def test_deleting_the_project_revokes_its_links(self, store, monkeypatch):
+        first, second = create_link()["token"], create_link()["token"]
+        consent(first)
+        monkeypatch.setattr(ddb_links, "query_pointers", store.query_pointers)
+        monkeypatch.setattr(ddb_links, "close_link", store.close_link)
+        assert projects_router._revoke_upload_links(PROJECT) == 2
+        assert {link["status"] for link in store.links.values()} == {"revoked"}
+        # Even while the project item is still there, the old links stop working.
+        assert store.get_project_item(PROJECT)
+        for token in (first, second):
+            assert client.get("/public/upload-link", headers=hdr(token)).status_code == 404
+            assert add_file(token).status_code == 404
+
+    def test_revoke_failure_does_not_stop_the_project_delete(self, store, monkeypatch):
+        create_link()
+        monkeypatch.setattr(ddb_links, "query_pointers", store.query_pointers)
+        monkeypatch.setattr(ddb_links, "close_link", MagicMock(side_effect=ClientError({"Error": {}}, "Update")))
+        assert projects_router._revoke_upload_links(PROJECT) == 0
 
     def test_submit_closes_the_link(self, store):
         token = create_link()["token"]
@@ -598,6 +638,11 @@ class TestPublicGuard:
 
     def test_unauthenticated_call_to_a_staff_route_is_refused(self, store):
         response = client.get(f"/projects/{PROJECT}/upload-links", headers={"x-amzn-request-context": OPEN_CONTEXT})
+        assert response.status_code == 403
+
+    def test_repeated_context_header_counts_as_no_identity(self, store):
+        headers = [("x-amzn-request-context", IAM_CONTEXT), ("x-amzn-request-context", IAM_CONTEXT)]
+        response = client.get(f"/projects/{PROJECT}/upload-links", headers=headers)
         assert response.status_code == 403
 
     def test_unauthenticated_call_to_the_public_route_passes(self, store):

@@ -168,6 +168,19 @@ def close_link(token_hash: str, status: str, *, at: str) -> bool:
     return True
 
 
+def revoke_project_links(project_id: str, status: str, *, at: str) -> int:
+    """Close every still-active link of a project (project delete, applicant erase); how many.
+
+    Each link lives in its own ULINK#<token hash> partition, so deleting the
+    project's items alone would leave the customer's page working.
+    """
+    revoked = 0
+    for pointer in query_pointers(project_id):
+        if close_link(pointer["token_hash"], status, at=at):
+            revoked += 1
+    return revoked
+
+
 def count_unlock_attempt(project_id: str, document_id: str, *, max_attempts: int) -> bool:
     """Count one password attempt on a document; False once max_attempts were used."""
     try:
