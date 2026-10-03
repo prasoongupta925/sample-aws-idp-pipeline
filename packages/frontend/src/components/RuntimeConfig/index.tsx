@@ -4,6 +4,7 @@ import React, {
   useEffect,
   useState,
 } from 'react';
+import { loadVoiceBotUrl, voiceBotUrlFrom } from '../../lib/voicebot/config';
 
 export interface CognitoProps {
   region: string;
@@ -27,6 +28,11 @@ export interface IRuntimeConfig {
    */
   bdaEnabled?: boolean;
   websocketUrl?: string;
+  /**
+   * The voice bot's WebSocket URL (wss://…/ws). From runtime-config.json or,
+   * as deployed, voicebot-config.json. Absent: no voice panel.
+   */
+  voiceBotUrl?: string;
 }
 
 /**
@@ -58,13 +64,18 @@ const RuntimeConfigProvider: React.FC<PropsWithChildren> = ({ children }) => {
   >();
   useEffect(() => {
     (async () => {
+      const voiceBot = loadVoiceBotUrl();
+      let config: IRuntimeConfig;
       try {
-        setRuntimeConfig(
-          applyOverrides(await (await fetch('/runtime-config.json')).json()),
-        );
+        config = await (await fetch('/runtime-config.json')).json();
       } catch {
-        setRuntimeConfig(applyOverrides({ apis: {} }));
+        config = { apis: {} };
       }
+      const voiceBotUrl =
+        voiceBotUrlFrom(config.voiceBotUrl) || (await voiceBot);
+      setRuntimeConfig(
+        applyOverrides({ ...config, voiceBotUrl: voiceBotUrl || undefined }),
+      );
     })();
   }, [setRuntimeConfig]);
 

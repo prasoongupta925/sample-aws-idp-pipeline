@@ -18,6 +18,11 @@ interface ToolsMenuVoiceChat {
 
 interface ToolsMenuPopoverProps {
   voiceChat: ToolsMenuVoiceChat;
+  /**
+   * The voice bot panel (set when a voiceBotUrl is configured). It replaces
+   * the built-in voice chat item.
+   */
+  onOpenVoiceBot?: () => void;
   /** agent_id, or null for the default assistant. */
   onAgentSelect?: (agentId: string | null) => void;
   selectedAgent: Agent | null;
@@ -31,6 +36,7 @@ interface ToolsMenuPopoverProps {
 
 export default function ToolsMenuPopover({
   voiceChat,
+  onOpenVoiceBot,
   onAgentSelect,
   selectedAgent,
   agents,
@@ -43,13 +49,31 @@ export default function ToolsMenuPopover({
   const { t } = useTranslation();
   const [showAgentSubmenu, setShowAgentSubmenu] = useState(false);
   const orderedAgents = useMemo(() => sortAgentsBuiltinFirst(agents), [agents]);
-  // Voice mode counts only where voice chat exists.
-  const voiceActive = Boolean(voiceChat.available) && voiceChat.mode;
+  // Voice mode counts only where voice chat exists (and the voice bot does not
+  // replace it).
+  const voiceActive =
+    !onOpenVoiceBot && Boolean(voiceChat.available) && voiceChat.mode;
 
   return (
     <div className="absolute bottom-full left-0 mb-2 w-56 bg-[#e4eaf4] dark:bg-slate-800 border border-white/60 dark:border-white/30 rounded-xl shadow-lg z-50 py-1">
+      {/* Voice Chat: the voice bot panel where one is configured */}
+      {onOpenVoiceBot && (
+        <button
+          type="button"
+          onClick={() => {
+            onClose();
+            onOpenVoiceBot();
+          }}
+          className="w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors glass-menu-item"
+        >
+          <Mic className="w-4 h-4 text-slate-500 dark:text-slate-400" />
+          <span className="text-slate-700 dark:text-slate-300">
+            {t('voiceChat.title')}
+          </span>
+        </button>
+      )}
       {/* Voice Chat toggle (hidden when the build has no voice chat) */}
-      {voiceChat.available && voiceChat.onModelSelect && (
+      {!onOpenVoiceBot && voiceChat.available && voiceChat.onModelSelect && (
         <button
           type="button"
           disabled={!!selectedAgent}

@@ -19,7 +19,11 @@ beforeAll(async () => {
 
 const noop = () => undefined;
 
-function renderMenu(available: boolean | undefined, mode = false) {
+function renderMenu(
+  available: boolean | undefined,
+  mode = false,
+  onOpenVoiceBot?: () => void,
+) {
   return renderToStaticMarkup(
     <I18nextProvider i18n={i18n}>
       <ToolsMenuPopover
@@ -32,6 +36,7 @@ function renderMenu(available: boolean | undefined, mode = false) {
           onEnable: noop,
           setMode: noop,
         }}
+        onOpenVoiceBot={onOpenVoiceBot}
         onAgentSelect={noop}
         selectedAgent={null}
         agents={[]}
@@ -64,5 +69,19 @@ describe('ToolsMenuPopover', () => {
     const html = renderMenu(false, true);
     expect(html).not.toContain('disabled=""');
     expect(renderMenu(true, true)).toContain('disabled=""');
+  });
+
+  it('offers Voice Chat for the voice bot panel without a voice chat runtime', () => {
+    const html = renderMenu(false, false, noop);
+    expect(html).toContain(en.voiceChat.title);
+    expect(html).toContain('lucide-mic');
+    expect(html).not.toContain('disabled=""');
+  });
+
+  it('shows one Voice Chat item when both exist (the voice bot replaces the toggle)', () => {
+    const html = renderMenu(true, true, noop);
+    expect(html.split(en.voiceChat.title)).toHaveLength(2);
+    expect(html).not.toContain('lucide-check');
+    expect(html).not.toContain('disabled=""');
   });
 });

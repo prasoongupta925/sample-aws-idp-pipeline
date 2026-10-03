@@ -27,7 +27,10 @@ beforeAll(async () => {
 
 const noop = () => undefined;
 
-function renderInput(voice: { available?: boolean; mode: boolean }) {
+function renderInput(
+  voice: { available?: boolean; mode: boolean },
+  onOpenVoiceBot?: () => void,
+) {
   return renderToStaticMarkup(
     <I18nextProvider i18n={i18n}>
       <RuntimeConfigContext.Provider value={{ apis: {} }}>
@@ -50,6 +53,7 @@ function renderInput(voice: { available?: boolean; mode: boolean }) {
             handleDisable: noop,
             handleEnable: noop,
           }}
+          onOpenVoiceBot={onOpenVoiceBot}
           messagesLength={0}
           setPendingAgentChange={noop}
           setShowRemoveAgentConfirm={noop}
@@ -84,5 +88,20 @@ describe('ChatInputBox voice chat', () => {
       'Tools',
     );
     expect(renderInput({ available: true, mode: false })).toContain('Tools');
+  });
+});
+
+describe('ChatInputBox voice bot', () => {
+  it('shows the chat microphone and the Tools menu when a voice bot URL is set', () => {
+    const html = renderInput({ available: false, mode: false }, noop);
+    expect(html).toContain('lucide-mic');
+    expect(html).toContain(`aria-label="${en.voiceChat.title}"`);
+    expect(html).toContain('Tools');
+  });
+
+  it('hides both without a voice bot URL', () => {
+    const html = renderInput({ available: false, mode: false });
+    expect(html).not.toContain('lucide-mic');
+    expect(html).not.toContain(`aria-label="${en.voiceChat.title}"`);
   });
 });

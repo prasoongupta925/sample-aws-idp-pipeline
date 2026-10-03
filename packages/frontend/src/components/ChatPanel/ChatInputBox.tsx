@@ -59,6 +59,8 @@ interface ChatInputBoxProps {
   onAgentSelect?: (agentId: string | null) => void;
   onAgentClick: () => void;
   voiceChat: InputBoxVoiceChat;
+  /** Opens the voice bot panel (set only when a voiceBotUrl is configured). */
+  onOpenVoiceBot?: () => void;
   messagesLength: number;
   setPendingAgentChange: (val: string | null) => void;
   setShowRemoveAgentConfirm: (val: boolean) => void;
@@ -86,6 +88,7 @@ export default function ChatInputBox({
   onAgentSelect,
   onAgentClick,
   voiceChat,
+  onOpenVoiceBot,
   messagesLength,
   setPendingAgentChange,
   setShowRemoveAgentConfirm,
@@ -635,8 +638,21 @@ export default function ChatInputBox({
                 <Plus className="w-5 h-5" />
               </button>
 
+              {/* Voice bot: the chat's microphone (only with a voiceBotUrl) */}
+              {onOpenVoiceBot && (
+                <button
+                  type="button"
+                  onClick={onOpenVoiceBot}
+                  aria-label={t('voiceChat.title')}
+                  title={t('voiceChat.title')}
+                  className="inline-flex items-center justify-center h-8 w-8 rounded-lg transition-colors text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/10 active:scale-95"
+                >
+                  <Mic className="w-4 h-4" />
+                </button>
+              )}
+
               {/* Tools popover (the Voice Chat item only where voice chat exists) */}
-              {(onAgentSelect || voiceChat.available) && (
+              {(onAgentSelect || voiceChat.available || onOpenVoiceBot) && (
                 <div className="relative" ref={toolsMenuRef}>
                   <button
                     type="button"
@@ -663,6 +679,7 @@ export default function ChatInputBox({
                         setMode: voiceChat.setMode,
                         onDisconnect: voiceChat.onDisconnect,
                       }}
+                      onOpenVoiceBot={onOpenVoiceBot}
                       onAgentSelect={onAgentSelect}
                       selectedAgent={selectedAgent}
                       agents={agents}
