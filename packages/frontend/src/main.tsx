@@ -8,6 +8,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { RouterProvider, createRouter } from '@tanstack/react-router';
 import { routeTree } from './routeTree.gen';
+import CustomerUploadPage from './components/CustomerUploadPage';
 import './i18n';
 
 export type RouterProviderContext = {
@@ -36,8 +37,20 @@ const App = () => {
   return <RouterProvider router={router} context={{ runtimeConfig, auth }} />;
 };
 
+// The customer's upload link page (/u#<token>) has no login: it gets only
+// the runtime config (backend URL), not Cognito, the websocket or the router.
+const isCustomerUploadPage = /^\/u\/?$/.test(window.location.pathname);
+
 const root = document.getElementById('root');
-if (root) {
+if (root && isCustomerUploadPage) {
+  createRoot(root).render(
+    <React.StrictMode>
+      <RuntimeConfigProvider>
+        <CustomerUploadPage />
+      </RuntimeConfigProvider>
+    </React.StrictMode>,
+  );
+} else if (root) {
   createRoot(root).render(
     <React.StrictMode>
       <RuntimeConfigProvider>

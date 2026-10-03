@@ -10,6 +10,11 @@ export interface Document {
   ocr_options?: Record<string, unknown>;
   document_prompt?: string;
   s3_key?: string;
+  /** 'customer_link': uploaded by the customer through an upload link. */
+  source?: string | null;
+  upload_link_id?: string | null;
+  /** A customer's password-protected PDF waiting for its password. */
+  locked?: boolean;
   started_at: string;
   ended_at: string | null;
 }

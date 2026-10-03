@@ -28,6 +28,8 @@ import {
   Network,
   ClipboardCheck,
   Lightbulb,
+  Link2,
+  Lock,
 } from 'lucide-react';
 import ConfirmModal from './ConfirmModal';
 import {
@@ -42,6 +44,7 @@ import {
   getFileTypeCategory,
   getExtensionFromMimeType,
 } from '../lib/fileTypeUtils';
+import { isCustomerUpload, needsPassword } from '../lib/uploadLinks';
 
 const getIconHue = (fileType: string): number => {
   if (fileType.includes('video') || fileType.includes('audio')) return 0;
@@ -566,6 +569,10 @@ interface SidePanelProps {
   onViewProjectGraph?: () => void;
   onOpenFileCheck?: () => void;
   onOpenPainPoints?: () => void;
+  /** "Request documents from customer" (customer upload link). */
+  onRequestFromCustomer?: () => void;
+  /** Staff enter the password of a customer's protected PDF. */
+  onUnlockDocument?: (doc: Document) => void;
 }
 
 export default function SidePanel({
@@ -588,6 +595,8 @@ export default function SidePanel({
   onViewProjectGraph,
   onOpenFileCheck,
   onOpenPainPoints,
+  onRequestFromCustomer,
+  onUnlockDocument,
 }: SidePanelProps) {
   const { t } = useTranslation();
   const [openArtifactMenuId, setOpenArtifactMenuId] = useState<string | null>(
@@ -751,6 +760,16 @@ export default function SidePanel({
                 className="px-2.5 py-1 text-xs font-medium rounded-lg text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors truncate min-w-0"
               >
                 {t('documents.addDocument', 'Add Document')}
+              </button>
+            )}
+            {onRequestFromCustomer && (
+              <button
+                onClick={onRequestFromCustomer}
+                className="flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-lg text-teal-600 dark:text-teal-400 hover:bg-teal-50 dark:hover:bg-teal-900/30 transition-colors min-w-0"
+                title={t('uploadLinks.title')}
+              >
+                <Link2 className="h-3.5 w-3.5 flex-shrink-0" />
+                <span className="truncate">{t('uploadLinks.button')}</span>
               </button>
             )}
             {onOpenFileCheck && (
@@ -1043,8 +1062,19 @@ export default function SidePanel({
                             <span
                               className={`text-[10px] px-1 py-0.5 rounded font-medium truncate ${getStatusBadge(doc.status)}`}
                             >
-                              {t(`documents.${doc.status}`, doc.status)}
+                              {needsPassword(doc)
+                                ? t('uploadLinks.passwordRequired')
+                                : t(`documents.${doc.status}`, doc.status)}
                             </span>
+                            {isCustomerUpload(doc) && (
+                              <span
+                                className="text-[10px] px-1 py-0.5 rounded font-medium whitespace-nowrap flex-shrink-0 bg-teal-50 text-teal-700 dark:bg-teal-900/20 dark:text-teal-400"
+                                title={t('uploadLinks.viaLinkTitle')}
+                                data-testid="doc-via-link"
+                              >
+                                {t('uploadLinks.viaLink')}
+                              </span>
+                            )}
                             <span className="text-[10px] text-slate-400 whitespace-nowrap flex-shrink-0">
                               {(doc.file_size / 1024).toFixed(1)} KB
                             </span>
@@ -1052,6 +1082,19 @@ export default function SidePanel({
                         </div>
 
                         <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                          {needsPassword(doc) && onUnlockDocument && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onUnlockDocument(doc);
+                              }}
+                              className="p-1 text-amber-900 bg-amber-300 hover:bg-amber-100 hover:text-amber-700 hover:scale-105 hover:shadow-md dark:text-amber-200 dark:bg-amber-800 dark:hover:bg-amber-600 rounded-lg transition-all"
+                              title={t('uploadLinks.unlockButton')}
+                              aria-label={t('uploadLinks.unlockButton')}
+                            >
+                              <Lock className="h-3.5 w-3.5" />
+                            </button>
+                          )}
                           {workflow && onViewWorkflow && (
                             <button
                               onClick={() =>
