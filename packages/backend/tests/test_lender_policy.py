@@ -354,7 +354,7 @@ def test_the_sheet_prices_its_banks_and_the_others_keep_the_sample(store):
     # Not in the sheet: the sample policy, with its sample label.
     bajaj = at(result, "bajaj_finance")
     assert bajaj["policy_sheet"] is None and bajaj["label"] == el.SAMPLE_LABEL
-    assert any("from from policy (your sheet)" in n.lower() for n in lists.notes())
+    assert any(n.startswith("Policy of ") and ": From Policy (your sheet) (Policy.xlsx" in n for n in lists.notes())
 
 
 def test_a_company_not_in_the_list_is_cat_u(store):

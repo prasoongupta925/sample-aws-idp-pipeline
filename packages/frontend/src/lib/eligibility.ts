@@ -25,6 +25,9 @@ import type {
   EligibilityPrefill,
   EligibilityProfile,
   EligibilityResult,
+  EligibilitySuggestion,
+  SuggestedBank,
+  DeclinedBank,
   EmploymentType,
   FieldSource,
   FieldSources,
@@ -1408,6 +1411,48 @@ function counted(raw: unknown): CountedObligation[] {
   });
 }
 
+function rows(raw: unknown): Record<string, unknown>[] {
+  return Array.isArray(raw) ? raw.map(obj) : [];
+}
+
+/** The "Suggested banks" box; a malformed row is dropped. */
+function suggestion(raw: unknown): EligibilitySuggestion {
+  const o = obj(raw);
+  const banks: SuggestedBank[] = [];
+  for (const b of rows(o.banks)) {
+    const lender = text(b.lender);
+    const lenderId = text(b.lender_id);
+    const amount = finite(b.eligible_amount);
+    const roi = finite(b.roi);
+    const emi = finite(b.emi);
+    const tenure = finite(b.tenure_months);
+    if (!lender || !lenderId || amount === null || roi === null) continue;
+    if (emi === null || tenure === null) continue;
+    banks.push({
+      lender,
+      lender_id: lenderId,
+      eligible_amount: amount,
+      roi,
+      emi,
+      tenure_months: tenure,
+      covers_need: b.covers_need === true,
+      why: text(b.why) ?? '',
+    });
+  }
+  const declined: DeclinedBank[] = [];
+  for (const d of rows(o.declined)) {
+    const lender = text(d.lender);
+    const lenderId = text(d.lender_id);
+    if (!lender || !lenderId) continue;
+    declined.push({
+      lender,
+      lender_id: lenderId,
+      reason: text(d.reason) ?? '',
+    });
+  }
+  return { need: finite(o.need), banks, declined };
+}
+
 /** Validates POST .../calculate; throws on anything but the contract. */
 export function parseCalculateResponse(
   raw: unknown,
@@ -1443,6 +1488,7 @@ export function parseCalculateResponse(
     per_lender: perLender,
     best_lender: best && perLender.some((r) => r.lender === best) ? best : null,
     best_lender_reason: text(o.best_lender_reason),
+    suggestion: suggestion(o.suggestion),
     // Shipped policies are SAMPLE data: only an explicit false says otherwise.
     sample: o.sample !== false,
     file_check: fileCheck,

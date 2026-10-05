@@ -979,6 +979,9 @@ class CalculationLists:
                     "policy_sheet": "Policy",
                 }[kind]
                 source = stored.source()["name"]
+                if kind == "policy_sheet":
+                    out.append(eligibility.sheet_note(self.used[kind], source))
+                    continue
                 out.append(f"{what} of {', '.join(sorted(self.used[kind]))} from {source[0].lower()}{source[1:]}")
         return out
 

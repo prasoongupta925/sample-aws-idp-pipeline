@@ -668,3 +668,91 @@ def test_every_schema_property_is_read(tool):
         assert prop['type'] in ('number', 'integer')
         res = index.handler({**base, name: 'not a number'}, _ctx(f'filecheck___{tool}'))
         assert res == {'error': f'{name} must be a number'}, name
+
+
+# ------------------------------------------------------------------ the app's lender policy workbook
+POLICY_XLSX = HERE.parents[1] / 'backend' / 'tests' / 'fixtures' / 'policy_workbook.xlsx'
+
+
+def _policy_json() -> dict:
+    """The fixture workbook read by the backend's parser (standard library only)."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location('policy_workbook', BACKEND / 'policy_workbook.py')
+    module = importlib.util.module_from_spec(spec)
+    sys.modules['policy_workbook'] = module
+    spec.loader.exec_module(module)
+    return module.parse_policy_workbook(POLICY_XLSX.read_bytes(), 'Policy.xlsx').to_json()
+
+
+def policy_header(packed=True, expires_at=NOW + WEEK):
+    import gzip
+
+    item = {
+        **loan_tools.POLICY_KEY,
+        'upload_id': 'u1',
+        'filename': 'Policy.xlsx',
+        'uploaded_at': '2026-09-21T10:00:00+00:00',
+        'expires_at': Decimal(expires_at),
+    }
+    if packed:
+        item[loan_tools.POLICY_ATTRIBUTE] = gzip.compress(json.dumps(_policy_json()).encode())
+    return item
+
+
+def test_the_stored_policy_sheet_prices_its_banks_and_ranks_them(monkeypatch):
+    table = KeyTable([policy_header(), saved(RAHUL_PAN, example_inputs(net_income=60000.0))])
+
+    res = run(table, monkeypatch, applicant=RAHUL_PAN)
+
+    assert 'error' not in res, res
+    labels = {r['lender_id']: r['label'] for r in res['per_lender']}
+    for lender_id in ('hdfc_bank', 'icici_bank', 'axis_bank', 'bandhan_bank', 'indusind_bank'):
+        assert labels[lender_id] == eligibility.SHEET_SOURCE_LABEL
+    assert any(n.startswith('Policy of ') and 'Policy.xlsx, uploaded 21 Sep 2026' in n for n in res['notes'])
+    banks = res['suggestion']['banks']
+    assert banks and banks[0]['lender'] == res['best_lender']
+    assert len(banks) + len(res['suggestion']['declined']) == len(res['per_lender'])
+    first = next(line for line in res['summary'] if line.startswith('Suggested 1. '))
+    assert banks[0]['lender'] in first and banks[0]['why'] in first
+
+
+def test_an_expired_policy_sheet_is_not_used(monkeypatch):
+    table = KeyTable([policy_header(expires_at=NOW - 1), saved(RAHUL_PAN, example_inputs())])
+
+    res = run(table, monkeypatch, applicant=RAHUL_PAN)
+
+    assert eligibility.SHEET_SOURCE_LABEL not in {r['label'] for r in res['per_lender']}
+    assert not any('policy sheet' in n for n in res['notes'])
+
+
+def test_a_policy_sheet_without_its_parsed_copy_is_named(monkeypatch):
+    table = KeyTable([policy_header(packed=False), saved(RAHUL_PAN, example_inputs())])
+
+    res = run(table, monkeypatch, applicant=RAHUL_PAN)
+
+    assert eligibility.SHEET_SOURCE_LABEL not in {r['label'] for r in res['per_lender']}
+    assert any('lender policy sheet is not applied' in n for n in res['notes'])
+
+
+def test_suggestion_lines():
+    lines = loan_tools.suggestion_lines(
+        {
+            'banks': [
+                {
+                    'lender': 'HDFC Bank',
+                    'eligible_amount': 500000,
+                    'roi': 10.5,
+                    'emi': 10747.0,
+                    'tenure_months': 60,
+                    'why': 'Lowest ROI (10.5%) that covers ₹5,00,000',
+                }
+            ],
+            'declined': [{'lender': 'Axis Bank', 'reason': "CAT_U: company not in Axis Bank's list"}],
+        }
+    )
+    assert lines == [
+        'Suggested 1. HDFC Bank: ₹5,00,000 at 10.5%, EMI ₹10,747 over 60 months – '
+        'Lowest ROI (10.5%) that covers ₹5,00,000',
+        "Says no: Axis Bank – CAT_U: company not in Axis Bank's list",
+    ]

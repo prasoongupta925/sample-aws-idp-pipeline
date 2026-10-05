@@ -25,6 +25,7 @@ Bank) gets them from the TEMPLATE_LENDER's SAMPLE policy, without a processing f
 from __future__ import annotations
 
 import datetime as dt
+import gzip
 import hashlib
 import json
 import re
@@ -48,6 +49,10 @@ HEADER_KEY = {"PK": "APP#LENDERPOLICY", "SK": "CURRENT"}
 MAX_UPLOAD_BYTES = min(4 * 1024 * 1024, MAX_FILE_BYTES)
 XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 TEMPLATE_LENDER = eligibility.SHEET_TEMPLATE_LENDER
+# The header also carries the parsed policy, gzipped, for the chat's eligibility tool (the File Check
+# MCP Lambda reads this table only, not S3), when it fits well under DynamoDB's 400 KB item limit.
+HEADER_POLICY_ATTRIBUTE = "policy_json_gz"
+MAX_HEADER_POLICY_BYTES = 300 * 1024
 
 __all__ = ["PolicyWorkbookError", "parse_policy_workbook"]
 
@@ -166,13 +171,10 @@ def save(data: bytes, filename: str | None, workbook: PolicyWorkbook, now: dt.da
     upload_id = uuid.uuid4().hex
     expires_at = int(now.timestamp()) + get_config().retention_days * 86400
     s3 = get_s3_client()
+    parsed = json.dumps(workbook.to_json(), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     s3.put_object(Bucket=bucket, Key=original_key(upload_id), Body=data, ContentType=XLSX_CONTENT_TYPE)
-    s3.put_object(
-        Bucket=bucket,
-        Key=parsed_key(upload_id),
-        Body=json.dumps(workbook.to_json(), ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
-        ContentType="application/json",
-    )
+    s3.put_object(Bucket=bucket, Key=parsed_key(upload_id), Body=parsed, ContentType="application/json")
+    packed = gzip.compress(parsed, mtime=0)
     stored = StoredPolicy(
         upload_id=upload_id,
         filename=filename,
@@ -194,6 +196,7 @@ def save(data: bytes, filename: str | None, workbook: PolicyWorkbook, now: dt.da
             "banks": [b.name for b in workbook.banks],
             "warnings": len(workbook.warnings),
             TTL_ATTRIBUTE: expires_at,
+            **({HEADER_POLICY_ATTRIBUTE: packed} if len(packed) <= MAX_HEADER_POLICY_BYTES else {}),
         }
     )
     if previous and previous.get("upload_id"):

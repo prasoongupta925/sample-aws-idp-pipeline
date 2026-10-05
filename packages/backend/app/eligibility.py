@@ -1431,6 +1431,7 @@ def _sheet_terms(
         if sheet.unlisted_category is None:
             reasons.append(f"{sheet.bank}'s policy sheet has no category for a company not in its list")
             return lender, None
+        unlisted = category is None and bool(company)
         if category is not None:
             notes.append(
                 f"{category} is not a category of {sheet.bank}'s policy sheet: {sheet.unlisted_category} applies"
@@ -1441,6 +1442,8 @@ def _sheet_terms(
                 f"so {sheet.unlisted_category} applies"
             )
         category = sheet.unlisted_category
+    else:
+        unlisted = False
     code = sheet.code(category)
     start = sheet.slab_starts[slab]
     values: dict[str, dict] = {}
@@ -1488,6 +1491,8 @@ def _sheet_terms(
         "slab_start": start,
         "category": category,
         "category_code": code,
+        # The company is not in the bank's company list, so the unlisted category (CAT U) applies.
+        "company_unlisted": unlisted,
         "values": values,
     }
     return updated, terms
@@ -2025,21 +2030,101 @@ def _lender_result(
     }
 
 
+def _need(loan: dict, bt_amount: Decimal) -> Decimal:
+    """What the loan must cover: the requested amount, and at least the balance transfer."""
+    requested = loan.get("amount")
+    return max(dec(requested) if requested is not None else Decimal(0), bt_amount)
+
+
+def _ranked(results: list[dict], need: Decimal) -> tuple[list[dict], list[dict]]:
+    """The eligible lenders in suggestion order, split into (those covering `need`, the others).
+
+    Covering lenders: lowest ROI first (then the larger amount, the lower EMI, the name). The others
+    (or all of them when there is no need): highest eligible amount first (then the lower ROI)."""
+    eligible = [r for r in results if r["status"] == "eligible" and (r["eligible_amount"] or 0) > 0]
+    covering = [r for r in eligible if need > 0 and dec(r["eligible_amount"]) >= need]
+    rest = [r for r in eligible if r not in covering]
+    covering.sort(key=lambda r: (r["roi"], -r["eligible_amount"], r["emi"], r["lender"]))
+    rest.sort(key=lambda r: (-r["eligible_amount"], r["roi"], r["lender"]))
+    return covering, rest
+
+
 def _best_lender(results: list[dict], loan: dict, bt_amount: Decimal) -> tuple[dict | None, str | None]:
     """Lowest ROI among the eligible lenders that cover the need (requested amount, BT); else the
-    highest eligible amount."""
-    eligible = [r for r in results if r["status"] == "eligible" and (r["eligible_amount"] or 0) > 0]
-    if not eligible:
-        return None, None
-    requested = loan.get("amount")
-    need = max(dec(requested) if requested is not None else Decimal(0), bt_amount)
-    if need > 0:
-        covering = [r for r in eligible if dec(r["eligible_amount"]) >= need]
-        if covering:
-            best = min(covering, key=lambda r: (r["roi"], -r["eligible_amount"], r["emi"], r["lender"]))
-            return best, f"lowest ROI among the lenders that cover {inr(need)}"
-    best = max(eligible, key=lambda r: (r["eligible_amount"], -r["roi"], r["lender"]))
-    return best, "highest eligible amount"
+    highest eligible amount. The first of the suggestion's banks."""
+    need = _need(loan, bt_amount)
+    covering, rest = _ranked(results, need)
+    if covering:
+        return covering[0], f"lowest ROI among the lenders that cover {inr(need)}"
+    if rest:
+        return rest[0], "highest eligible amount"
+    return None, None
+
+
+def _pct_text(roi: float) -> str:
+    return f"{_number(dec(roi))}%"
+
+
+def _decline_reason(row: dict) -> str:
+    """One line on why a lender says no: its first reason; a company not in the lender's list
+    (CAT U by the policy sheet) is named first, and how many more reasons Details has."""
+    reasons = list(row.get("reasons") or [])
+    first = reasons[0] if reasons else row.get("status_label") or row["status"]
+    if first.startswith("Not eligible: "):
+        first = first[len("Not eligible: ") :]
+    sheet = row.get("policy_sheet") or {}
+    if sheet.get("company_unlisted"):
+        first = f"{sheet['category_code']}: company not in {row['lender']}'s list; {first}"
+    if len(reasons) > 1:
+        first += f" (+{len(reasons) - 1} more in Details)"
+    return first
+
+
+def _suggestion(results: list[dict], loan: dict, bt_amount: Decimal) -> dict:
+    """Which banks will sanction: the eligible banks ranked as _best_lender picks (the first is the
+    best lender), each with its amount, ROI, EMI, tenure and one line on why; and the banks that say
+    no, each with one line on why."""
+    need = _need(loan, bt_amount)
+    covering, rest = _ranked(results, need)
+    banks = []
+    for row in covering + rest:
+        roi = _pct_text(row["roi"])
+        if row in covering:
+            why = (
+                f"Lowest ROI ({roi}) that covers {inr(need)}" if row is covering[0] else f"Covers {inr(need)} at {roi}"
+            )
+        elif need > 0:
+            why = f"Up to {inr(row['eligible_amount'])}: less than the {inr(need)} needed"
+        elif row is rest[0]:
+            why = f"Highest eligible amount, at {roi}"
+        else:
+            why = f"Eligible up to {inr(row['eligible_amount'])} at {roi}"
+        banks.append(
+            {
+                "lender": row["lender"],
+                "lender_id": row["lender_id"],
+                "eligible_amount": row["eligible_amount"],
+                "roi": row["roi"],
+                "emi": row["emi"],
+                "tenure_months": row["tenure_months"],
+                "covers_need": row in covering,
+                "label": row.get("label"),
+                "why": why,
+            }
+        )
+    shown = {b["lender_id"] for b in banks}
+    declined = [
+        {
+            "lender": row["lender"],
+            "lender_id": row["lender_id"],
+            "status": row["status"],
+            "label": row.get("label"),
+            "reason": _decline_reason(row),
+        }
+        for row in results
+        if row["lender_id"] not in shown
+    ]
+    return {"need": money(need) if need > 0 else None, "banks": banks, "declined": declined}
 
 
 def calculate(
@@ -2075,6 +2160,7 @@ def calculate(
             for lender in book.lenders
         ]
         best, why = _best_lender(results, loan, obligations["bt_amount"])
+        suggestion = _suggestion(results, loan, obligations["bt_amount"])
         other_monthly = sum((o["monthly"] for o in income["others"]), Decimal(0))
 
     disclaimers = [
@@ -2132,6 +2218,8 @@ def calculate(
         "best_lender": best["lender"] if best else None,
         "best_lender_id": best["lender_id"] if best else None,
         "best_lender_reason": why,
+        # "Suggested banks": the eligible banks ranked (the first is best_lender) and those saying no.
+        "suggestion": suggestion,
         "notes": notes,
         "disclaimers": disclaimers,
     }

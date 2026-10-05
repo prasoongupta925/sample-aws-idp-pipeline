@@ -46,6 +46,7 @@ import {
   sourceKind,
 } from './fields';
 import { describeEligibilityError } from './errors';
+import SuggestedBanks from './SuggestedBanks';
 
 // Renders POST .../eligibility/calculate as returned: every amount, EMI and
 // ratio comes from the backend's deterministic formulas.
@@ -1169,6 +1170,8 @@ export default function LendersSection({
               {calculateButton}
             </div>
           )}
+
+          <SuggestedBanks suggestion={result.suggestion} />
 
           <dl className="grid grid-cols-1 gap-1.5 @sm:grid-cols-3">
             <SummaryTile
