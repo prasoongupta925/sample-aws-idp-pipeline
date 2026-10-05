@@ -69,7 +69,14 @@ TOOL_SCHEMA = {
                            'rent_agreement = rent / leave and licence agreement; pension_slip = pension '
                            'payment slip; other = anything else',
         },
-        'applicant_name': {**_STR, 'description': 'Applicant / employee / account-holder full name exactly as printed'},
+        'applicant_name': {**_STR, 'description': 'Applicant / employee / account-holder full name exactly as printed. '
+                                                  'Identity documents (PAN card, Aadhaar, passport, voter ID, driving '
+                                                  "licence): the CARD HOLDER's name, the line labelled Name; never the "
+                                                  "line labelled Father's Name, Father / Husband Name, S/O, D/O, W/O, "
+                                                  'C/O or a guardian'},
+        'father_or_spouse_name': {**_STR, 'description': "Identity documents / loan application: the line labelled "
+                                                         "Father's Name, Father / Husband Name, S/O, D/O, W/O, C/O "
+                                                         'or guardian, exactly as printed; never the applicant'},
         'pan': {**_STR, 'description': 'PAN exactly as printed (10 chars), omit if not on the document'},
         'masked_aadhaar_last4': {**_STR, 'description': 'Last 4 digits of the masked Aadhaar, omit if absent'},
         'employer': {**_STR, 'description': 'Employer name exactly as printed; omit on bank statements, credit '
@@ -242,6 +249,7 @@ LIST_FIELDS = ('salary_credits', 'recurring_debits', 'declared_existing_emis', '
 # declares on a loan application is not rental income).
 _APPLICANT_DOCS = ('loan_application', 'identity_details')
 DOC_TYPE_FIELDS = {
+    'father_or_spouse_name': _APPLICANT_DOCS,
     **dict.fromkeys(('mobile', 'dob', 'current_address', 'current_pincode', 'permanent_address',
                      'permanent_pincode', 'house_ownership', 'employment_type', 'company'), _APPLICANT_DOCS),
     **dict.fromkeys(('bonus', 'incentive'), ('salary_slip',)),

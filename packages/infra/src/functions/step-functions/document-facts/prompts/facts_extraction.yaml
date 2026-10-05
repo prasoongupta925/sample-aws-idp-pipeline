@@ -15,6 +15,10 @@ system_prompt: >-
   monthly is not an EMI.
   Loan applications and identity details: also copy the mobile number, date of birth, current and permanent
   address with their pincodes, house ownership, employment type and company (the employer).
+  Identity documents (PAN card, Aadhaar, passport, voter ID, driving licence): applicant_name is the card holder's
+  name (the line labelled Name); put the line labelled Father's Name, Father / Husband Name, S/O, D/O, W/O, C/O or
+  guardian in father_or_spouse_name, never in applicant_name. PAN cards: pan is the 10-character PAN (AAAAA9999A)
+  printed on the card.
   Salary slips: bonus and incentive are the amounts paid in that month.
   Form-16 / ITR: other and rental income are the year's income from other sources and from house property.
   Rent agreements: the applicant is the landlord; applicant_name and PAN are the landlord's.

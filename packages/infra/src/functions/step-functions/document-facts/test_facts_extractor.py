@@ -42,6 +42,10 @@ OBLIGATIONS_PROMPT = (
 CIBIL_PAGE_PROMPT = (
     ' Loan applications and identity details: also copy the mobile number, date of birth, current and '
     'permanent address with their pincodes, house ownership, employment type and company (the employer). '
+    "Identity documents (PAN card, Aadhaar, passport, voter ID, driving licence): applicant_name is the card holder's "
+    "name (the line labelled Name); put the line labelled Father's Name, Father / Husband Name, S/O, D/O, W/O, C/O or "
+    'guardian in father_or_spouse_name, never in applicant_name. PAN cards: pan is the 10-character PAN (AAAAA9999A) '
+    'printed on the card. '
     'Salary slips: bonus and incentive are the amounts paid in that month. Form-16 / ITR: other and rental '
     "income are the year's income from other sources and from house property. Rent agreements: the applicant "
     "is the landlord; applicant_name and PAN are the landlord's. Pension slips: monthly_pension is the net "
@@ -100,7 +104,7 @@ def test_tool_schema_shape():
                               'monthly_rent', 'monthly_pension', 'credit_score')
     assert LIST_FIELDS == ('salary_credits', 'recurring_debits', 'declared_existing_emis', 'enquiries', 'tradelines')
     assert FIELD_NAMES == [
-        'doc_type', 'applicant_name', 'pan', 'masked_aadhaar_last4', 'employer', 'month',
+        'doc_type', 'applicant_name', 'father_or_spouse_name', 'pan', 'masked_aadhaar_last4', 'employer', 'month',
         'gross_salary', 'net_salary', 'statement_from', 'statement_to', 'salary_credits',
         'recurring_debits', 'declared_net_salary', 'declared_existing_emis',
         'declared_total_existing_emi', 'loan_amount', 'loan_tenure_months', 'product', 'financial_year',
@@ -145,11 +149,26 @@ def test_cibil_page_fields_in_tool_schema():
 
 def test_every_cibil_page_field_belongs_to_document_types():
     new_fields = FIELD_NAMES[FIELD_NAMES.index('mobile'):]
-    assert set(DOC_TYPE_FIELDS) == set(new_fields)
+    assert set(DOC_TYPE_FIELDS) == set(new_fields) | {'father_or_spouse_name'}
     assert all(set(types) <= set(DOC_TYPES) - {'other'} for types in DOC_TYPE_FIELDS.values())
     assert DOC_TYPE_FIELDS['mobile'] == ('loan_application', 'identity_details')
     assert DOC_TYPE_FIELDS['tradelines'] == ('credit_report',)
     assert DOC_TYPE_FIELDS['monthly_rent'] == ('rent_agreement',)
+
+
+def test_identity_documents_name_the_card_holder_not_the_father():
+    props = TOOL_SCHEMA['properties']
+    assert props['father_or_spouse_name']['type'] == 'string'
+    assert 'father_or_spouse_name' not in TOOL_SCHEMA['required']
+    holder = props['applicant_name']['description']
+    assert "CARD HOLDER's name" in holder
+    for label in ("Father's Name", 'Father / Husband Name', 'S/O', 'D/O', 'W/O', 'C/O', 'guardian'):
+        assert label in holder
+        assert label in props['father_or_spouse_name']['description']
+    assert DOC_TYPE_FIELDS['father_or_spouse_name'] == ('loan_application', 'identity_details')
+    prompt = load_prompts()['system_prompt']
+    assert 'never in applicant_name' in prompt
+    assert 'the 10-character PAN (AAAAA9999A) printed on the card' in prompt
 
 
 def test_obligation_fields_in_tool_schema():

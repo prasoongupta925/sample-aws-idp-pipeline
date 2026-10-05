@@ -6,6 +6,7 @@ obligations lists (recurring_debits, declared_existing_emis) and the CIBIL page
 fields (mobile, addresses and pincodes, house ownership, employment type, other
 income, rent agreements, pension slips, credit reports).
 """
+import logging
 import re
 from datetime import datetime
 
@@ -30,6 +31,8 @@ _MONTHS = {m: i for i, m in enumerate(
     ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'], 1)}
 
 _NULL_STRINGS = ('', 'null', 'none', 'n/a', 'na', '-', '–')
+
+logger = logging.getLogger(__name__)
 
 # '2025-26', '2025-2026', '2025/26', '2025 – 26'
 _FY_RE = re.compile(r'(\d{4})\s*[-/–—]\s*(\d{4}|\d{2})(?!\d)')
@@ -448,6 +451,7 @@ def normalise_fields(f: dict) -> dict:
             out[k] = None
     if out['doc_type'] not in DOC_TYPES:
         out['doc_type'] = 'other'
+    _drop_relation_name(out)
     for k in NUMERIC_FIELDS:
         out[k] = to_number(out[k])
     if out['pan']:
@@ -481,6 +485,25 @@ def normalise_fields(f: dict) -> dict:
     out['financial_year'] = normalise_fy(out['financial_year'])
     _normalise_cibil_fields(out)
     return out
+
+
+def _name_key(v) -> str:
+    return ' '.join(str(v).split()).casefold()
+
+
+def _drop_relation_name(out: dict) -> None:
+    """Drop an applicant_name that is the father's / spouse's name of the card (in place).
+
+    The PAN card prints the father's name under the holder's name; a model that
+    copies it into applicant_name would make the father a second applicant.
+    Only a count is logged, never a name.
+    """
+    out['father_or_spouse_name'] = _clean_str(out['father_or_spouse_name'])
+    name = out['applicant_name']
+    relation = out['father_or_spouse_name']
+    if name is not None and relation and _name_key(name) == _name_key(relation):
+        out['applicant_name'] = None
+        logger.info('dropped applicant_name equal to father_or_spouse_name on %d document(s)', 1)
 
 
 def _normalise_cibil_fields(out: dict) -> None:

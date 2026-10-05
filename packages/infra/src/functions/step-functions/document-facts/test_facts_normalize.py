@@ -2,6 +2,7 @@
 
 Run: python -m pytest -q   (from this folder)
 """
+import logging
 import os
 import sys
 from datetime import date
@@ -493,3 +494,32 @@ def test_enquiry_counts_need_the_report_date():
                                              ('none', None), (None, None), (True, None)])
 def test_to_count(value, expected):
     assert to_count(value) == expected
+
+
+def test_pan_card_father_name_is_never_the_applicant(caplog):
+    caplog.set_level(logging.INFO)
+    out = normalise_fields({'doc_type': 'identity_details', 'applicant_name': '  ramesh   KULKARNI ',
+                            'father_or_spouse_name': 'Ramesh Kulkarni', 'pan': 'abcpk1234q'})
+    assert out['applicant_name'] is None
+    assert out['father_or_spouse_name'] == 'Ramesh Kulkarni'
+    assert out['pan'] == 'ABCPK1234Q'
+    assert 'dropped applicant_name equal to father_or_spouse_name on 1 document(s)' in caplog.text
+    assert 'kulkarni' not in caplog.text.lower()  # only a count is logged, never a name
+
+
+def test_card_holder_name_kept_beside_the_father_name(caplog):
+    caplog.set_level(logging.INFO)
+    out = normalise_fields({'doc_type': 'identity_details', 'applicant_name': 'Sneha Ramesh Kulkarni',
+                            'father_or_spouse_name': 'Ramesh Kulkarni'})
+    assert out['applicant_name'] == 'Sneha Ramesh Kulkarni'
+    assert out['father_or_spouse_name'] == 'Ramesh Kulkarni'
+    assert 'dropped' not in caplog.text
+
+
+def test_father_or_spouse_name_only_on_applicant_documents():
+    out = normalise_fields({'doc_type': 'salary_slip', 'applicant_name': 'Ramesh Kulkarni',
+                            'father_or_spouse_name': 'Ramesh Kulkarni'})
+    assert out['applicant_name'] is None and out['father_or_spouse_name'] is None
+    out = normalise_fields({'doc_type': 'loan_application', 'applicant_name': 'Sneha Ramesh Kulkarni',
+                            'father_or_spouse_name': 'N/A'})
+    assert out['applicant_name'] == 'Sneha Ramesh Kulkarni' and out['father_or_spouse_name'] is None
