@@ -159,6 +159,7 @@ class PolicyWorkbook:
     banks: list[BankPolicy]
     effective_date: str | None = None  # ISO date
     effective_date_cell: str | None = None
+    grid_sheet: str = "Sheet1"
     warnings: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
@@ -172,6 +173,44 @@ class PolicyWorkbook:
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
+
+    @classmethod
+    def from_json(cls, data: dict[str, Any]) -> PolicyWorkbook:
+        """The workbook to_json() gave (as stored with an upload)."""
+
+        def value(v: dict) -> Value:
+            return Value(value=v.get("value"), cell=str(v.get("cell") or ""))
+
+        def slab(s: dict) -> Slab:
+            values = {k: {c: value(v) for c, v in col.items()} for k, col in (s.get("values") or {}).items()}
+            return Slab(start=int(s["start"]), row=int(s["row"]), values=values)
+
+        def rules(r: dict | None) -> BankRules | None:
+            if r is None:
+                return None
+            bonus = r.get("bonus")
+            return BankRules(
+                **{k: v for k, v in r.items() if k != "bonus"},
+                bonus=Bonus(**bonus) if bonus else None,
+            )
+
+        return cls(
+            categories=[Category(**c) for c in data.get("categories") or []],
+            banks=[
+                BankPolicy(
+                    lender_id=b["lender_id"],
+                    name=b["name"],
+                    slabs=[slab(s) for s in b.get("slabs") or []],
+                    rules=rules(b.get("rules")),
+                )
+                for b in data.get("banks") or []
+            ],
+            effective_date=data.get("effective_date"),
+            effective_date_cell=data.get("effective_date_cell"),
+            grid_sheet=str(data.get("grid_sheet") or "Sheet1"),
+            warnings=list(data.get("warnings") or []),
+            notes=list(data.get("notes") or []),
+        )
 
 
 # ---------------------------------------------------------------- reading the xlsx
@@ -793,6 +832,7 @@ def parse_policy_workbook(data: bytes, filename: str | None = None) -> PolicyWor
         if grid is None:
             raise PolicyWorkbookError("no sheet with the ROI / FOIR grid")
         out.notes.append(f"the grid is read from the sheet {grid.name!r}")
+    out.grid_sheet = grid.name
     out.banks = _parse_grid(grid, out)
     rules = sheets.get("Sheet2") or next((sheets[n] for n in names if sheets[n] is not grid), None)
     if rules is None:

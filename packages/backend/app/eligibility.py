@@ -578,6 +578,57 @@ class FoirGrid(_Data):
         return f"{start}–{_grouped(str(self.slab_starts[index + 1] - 1))}"
 
 
+SHEET_PARAMETERS = {
+    "roi": "ROI",
+    "foir": "FOIR",
+    "multiplier": "Multiplier",
+    "max_funding": "Maximum Funding",
+    "max_tenure_months": "Maximum Tenure",
+    "calculation_tenure_months": "Tenure for Eligibility Calculation",
+}
+
+
+@dataclass(frozen=True, kw_only=True)
+class SheetGrid(_Data):
+    """A lender's terms from the client's policy workbook (app/policy_workbook.py): per net monthly
+    salary slab (rows, starting at `slab_starts`) and company category (`categories`, as the app
+    shows them; `codes` as the sheet writes them), the value of each SHEET_PARAMETERS key and the
+    cell it came from. Values are as in the sheet: ROI and FOIR as fractions (0.13 = 13%)."""
+
+    label: str = _spec(_text(min_length=1))
+    bank: str = _spec(_text(min_length=1, max_length=100))
+    sheet: str = _spec(_text(min_length=1, max_length=100), "Sheet1")
+    slab_starts: tuple[int, ...] = _spec(_items(_whole(ge=0), min_length=1))
+    categories: tuple[str, ...] = _spec(_items(_text(min_length=1, max_length=40), min_length=1))
+    codes: tuple[str, ...] = _spec(_items(_text(min_length=1, max_length=40), min_length=1))
+    unlisted_category: str | None = _spec(_optional(_text()), None)
+    values: dict[str, dict[str, tuple[float | None, ...]]] = _spec(_mapping(_mapping(_items(_optional(_real(ge=0))))))
+    cells: dict[str, dict[str, tuple[str, ...]]] = _spec(_mapping(_mapping(_items(_text(max_length=12)))))
+
+    def _consistent(self) -> None:
+        if list(self.slab_starts) != sorted(set(self.slab_starts)):
+            raise ValueError("slab_starts must increase")
+        if len(self.codes) != len(self.categories):
+            raise ValueError("one code per category")
+        if self.unlisted_category is not None and self.unlisted_category not in self.categories:
+            raise ValueError("unlisted_category is not one of the categories")
+        for key in SHEET_PARAMETERS:
+            for table in (self.values, self.cells):
+                column = table.get(key)
+                if column is None or set(column) != set(self.categories):
+                    raise ValueError(f"{key} needs one column per category")
+                if any(len(v) != len(self.slab_starts) for v in column.values()):
+                    raise ValueError(f"{key} needs one value per slab")
+
+    def slab(self, salary: Any) -> int | None:
+        """The index of the highest slab start at or below `salary`; None below the first."""
+        below = [i for i, start in enumerate(self.slab_starts) if start <= dec(salary)]
+        return below[-1] if below else None
+
+    def code(self, category: str) -> str:
+        return self.codes[self.categories.index(category)]
+
+
 @dataclass(frozen=True, kw_only=True)
 class LenderPolicy(_Data):
     id: str = _spec(_text(pattern=r"[a-z0-9_]{1,64}"))
@@ -604,8 +655,15 @@ class LenderPolicy(_Data):
     income_consideration_pct: IncomeConsideration = _spec(_record(IncomeConsideration))
     # Counted in the APR and the total cost; none when not set.
     processing_fee: ProcessingFee | None = _spec(_optional(_record(ProcessingFee)), None)
+    # The client's policy workbook: ROI, FOIR, multiplier, maximum funding and tenures by slab and
+    # category, used instead of the fields above (which then only hold its first slab's values).
+    sheet: SheetGrid | None = _spec(_optional(_record(SheetGrid)), None)
 
     def _consistent(self) -> None:
+        if self.sheet is not None:
+            unknown = [c for c in self.sheet.categories if c not in self.company_categories]
+            if unknown:
+                raise ValueError(f"sheet categories {unknown} are not company categories")
         unknown = [t for t in self.employment_types if t not in EMPLOYMENT_TYPES]
         if unknown:
             raise ValueError(f"unknown employment types {unknown}")
@@ -1051,6 +1109,96 @@ def _obligations(tradelines: list[dict], bank_emis: list[dict], notes: list[str]
     }
 
 
+def _sheet_terms(
+    lender: LenderPolicy,
+    category: str | None,
+    company: str | None,
+    salary: Decimal | None,
+    reasons: list[str],
+    notes: list[str],
+) -> tuple[LenderPolicy, dict | None]:
+    """The lender's terms from its policy sheet at this net monthly salary and company category:
+    the lender with the sheet's ROI, maximum funding and tenures, and what was used (slab, category,
+    each value with its cell); else the lender unchanged and None, with why it is not eligible.
+
+    A company not in the lender's company list, or with a category the sheet has no column for,
+    gets the sheet's unlisted category (CAT U)."""
+    sheet = lender.sheet
+    if salary is None:
+        return lender, None
+    slab = sheet.slab(salary)
+    if slab is None:
+        reasons.append(
+            f"Not eligible: income {inr(salary)} is below {sheet.bank}'s minimum {inr(sheet.slab_starts[0])} "
+            f"({sheet.label})"
+        )
+        return lender, None
+    if category not in sheet.categories:
+        if sheet.unlisted_category is None:
+            reasons.append(f"{sheet.bank}'s policy sheet has no category for a company not in its list")
+            return lender, None
+        if category is not None:
+            notes.append(
+                f"{category} is not a category of {sheet.bank}'s policy sheet: {sheet.unlisted_category} applies"
+            )
+        elif company:
+            notes.append(
+                f"{sheet.code(sheet.unlisted_category)}: '{company}' is not in {sheet.bank}'s company list, "
+                f"so {sheet.unlisted_category} applies"
+            )
+        category = sheet.unlisted_category
+    code = sheet.code(category)
+    start = sheet.slab_starts[slab]
+    values: dict[str, dict] = {}
+    for key, name in SHEET_PARAMETERS.items():
+        value, cell = sheet.values[key][category][slab], sheet.cells[key][category][slab]
+        if value is None or (key != "foir" and key != "roi" and value <= 0):
+            reasons.append(f"{sheet.bank}'s policy sheet has no {name} for slab {_grouped(str(start))}, {code}")
+            return lender, None
+        if key in ("roi", "foir"):
+            text = f"{_number(dec(value) * 100)}%"
+        elif key == "max_funding":
+            text = inr(value)
+        elif key.endswith("_months"):
+            text = f"{_number(dec(value))} months"
+        else:
+            text = _number(dec(value))
+        values[key] = {
+            "value": value,
+            "cell": cell,
+            "text": f"{name} {text} ({sheet.sheet}, {sheet.bank}, slab {_grouped(str(start))}, {code}, cell {cell})",
+        }
+    max_tenure = int(values["max_tenure_months"]["value"])
+    tenure = int(values["calculation_tenure_months"]["value"])
+    if tenure > max_tenure:
+        notes.append(
+            f"{sheet.bank}'s calculation tenure {tenure} months is more than its maximum tenure {max_tenure}: "
+            f"{max_tenure} months is used"
+        )
+        tenure = max_tenure
+    funding = float(values["max_funding"]["value"])
+    updated = lender.model_copy(
+        update={
+            "roi": float(dec(values["roi"]["value"]) * 100),
+            "roi_max": None,
+            "max_amount": funding,
+            "min_amount": min(lender.min_amount, funding),
+            "max_tenure_months": max_tenure,
+            "calculation_tenure_months": tenure,
+            "min_tenure_months": min(lender.min_tenure_months, tenure),
+        }
+    )
+    terms = {
+        "label": sheet.label,
+        "bank": sheet.bank,
+        "slab_start": start,
+        "category": category,
+        "category_code": code,
+        "values": values,
+    }
+    return updated, terms
+
+
 def _calculation_tenure(lender: LenderPolicy, requested: int | None, notes: list[str]) -> tuple[int, str]:
     """The per-lakh EMI's tenure and its source: the lender's calculation tenure ("policy"), or the
     requested tenure when that is shorter ("table"), raised to the lender's min tenure ("policy")."""
@@ -1119,6 +1267,8 @@ def _lender_result(
     serviceable = book.serviceable(lender.id, pincode) if pincode else None
     if not pincode:
         reasons.append("Pincode not entered: serviceability cannot be checked")
+    elif serviceable is None:
+        notes.append(f"No pincode list covers {lender.name}: serviceability not checked")
 
     employment_type = profile.get("employment_type")
     if employment_type is None:
@@ -1129,7 +1279,7 @@ def _lender_result(
         )
 
     foir, multiplier = dec(lender.foir), dec(lender.multiplier)
-    category, company_policy = None, "base"
+    category, company_policy, listed = None, "base", None
     company_name = profile.get("company")
     company = book.find_company(company_name)
     if not company_name:
@@ -1137,7 +1287,10 @@ def _lender_result(
     else:
         shown = company.name if company else company_name
         listed = company.categories.get(lender.id) if company else None
-        if listed is not None:
+        if listed is not None and lender.sheet is not None:
+            # The sheet prices the category (_sheet_terms); one it does not have is unlisted there.
+            category, company_policy = listed, "category"
+        elif listed is not None:
             policy = lender.company_categories[listed]
             foir, multiplier = dec(policy.foir), dec(policy.multiplier)
             category, company_policy = listed, "category"
@@ -1145,10 +1298,11 @@ def _lender_result(
             foir = dec(lender.unlisted_company.foir)
             multiplier = dec(lender.unlisted_company.multiplier)
             company_policy = "unlisted"
-            notes.append(
-                f"'{shown}' is not in {lender.name}'s company list: its unlisted-company policy applies "
-                f"(FOIR {_pct(foir)}, multiplier {_number(multiplier)})"
-            )
+            if lender.sheet is None:
+                notes.append(
+                    f"'{shown}' is not in {lender.name}'s company list: its unlisted-company policy applies "
+                    f"(FOIR {_pct(foir)}, multiplier {_number(multiplier)})"
+                )
         else:
             company_policy = "unlisted"
             reasons.append(
@@ -1156,6 +1310,15 @@ def _lender_result(
             )
     if lender.foir_grid is not None and category is not None and income["net"] is not None:
         foir = _grid_foir(lender, category, income["net"], foir, reasons, notes)
+    sheet_terms = None
+    if lender.sheet is not None:
+        shown = (company.name if company else company_name) if company_name else None
+        lender, sheet_terms = _sheet_terms(lender, category, shown, income["net"], reasons, notes)
+        if sheet_terms is not None:
+            foir = dec(sheet_terms["values"]["foir"]["value"])
+            multiplier = dec(sheet_terms["values"]["multiplier"]["value"])
+            category = sheet_terms["category"]
+            company_policy = "category" if company_policy == "category" and category == listed else "unlisted"
 
     score = cibil.get("score")
     if score is None:
@@ -1306,6 +1469,9 @@ def _lender_result(
             "total_cost": "formula",
         },
         "label": book.label_of(lender.id),
+        # The cells of the client's policy sheet this result used (slab, category, each value); null:
+        # the lender has no sheet, or the sheet could not price this applicant (see reasons).
+        "policy_sheet": sheet_terms,
     }
 
 

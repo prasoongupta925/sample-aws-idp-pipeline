@@ -187,8 +187,10 @@ def _category(lender: eligibility.LenderPolicy, value: str) -> str | None:
     return next((c for c in lender.company_categories if _header_key(c).replace(" ", "") == wanted), None)
 
 
-def parse_csv(kind: Kind, data: bytes) -> ParsedList:
-    """The rows of an uploaded list, checked; CsvError lists what is wrong."""
+def parse_csv(kind: Kind, data: bytes, book: Any = None) -> ParsedList:
+    """The rows of an uploaded list, checked; CsvError lists what is wrong. Lenders and their
+    categories are those of `book` (the policy book with the stored policy sheet, effective_book();
+    the SAMPLE policy book by default)."""
     if len(data) > MAX_UPLOAD_BYTES:
         raise CsvError(f"The file is over {MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
     if data.startswith(b"PK\x03\x04"):
@@ -200,17 +202,17 @@ def parse_csv(kind: Kind, data: bytes) -> ParsedList:
     else:
         delimiter = max((",", ";", "\t"), key=first_line.count)
     try:
-        return _parse_rows(kind, csv.reader(io.StringIO(text, newline=""), delimiter=delimiter))
+        return _parse_rows(kind, csv.reader(io.StringIO(text, newline=""), delimiter=delimiter), book)
     except csv.Error as e:
         raise CsvError(f"The file is not a readable CSV ({e})") from e
 
 
-def _parse_rows(kind: Kind, reader) -> ParsedList:
+def _parse_rows(kind: Kind, reader, book: Any = None) -> ParsedList:
     header = next(reader, None)
     if not header or not any(h.strip() for h in header):
         raise CsvError("The file is empty")
     columns = _columns(kind, header)
-    book = eligibility.load_policy_book()
+    book = book or eligibility.load_policy_book()
 
     rows: list[list] = []
     errors: list[str] = []
@@ -706,8 +708,18 @@ def reset_cache() -> None:
         _cache.clear()
 
 
+# The project id of the app-wide lists (an admin's upload, used by every project): only the
+# company_categories kind, under PK = APP#REFDATA. A project's own list of a kind comes first.
+APP_SCOPE = "*"
+APP_KINDS: tuple[Kind, ...] = ("company_categories",)
+
+
+def _pk(project_id: str) -> str:
+    return "APP#REFDATA" if project_id == APP_SCOPE else f"PROJ#{project_id}"
+
+
 def _header_key_of(project_id: str, kind: str) -> dict[str, str]:
-    return {"PK": f"PROJ#{project_id}", "SK": f"{SK_PREFIX}{kind}"}
+    return {"PK": _pk(project_id), "SK": f"{SK_PREFIX}{kind}"}
 
 
 def _chunk_prefix(kind: str, upload_id: str) -> str:
@@ -744,8 +756,7 @@ def _header(project_id: str, kind: str, now: dt.datetime) -> dict[str, Any] | No
 def _delete_chunks(project_id: str, kind: str, upload_id: str) -> None:
     table = get_table()
     kwargs: dict[str, Any] = {
-        "KeyConditionExpression": Key("PK").eq(f"PROJ#{project_id}")
-        & Key("SK").begins_with(_chunk_prefix(kind, upload_id)),
+        "KeyConditionExpression": Key("PK").eq(_pk(project_id)) & Key("SK").begins_with(_chunk_prefix(kind, upload_id)),
         "ProjectionExpression": "PK, SK",
     }
     while True:
@@ -767,7 +778,7 @@ def save(project_id: str, parsed: ParsedList, filename: str | None, now: dt.date
     for n, chunk in enumerate(chunks):
         table.put_item(
             Item={
-                "PK": f"PROJ#{project_id}",
+                "PK": _pk(project_id),
                 "SK": f"{_chunk_prefix(parsed.kind, upload_id)}{n:04d}",
                 "rows": chunk,
                 TTL_ATTRIBUTE: expires_at,
@@ -819,8 +830,7 @@ def load(project_id: str, kind: Kind, now: dt.datetime) -> StoredList | None:
     table = get_table()
     rows: list[list] = []
     kwargs: dict[str, Any] = {
-        "KeyConditionExpression": Key("PK").eq(f"PROJ#{project_id}")
-        & Key("SK").begins_with(_chunk_prefix(kind, upload_id)),
+        "KeyConditionExpression": Key("PK").eq(_pk(project_id)) & Key("SK").begins_with(_chunk_prefix(kind, upload_id)),
         "ConsistentRead": True,
     }
     while True:
@@ -882,26 +892,55 @@ class CalculationLists:
     category), any other lender by the shipped SAMPLE lists. `used` collects the lenders a list
     answered for (by kind), for the result's notes."""
 
-    def __init__(self, serviceability: StoredList | None, companies: StoredList | None, grid: StoredList | None = None):
+    def __init__(
+        self,
+        serviceability: StoredList | None,
+        companies: StoredList | None,
+        grid: StoredList | None = None,
+        sheet: Any = None,
+    ):
         self.serviceability = serviceability
         self.companies = companies
         self.grid = grid
-        self.used: dict[Kind, set[str]] = {
+        self.sheet = sheet  # lender_policy.StoredPolicy: the app's policy workbook
+        self.used: dict[str, set[str]] = {
             "pincode_serviceability": set(),
             "company_categories": set(),
             "lender_grid": set(),
+            "policy_sheet": set(),
         }
 
+    def sheet_policies(self) -> dict[str, eligibility.LenderPolicy]:
+        return self.sheet.policies() if self.sheet is not None else {}
+
     def policy(self, lender: eligibility.LenderPolicy) -> eligibility.LenderPolicy:
-        """The lender's policy from the uploaded grid, else `lender` (the sample policy)."""
+        """The lender's policy from the policy workbook, else the uploaded grid, else `lender` (the
+        sample policy)."""
+        sheet = self.sheet_policies().get(lender.id)
+        if sheet is not None:
+            self.used["policy_sheet"].add(sheet.name)
+            return sheet
         own = self.grid.policy(lender.id) if self.grid else None
         if own is None:
             return lender
         self.used["lender_grid"].add(own.name)
         return own
 
+    def extra_lenders(self, known: Any) -> list[eligibility.LenderPolicy]:
+        """The workbook's banks the policy file does not have (Bandhan Bank, IndusInd Bank)."""
+        ids = {lender.id for lender in known}
+        out = [p for lender_id, p in self.sheet_policies().items() if lender_id not in ids]
+        for p in out:
+            self.used["policy_sheet"].add(p.name)
+        return out
+
     def grid_label(self, lender_id: str) -> str | None:
-        """The label of a lender calculated with the uploaded grid; None for the others."""
+        """The label of a lender calculated with the policy workbook or the uploaded grid; None for
+        the others."""
+        if lender_id in self.sheet_policies():
+            from app.lender_policy import SOURCE_LABEL
+
+            return SOURCE_LABEL
         if self.grid is None or self.grid.policy(lender_id) is None:
             return None
         return self.grid.source()["name"]
@@ -930,12 +969,14 @@ class CalculationLists:
             ("pincode_serviceability", self.serviceability),
             ("company_categories", self.companies),
             ("lender_grid", self.grid),
+            ("policy_sheet", self.sheet),
         ):
             if stored and self.used[kind]:
                 what = {
                     "pincode_serviceability": "Serviceability",
                     "company_categories": "Company category",
                     "lender_grid": "Policy",
+                    "policy_sheet": "Policy",
                 }[kind]
                 source = stored.source()["name"]
                 out.append(f"{what} of {', '.join(sorted(self.used[kind]))} from {source[0].lower()}{source[1:]}")
@@ -943,13 +984,17 @@ class CalculationLists:
 
 
 def calculation_lists(project_id: str, now: dt.datetime) -> CalculationLists | None:
-    """The project's uploaded serviceability and company lists and lender grid; None when none is uploaded."""
+    """The project's uploaded serviceability and company lists (else the app-wide company list) and
+    lender grid, and the app's policy workbook; None when none is uploaded."""
+    from app import lender_policy
+
     serviceability = load(project_id, "pincode_serviceability", now)
-    companies = load(project_id, "company_categories", now)
+    companies = load(project_id, "company_categories", now) or load(APP_SCOPE, "company_categories", now)
     grid = load(project_id, "lender_grid", now)
-    if serviceability is None and companies is None and grid is None:
+    sheet = lender_policy.load(now)
+    if serviceability is None and companies is None and grid is None and sheet is None:
         return None
-    return CalculationLists(serviceability, companies, grid)
+    return CalculationLists(serviceability, companies, grid, sheet)
 
 
 class CalculationBook:
@@ -966,23 +1011,34 @@ class CalculationBook:
 
     @property
     def lenders(self) -> tuple[eligibility.LenderPolicy, ...]:
-        return tuple(self.lists.policy(lender) for lender in self._book.lenders)
+        known = self._book.lenders
+        return (*(self.lists.policy(lender) for lender in known), *self.lists.extra_lenders(known))
 
     def lender(self, id_or_name: str | None) -> eligibility.LenderPolicy | None:
         lender = self._book.lender(id_or_name)
-        return self.lists.policy(lender) if lender else None
+        if lender is not None:
+            return self.lists.policy(lender)
+        key = eligibility._enum_key(id_or_name or "")
+        extra = self.lists.extra_lenders(self._book.lenders)
+        return next((p for p in extra if key and key in (p.id, eligibility._enum_key(p.name))), None)
 
     def label_of(self, lender_id: str) -> str | None:
         return self.lists.grid_label(lender_id) or self._book.label_of(lender_id)
 
-    def serviceable(self, lender_id: str, pincode: str) -> bool:
+    def serviceable(self, lender_id: str, pincode: str) -> bool | None:
+        """None: a bank only the policy workbook has, with no serviceability list (not checked)."""
         lender = self._book.lender(lender_id)
-        own = self.lists.serviceable(lender, pincode) if lender else None
+        if lender is None:
+            lender = self.lender(lender_id)
+            own = self.lists.serviceable(lender, pincode) if lender else None
+            return own
+        own = self.lists.serviceable(lender, pincode)
         return self._book.serviceable(lender_id, pincode) if own is None else own
 
     def find_company(self, name: str | None) -> eligibility.Company | None:
         company = self._book.find_company(name)
-        covered = [lender for lender in self._book.lenders if self.lists.covers_companies(lender)]
+        every = (*self._book.lenders, *self.lists.extra_lenders(self._book.lenders))
+        covered = [lender for lender in every if self.lists.covers_companies(lender)]
         if not covered or not (name or "").strip():
             return company
         names = [name, *([company.name, *company.aliases] if company else [])]
@@ -996,6 +1052,18 @@ class CalculationBook:
         if company is not None:
             return company.model_copy(update={"categories": categories})
         return eligibility.Company(name=" ".join(name.split()), categories=categories) if categories else None
+
+
+def effective_book(now: dt.datetime) -> Any:
+    """The policy book with the stored policy workbook's banks and categories (what a company list is
+    checked against); the SAMPLE book when there is none."""
+    from app import lender_policy
+
+    book = eligibility.load_policy_book()
+    stored = lender_policy.load(now)
+    if stored is None:
+        return book
+    return CalculationBook(book, CalculationLists(None, None, None, stored))
 
 
 def company_category(project_id: str, lender_id: str, company: str | None, now: dt.datetime) -> str | None:

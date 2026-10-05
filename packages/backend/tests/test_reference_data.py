@@ -11,7 +11,7 @@ import json
 import pytest
 from botocore.exceptions import ClientError
 
-from app import branches, eligibility, reference_data
+from app import branches, eligibility, lender_policy, reference_data
 from app.config import get_config
 from app.reference_data import CsvError, parse_csv
 
@@ -94,6 +94,7 @@ class FakeTable:
 def table(monkeypatch):
     fake = FakeTable()
     monkeypatch.setattr(reference_data, "get_table", lambda: fake)
+    monkeypatch.setattr(lender_policy, "get_table", lambda: fake)
     monkeypatch.setattr(get_config(), "retention_days", 7)
     reference_data.reset_cache()
     yield fake

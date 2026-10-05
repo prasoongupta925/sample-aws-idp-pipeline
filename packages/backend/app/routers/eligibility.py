@@ -695,6 +695,23 @@ class OtherIncomeConsidered(BaseModel):
     considered: float
 
 
+class PolicySheetValue(BaseModel):
+    value: float
+    cell: str = Field(description="The cell on the sheet, e.g. E5")
+    text: str = Field(description='"FOIR 60% (Sheet1, HDFC Bank, slab 35,000, CAT_B, cell L5)"')
+
+
+class PolicySheetTerms(BaseModel):
+    label: str = Field(description='"From Policy (your sheet)"')
+    bank: str = Field(description="The bank as the sheet names it")
+    slab_start: int = Field(description="The net monthly salary slab used (rupees)")
+    category: str = Field(description='As the app shows it: "CAT B"')
+    category_code: str = Field(description='As the sheet writes it: "CAT_B"')
+    values: dict[str, PolicySheetValue] = Field(
+        description="roi, foir, multiplier, max_funding, max_tenure_months, calculation_tenure_months"
+    )
+
+
 class LenderEligibility(BaseModel):
     lender: str
     lender_id: str
@@ -749,6 +766,11 @@ class LenderEligibility(BaseModel):
         description="policy = From Policy, formula = Formula Calculation, table = From Table"
     )
     label: str | None
+    policy_sheet: PolicySheetTerms | None = Field(
+        default=None,
+        description="The cells of your policy sheet this result used; null: the lender has none, or the sheet "
+        "could not price this applicant",
+    )
 
 
 class OtherIncomeRow(BaseModel):
