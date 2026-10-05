@@ -158,10 +158,10 @@ def test_save_keeps_the_original_bytes_and_the_parsed_policy(store, client):
     current = response.json()["current"]
     assert current["filename"] == "Policy.xlsx"
     assert current["effective_date"] == "2026-07-01"
-    assert current["reupload_by"] == "12 Oct 2026"
+    assert current["reupload_by"] is None and current["expires_at"] is None
     assert current["size"] == len(data)
     header = table.items[("APP#LENDERPOLICY", "CURRENT")]
-    assert header["expires_at"] == int(NOW.timestamp()) + 7 * 86400
+    assert "expires_at" not in header  # no TTL: kept until replaced
     upload_id = header["upload_id"]
     original = s3.objects[(BUCKET, f"lender-policy/{upload_id}/original.xlsx")]
     assert original["Body"] == data and original["ContentType"] == XLSX
@@ -196,14 +196,16 @@ def test_a_new_upload_replaces_the_previous_one(store, client):
     assert client.get("/eligibility/lender-policy").json()["current"]["filename"] == "small.xlsx"
 
 
-def test_the_policy_expires_with_the_retention_period(store, client):
+def test_the_policy_is_kept_after_the_retention_period(store, client):
+    # Lender terms, not client data: kept until a new upload replaces it (the 7-day rule is for client data).
     table, _, clock = store
     post(client, real_bytes())
-    clock["now"] = NOW + dt.timedelta(days=7, seconds=1)
+    clock["now"] = NOW + dt.timedelta(days=60)
     lender_policy.reset_cache()
-    assert client.get("/eligibility/lender-policy").json()["current"] is None
-    assert lender_policy.load(clock["now"]) is None
-    assert client.get("/eligibility/lender-policy/download").status_code == 404
+    current = client.get("/eligibility/lender-policy").json()["current"]
+    assert current is not None and current["reupload_by"] is None
+    assert lender_policy.load(clock["now"]) is not None
+    assert client.get("/eligibility/lender-policy/download").status_code == 200
 
 
 def test_delete(store, client):
@@ -419,7 +421,8 @@ def test_the_calculation_lists_load_the_stored_policy(store, client):
     again = reference_data.calculation_lists("proj_x", NOW)
     assert again.sheet_policies()["hdfc_bank"] == lists.sheet_policies()["hdfc_bank"]
     # Past expiry: the sample policies apply again.
-    assert reference_data.calculation_lists("proj_x", NOW + dt.timedelta(days=8)) is None
+    kept = reference_data.calculation_lists("proj_x", NOW + dt.timedelta(days=8))
+    assert kept is not None and "hdfc_bank" in kept.sheet_policies()  # the sheet stays until replaced
 
 
 def test_lender_policies_of_a_synthetic_sheet(store):
@@ -461,3 +464,10 @@ def test_the_eligibility_api_uses_the_stored_policy(monkeypatch):
     shown = {lender["id"]: lender for lender in lenders.json()["lenders"]}
     assert shown["bandhan_bank"]["label"] == lender_policy.SOURCE_LABEL
     assert "CAT A+" in shown["hdfc_bank"]["company_categories"]
+
+
+def test_a_policy_without_ttl_is_kept_until_replaced():
+    now = dt.datetime(2027, 1, 1, tzinfo=dt.UTC)
+    assert not lender_policy._ttl_passed({"upload_id": "u1"}, now)
+    assert lender_policy._ttl_passed({"upload_id": "u1", "expires_at": Decimal(int(now.timestamp()) - 1)}, now)
+    assert not lender_policy._ttl_passed({"upload_id": "u1", "expires_at": Decimal(int(now.timestamp()) + 1)}, now)

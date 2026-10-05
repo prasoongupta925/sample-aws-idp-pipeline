@@ -54,8 +54,10 @@ _ADMIN = {403: {"model": ErrorResponse, "description": "Only admins can do this"
 class PolicyStatus(BaseModel):
     filename: str | None
     uploaded_at: str
-    expires_at: str = Field(description="When it is deleted (the retention period): re-upload needed by then")
-    reupload_by: str = Field(description='"12 Oct 2026"')
+    expires_at: str | None = Field(
+        default=None, description="None: kept until a new sheet replaces it (lender terms, not client data)"
+    )
+    reupload_by: str | None = Field(default=None, description="None: no re-upload needed")
     effective_date: str | None = Field(description="The workbook's date (Sheet2!SGQ1), ISO")
     size: int
     sha256: str = Field(description="Of the original file, as stored")

@@ -21,6 +21,7 @@ import LenderPolicyPanel, {
   parsePolicyPreview,
   policyValueText,
   removeLenderPolicy,
+  reuploadByText,
   roiRange,
   shortRupees,
   uploadLenderPolicy,
@@ -282,6 +283,11 @@ describe('requests', () => {
 });
 
 describe('wording', () => {
+  it('a policy kept until replaced has no re-upload date', () => {
+    expect(reuploadByText({ ...STATUS, expires_at: null, reupload_by: null })).toBeNull();
+    expect(reuploadByText(STATUS)).not.toBeNull();
+  });
+
   it('formats the sheet values', () => {
     expect(policyValueText('roi', 0.135)).toBe('13.5%');
     expect(policyValueText('foir', 0.5)).toBe('50%');

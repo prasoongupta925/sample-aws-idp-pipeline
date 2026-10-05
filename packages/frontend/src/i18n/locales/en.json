@@ -1779,6 +1779,7 @@
       "effective": "effective {{date}}",
       "noEffective": "no effective date in the file",
       "reuploadBy": "re-upload needed by {{date}}",
+      "keptUntilReplaced": "kept until you upload a new sheet",
       "banks": "Banks: {{banks}}",
       "none": "No policy uploaded: the sample policies are used.",
       "toCheck_one": "{{count}} thing to check",

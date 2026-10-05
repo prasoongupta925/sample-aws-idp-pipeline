@@ -693,8 +693,9 @@ def policy_header(packed=True, expires_at=NOW + WEEK):
         'upload_id': 'u1',
         'filename': 'Policy.xlsx',
         'uploaded_at': '2026-09-21T10:00:00+00:00',
-        'expires_at': Decimal(expires_at),
     }
+    if expires_at is not None:
+        item['expires_at'] = Decimal(expires_at)
     if packed:
         item[loan_tools.POLICY_ATTRIBUTE] = gzip.compress(json.dumps(_policy_json()).encode())
     return item
@@ -715,6 +716,16 @@ def test_the_stored_policy_sheet_prices_its_banks_and_ranks_them(monkeypatch):
     assert len(banks) + len(res['suggestion']['declined']) == len(res['per_lender'])
     first = next(line for line in res['summary'] if line.startswith('Suggested 1. '))
     assert banks[0]['lender'] in first and banks[0]['why'] in first
+
+
+def test_a_policy_sheet_without_ttl_is_kept_until_replaced(monkeypatch):
+    table = KeyTable([policy_header(expires_at=None), saved(RAHUL_PAN, example_inputs(net_income=60000.0))])
+
+    res = run(table, monkeypatch, applicant=RAHUL_PAN)
+
+    assert 'error' not in res, res
+    labels = {r['lender_id']: r['label'] for r in res['per_lender']}
+    assert labels['hdfc_bank'] == eligibility.SHEET_SOURCE_LABEL
 
 
 def test_an_expired_policy_sheet_is_not_used(monkeypatch):

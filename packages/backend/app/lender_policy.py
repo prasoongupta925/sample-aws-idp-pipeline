@@ -5,12 +5,13 @@ One current policy, for every project. An admin uploads the workbook (app/router
 it is read by app/policy_workbook.py (never executing a formula, refusing macro workbooks) and kept:
 
 - in S3, the document bucket under S3_PREFIX: {upload_id}/original.xlsx (the file's bytes exactly
-  as uploaded, for download) and {upload_id}/policy.json (what was read from it). The bucket expires
-  its objects after the retention period (CDK context retentionDays, default 7 days), and keys
-  outside projects/*/documents/* start no document processing.
+  as uploaded, for download) and {upload_id}/policy.json (what was read from it). Keys outside
+  projects/*/documents/* start no document processing, and the daily retention sweep deletes only
+  expired documents, so these objects stay.
 - in DynamoDB, PK = APP#LENDERPOLICY, SK = CURRENT: the upload's id, file name, size, SHA-256,
-  upload time, effective date, banks and warnings, and expires_at = upload time + the same
-  retention period (TTL). A policy past expires_at is not used: "re-upload needed by <date>".
+  upload time, effective date, banks and warnings. No TTL: the workbook holds lender terms, not
+  client data, so it is kept until a new upload replaces it or an admin removes it (the 7-day rule
+  is for client data). An older header that still has a TTL in the past is not used.
 
 A new upload writes its objects, then points the header at them, then deletes the previous
 upload's objects. The workbook holds lender terms only: no applicant data.
@@ -81,7 +82,7 @@ class StoredPolicy:
     upload_id: str
     filename: str | None
     uploaded_at: str
-    expires_at: int
+    expires_at: int | None
     size: int
     sha256: str
     workbook: PolicyWorkbook = field(repr=False)
@@ -95,14 +96,20 @@ class StoredPolicy:
                 print(f"lender-policy: {self.upload_id} not fully used ({len(problems)} problems)")
         return self._policies
 
-    def expires_on(self) -> str:
+    def expires_on(self) -> str | None:
+        if self.expires_at is None:
+            return None
         return dt.datetime.fromtimestamp(self.expires_at, dt.UTC).strftime("%d %b %Y")
 
     def source(self) -> dict[str, Any]:
         """The `sources` entry of an answer that used this policy."""
         return {
             "name": eligibility.sheet_source_name(self.filename, self.uploaded_at),
-            "licence": f"Your own data, deleted on {self.expires_on()}: re-upload needed by then",
+            "licence": (
+                "Your own bank rules (no client data): kept until you upload a new sheet"
+                if self.expires_at is None
+                else f"Your own data, deleted on {self.expires_on()}: re-upload needed by then"
+            ),
             "url": None,
         }
 
@@ -111,7 +118,9 @@ class StoredPolicy:
         return {
             "filename": self.filename,
             "uploaded_at": self.uploaded_at,
-            "expires_at": dt.datetime.fromtimestamp(self.expires_at, dt.UTC).isoformat(timespec="seconds"),
+            "expires_at": None
+            if self.expires_at is None
+            else dt.datetime.fromtimestamp(self.expires_at, dt.UTC).isoformat(timespec="seconds"),
             "reupload_by": self.expires_on(),
             "effective_date": self.workbook.effective_date,
             "size": self.size,
@@ -151,11 +160,17 @@ def _iso(ts: dt.datetime) -> str:
 
 
 def _header(now: dt.datetime) -> dict[str, Any] | None:
-    """The live header item, or None (also when past expires_at but not yet removed by TTL)."""
+    """The live header item, or None (also an older header whose TTL has passed, not yet removed)."""
     item = get_table().get_item(Key=HEADER_KEY, ConsistentRead=True).get("Item")
-    if not item or int(item.get(TTL_ATTRIBUTE) or 0) <= int(now.timestamp()):
+    if not item or _ttl_passed(item, now):
         return None
     return item
+
+
+def _ttl_passed(item: dict[str, Any], now: dt.datetime) -> bool:
+    """True for an older header written with a TTL that has passed; a header without one stays."""
+    ttl = item.get(TTL_ATTRIBUTE)
+    return ttl is not None and int(ttl) <= int(now.timestamp())
 
 
 def _delete_objects(upload_id: str) -> None:
@@ -169,7 +184,6 @@ def save(data: bytes, filename: str | None, workbook: PolicyWorkbook, now: dt.da
     bucket = _bucket()
     previous = _header(now)
     upload_id = uuid.uuid4().hex
-    expires_at = int(now.timestamp()) + get_config().retention_days * 86400
     s3 = get_s3_client()
     parsed = json.dumps(workbook.to_json(), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     s3.put_object(Bucket=bucket, Key=original_key(upload_id), Body=data, ContentType=XLSX_CONTENT_TYPE)
@@ -179,7 +193,7 @@ def save(data: bytes, filename: str | None, workbook: PolicyWorkbook, now: dt.da
         upload_id=upload_id,
         filename=filename,
         uploaded_at=_iso(now),
-        expires_at=expires_at,
+        expires_at=None,
         size=len(data),
         sha256=hashlib.sha256(data).hexdigest(),
         workbook=workbook,
@@ -195,7 +209,6 @@ def save(data: bytes, filename: str | None, workbook: PolicyWorkbook, now: dt.da
             "effective_date": workbook.effective_date,
             "banks": [b.name for b in workbook.banks],
             "warnings": len(workbook.warnings),
-            TTL_ATTRIBUTE: expires_at,
             **({HEADER_POLICY_ATTRIBUTE: packed} if len(packed) <= MAX_HEADER_POLICY_BYTES else {}),
         }
     )
@@ -222,7 +235,7 @@ def load(now: dt.datetime) -> StoredPolicy | None:
         upload_id=upload_id,
         filename=header.get("filename"),
         uploaded_at=str(header.get("uploaded_at") or ""),
-        expires_at=int(header[TTL_ATTRIBUTE]),
+        expires_at=None if header.get(TTL_ATTRIBUTE) is None else int(header[TTL_ATTRIBUTE]),
         size=int(header.get("size") or 0),
         sha256=str(header.get("sha256") or ""),
         workbook=PolicyWorkbook.from_json(json.loads(body)),
@@ -265,4 +278,4 @@ def delete(now: dt.datetime) -> bool:
     if item.get("upload_id"):
         _delete_objects(str(item["upload_id"]))
     reset_cache()
-    return int(item.get(TTL_ATTRIBUTE) or 0) > int(now.timestamp())
+    return not _ttl_passed(item, now)

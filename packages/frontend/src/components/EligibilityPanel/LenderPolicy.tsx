@@ -670,13 +670,13 @@ function CurrentPolicy({ current }: { current: PolicyStatus | null }) {
           {t('eligibility.lenderPolicy.current')}
         </span>{' '}
         {facts.join(' · ')}
-        {until && (
-          <>
-            {' · '}
-            <span className="font-medium text-amber-700 dark:text-amber-400">
-              {t('eligibility.lenderPolicy.reuploadBy', { date: until })}
-            </span>
-          </>
+        {' · '}
+        {until ? (
+          <span className="font-medium text-amber-700 dark:text-amber-400">
+            {t('eligibility.lenderPolicy.reuploadBy', { date: until })}
+          </span>
+        ) : (
+          <span>{t('eligibility.lenderPolicy.keptUntilReplaced')}</span>
         )}
       </p>
       {current.banks.length > 0 && (
