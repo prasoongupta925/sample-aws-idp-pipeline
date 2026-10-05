@@ -825,3 +825,26 @@ def test_a_parse_stored_by_the_earlier_app_asks_for_a_new_upload(store, client):
     assert status["warnings"][0].startswith("This sheet was read by an earlier version of the app")
     # Its policies still work, with the sample minimums.
     assert stored.policies()["hdfc_bank"].min_cibil_score == el.load_policy_book().lender("hdfc_bank").min_cibil_score
+
+
+def test_check_category_uses_the_sheet_and_its_banks(store, monkeypatch):
+    # Live 500 on 6 Oct: the uploaded list said CAT A+, the SAMPLE lender had no such category.
+    from app.routers import eligibility as routes
+
+    rows = [["hdfc_bank", "Infosys Limited", "CAT A+"], ["indusind_bank", "Infosys Limited", "CAT A+"]]
+    companies = reference_data.StoredList(
+        kind="company_categories",
+        upload_id="c1",
+        filename="companies.csv",
+        uploaded_at=NOW.isoformat(),
+        expires_at=int(NOW.timestamp()) + 86400,
+        rows=rows,
+        lenders=["HDFC Bank", "Indusind Bank"],
+    )
+    _, lists = calculation_book(companies)
+    monkeypatch.setattr(routes, "_require_project", lambda project_id: None)
+    monkeypatch.setattr(routes, "_calculation_lists", lambda project_id, notes=None: lists)
+    out = routes.check_company("proj_x", "u1", "Infosys Limited")
+    cats = {c.lender_id: c for c in out.categories}
+    assert cats["hdfc_bank"].category == "CAT A+" and cats["hdfc_bank"].listed
+    assert cats["indusind_bank"].category == "CAT A+"  # a bank only the sheet has is shown too

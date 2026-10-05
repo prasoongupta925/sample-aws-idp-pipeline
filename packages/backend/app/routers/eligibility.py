@@ -2340,19 +2340,21 @@ def check_company(
 ) -> CompanyResponse:
     _require_project(project_id)
     book = eligibility.load_policy_book()
-    query = name.strip()
-    company = book.find_company(query)
     lists = _calculation_lists(project_id)
+    # The lenders as the calculation sees them: the stored policy sheet's banks and categories first.
+    shown = reference_data.CalculationBook(book, lists) if lists else book
+    query = name.strip()
+    company = shown.find_company(query)
     names = [query, *([company.name, *company.aliases] if company else [])]
     categories = []
-    for lender in book.lenders:
+    for lender in shown.lenders:
         own = bool(lists and lists.covers_companies(lender))
         if own:
             category = lists.company_category(lender, names)
         else:
             category = company.categories.get(lender.id) if company else None
         foir_range = None
-        if category is not None:
+        if category is not None and category in lender.company_categories:
             policy = lender.company_categories[category]
             foir, multiplier, accepted = policy.foir, policy.multiplier, True
             column = lender.foir_grid.categories.get(category) if lender.foir_grid else None
