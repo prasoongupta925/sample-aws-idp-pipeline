@@ -641,7 +641,7 @@ export default function CibilSection({
             {({ id, describedBy }) => (
               <NumberInput
                 id={id}
-                kind="count"
+                kind="score"
                 value={score}
                 onChange={(v) =>
                   onEdit((inputs) => setCibil(inputs, { score: v }))

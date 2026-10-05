@@ -527,6 +527,11 @@ export interface PolicySheetTerms {
   hl_deviation: number | null;
   /** The FOIR includes the HL deviation (the applicant has a running home loan). */
   hl_deviation_applied: boolean;
+  /**
+   * "Conditions to confirm": the bank's conditions the DSA checks by hand, in
+   * the sheet's words with the cell, and what the backend could not decide.
+   */
+  conditions: string[];
 }
 
 /** POST .../calculate {applicant, inputs?}: inputs are calculated, not saved. */

@@ -211,6 +211,13 @@ export function parseCount(text: string): number | null {
   return /^\d+$/.test(s) ? Number(s) : Number.NaN;
 }
 
+/** A CIBIL score typed as text: digits, or -1 (no credit history). */
+export function parseScore(text: string): number | null {
+  const s = text.replace(/[,\s]/g, '');
+  if (!s) return null;
+  return /^-?\d+$/.test(s) ? Number(s) : Number.NaN;
+}
+
 /** The ROI as a percentage: 11 (the API's percent) or 0.11 (a fraction) -> 11. */
 export function roiPercent(value: number | null | undefined): number | null {
   const n = finite(value);
@@ -1241,10 +1248,16 @@ export function pincodeLooksValid(pincode: string): boolean {
   return /^[1-9]\d{5}$/.test(pincode.trim());
 }
 
-/** CIBIL scores run from 300 to 900. */
+/** CIBIL scores run from 300 to 900; -1 and 0 are the bureau's "no credit history". */
 export function scoreLooksValid(score: number): boolean {
-  return Number.isInteger(score) && score >= 300 && score <= 900;
+  return (
+    Number.isInteger(score) &&
+    (NO_HISTORY_SCORES.includes(score) || (score >= 300 && score <= 900))
+  );
 }
+
+/** The scores a credit report gives an applicant with no credit history (new to credit). */
+export const NO_HISTORY_SCORES = [-1, 0];
 
 /** The API refuses enquiries that are not cumulative (d30 <= d60 <= d90 <= d120). */
 export function enquiriesOutOfOrder(
@@ -1416,6 +1429,7 @@ function policySheet(raw: unknown): PolicySheetTerms | null {
     category: text(o.category),
     company_unlisted: o.company_unlisted === true,
     lines: strings(o.lines),
+    conditions: strings(o.conditions),
     hl_deviation: finite(o.hl_deviation),
     hl_deviation_applied: o.hl_deviation_applied === true,
   };

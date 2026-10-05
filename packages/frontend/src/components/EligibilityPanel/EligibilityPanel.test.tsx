@@ -303,6 +303,10 @@ describe('Lenders table (the worked example)', () => {
       'HL deviation 5%: meaning to be confirmed with Smart Solutions (Sheet2, cell B4)',
       'Minimum CIBIL 700: Sample: not in your policy sheet',
     ];
+    const sheetConditions = [
+      'Check the bank statement: no bounce in the last 6 months (cell F3)',
+      'Bachelor accommodation: Not Funding (cell H3)',
+    ];
     const withSheet = {
       ...RESULT,
       per_lender: RESULT.per_lender.map((r) =>
@@ -318,6 +322,7 @@ describe('Lenders table (the worked example)', () => {
                 lines: sheetLines,
                 hl_deviation: 0.05,
                 hl_deviation_applied: false,
+                conditions: sheetConditions,
               },
             }
           : r,
@@ -330,6 +335,9 @@ describe('Lenders table (the worked example)', () => {
     );
     expect(sheet).toContain('From your policy sheet');
     for (const line of sheetLines) expect(sheet).toContain(line);
+    expect(icici).toContain('data-testid="policy-sheet-conditions"');
+    expect(sheet).toContain('Conditions to confirm');
+    for (const line of sheetConditions) expect(sheet).toContain(line);
     expect(html).toContain('data-testid="policy-sheet-legend"');
     expect(plain(html)).toContain('From Policy (your sheet)');
     // Without a sheet: neither.

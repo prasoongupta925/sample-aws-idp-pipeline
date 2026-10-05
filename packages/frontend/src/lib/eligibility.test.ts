@@ -32,9 +32,11 @@ import {
   parseInputsResponse,
   parseLenders,
   parseLoginResponse,
+  parseScore,
   removeTradeline,
   roiPercent,
   rowFromDocument,
+  scoreLooksValid,
   setCibil,
   setEnquiries,
   setFieldValue,
@@ -104,6 +106,19 @@ describe('Indian number formatting', () => {
     expect(parseCount('60')).toBe(60);
     expect(parseCount('6.5')).toBeNaN();
     expect(parseCount('')).toBeNull();
+  });
+
+  it('takes a CIBIL score of 300-900, or -1 / 0 for no credit history', () => {
+    expect(parseScore('760')).toBe(760);
+    expect(parseScore('-1')).toBe(-1);
+    expect(parseScore(' 0 ')).toBe(0);
+    expect(parseScore('')).toBeNull();
+    expect(parseScore('7.5')).toBeNaN();
+    expect(parseScore('NTC')).toBeNaN();
+    for (const score of [300, 760, 900, -1, 0])
+      expect(scoreLooksValid(score)).toBe(true);
+    for (const score of [299, 901, -2, 150, 760.5])
+      expect(scoreLooksValid(score)).toBe(false);
   });
 
   it('shows the ROI as a percent whether sent as 11 or 0.11', () => {
