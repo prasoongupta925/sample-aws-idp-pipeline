@@ -463,6 +463,34 @@ def test_no_merge_when_two_groups_could_take_the_name():
     assert len(groups) == 3
 
 
+def _blank_id_photo(pid='p9'):
+    """An ID photo where neither a name nor a PAN was read."""
+    return _doc(pid, 'k', '04_photo.jpg', 'identity_details')
+
+
+def test_blank_id_photo_joins_the_single_applicant_after_merge(pl):
+    # the live case: holder's cards + father-name card + a blank photo
+    facts = _id_cards() + [_blank_id_photo()]
+    groups, unassigned = engine.group_applicants(facts)
+    assert len(groups) == 1 and unassigned == []
+    assert '04_photo.jpg' in [d['document_name'] for d in groups[0]]
+    res = engine.run_file_check(facts, pl)
+    assert len(res['applicants']) == 1
+    assert res['unassigned_documents'] == []
+    assert res['applicants'][0]['applicant'] == 'Sneha Ramesh Kulkarni'
+
+
+def test_blank_id_photo_stays_unassigned_with_two_applicants():
+    facts = _id_cards() + [
+        _doc('p9', 'v', '05_pan.jpg', 'identity_details',
+             applicant_name='Vikram Deshpande', pan='DEFPD3456J'),
+        _blank_id_photo(),
+    ]
+    groups, unassigned = engine.group_applicants(facts)
+    assert len(groups) == 2
+    assert [d['document_name'] for d in unassigned] == ['04_photo.jpg']
+
+
 def test_non_identity_group_is_not_merged():
     facts = _id_cards()
     facts[2]['doc_type'] = 'salary_slip'
