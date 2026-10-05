@@ -6,7 +6,9 @@ The workbook has two sheets:
   Tenure, Tenure for Eligibility Calculation), each spanning one column per company category; row 3
   the categories (CAT_A+ .. CAT_U); then one row per bank and net-salary slab start.
 - Sheet2, the per-bank rules: HL Deviation, Multiplier method, CCBT, PLBT, App BT, Gold Loan, Bonus
-  Calculation, Incentive, Rental Income, Co-Applicant Salary.
+  Calculation, Incentive, Rental Income, Co-Applicant Salary; and, since the corrected sheet of
+  5 Oct 2026, Cibil Score, Minus Cibil Max Loan, Enquiries, Bounce Condition and the conditions a
+  DSA confirms by hand (Work From Home, PF deduction, Bachelor accommodation, ... Recent Funding).
 
 Only the standard library is used (zipfile + ElementTree), so the Lambda needs no new dependency.
 Formulas are never executed: the value Excel cached with the formula is used, and when there is
@@ -28,6 +30,9 @@ from xml.etree import ElementTree
 MAX_FILE_BYTES = 5 * 1024 * 1024
 MAX_UNZIPPED_BYTES = 40 * 1024 * 1024
 MAX_PARTS = 300
+# Bumped when the parser reads more from the same workbook: a stored parse of an older version is
+# flagged (lender_policy.StoredPolicy.status) so that the admin uploads the sheet again.
+PARSER_VERSION = 2
 
 _NS = {
     "m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
@@ -65,6 +70,8 @@ BANK_IDS: dict[str, str] = {
 }
 
 INCENTIVE_FREQUENCIES = ("monthly", "quarterly", "half_yearly", "yearly")
+# What a category code stands for, shown next to it ("CAT U (unlisted)"); key: code without "_"/spaces.
+CATEGORY_DESCRIPTIONS = {"CATU": "unlisted"}
 _INCENTIVE_WORDS = {
     "monthly": "monthly",
     "quarterly": "quarterly",
@@ -85,6 +92,34 @@ MULTIPLIER_METHODS = {
 CO_APPLICANT_RULES = {
     "listed company": "listed_company",
     "all companies except proprietor and partnership": "all_except_proprietorship_partnership",
+    # The corrected sheet (5 Oct 2026) says only whether the co-applicant's salary is added.
+    "consider": "consider",
+    "considered": "consider",
+    "yes": "consider",
+    "not consider": "not_consider",
+    "not considered": "not_consider",
+    "no": "not_consider",
+}
+
+# Sheet2 columns the app shows as the bank's "Conditions to confirm" (not decided by the engine):
+# rule key -> label. The sheet's text is kept as it is (e.g. "HR Confirmation Required", "Not Funding").
+CONDITION_LABELS: dict[str, str] = {
+    "work_from_home": "Work from home",
+    "pf_deduction": "PF deduction",
+    "bachelor_accommodation": "Bachelor accommodation",
+    "director_doctor": "Director / doctor profile",
+    "consultant": "Consultant profile",
+    "grade_4": "Grade 4 employees",
+    "contract_employee": "Contract employees",
+    "permanent_address_proof": "Permanent address proof",
+    "co_applicant_hl_obligation": "Co-applicant's home loan",
+    "co_applicant_income": "Co-applicant income",
+    "guarantor_obligation": "Guarantor obligation",
+    "trading_transactions": "Trading in the bank statement",
+    "verification": "Verification",
+    "ovd": "OVD (officially verified document)",
+    "topup": "Top-up",
+    "recent_funding": "Recent funding",
 }
 
 
@@ -102,6 +137,8 @@ class Category:
 class Value:
     value: float | None
     cell: str  # "E5" on Sheet1
+    # The cell is NA / N/A / "-" / blank: the bank does not lend to this category (value is None).
+    not_offered: bool = False
 
 
 @dataclass
@@ -110,6 +147,10 @@ class Slab:
     row: int
     # parameter key -> category code -> value
     values: dict[str, dict[str, Value]]
+
+    def not_offered(self, code: str) -> bool:
+        """The bank does not lend to this category at this slab: one of its cells is an NA form."""
+        return any(column.get(code) is not None and column[code].not_offered for column in self.values.values())
 
 
 @dataclass
@@ -132,10 +173,22 @@ class BankRules:
     incentive_frequencies: list[str] = field(default_factory=list)
     rental_income_share: float | None = None
     co_applicant_rule: str | None = None
+    # The corrected sheet's columns (5 Oct 2026). Cibil Score: the bank's minimum score.
+    min_cibil: int | None = None
+    # Minus Cibil Max Loan: the most lent to an applicant with no credit history (CIBIL -1 / 0).
+    minus_cibil_max_loan: float | None = None
+    # Enquiers "Last 60 days 5": at most `enquiries_max` bureau enquiries in the last `enquiries_days`.
+    enquiries_days: int | None = None
+    enquiries_max: int | None = None
+    # Bounce Condition "No bounce in last 3 months".
+    bounce_months: int | None = None
+    # CONDITION_LABELS key -> the sheet's text, for the cells that are not NA (shown, not decided).
+    conditions: dict[str, str] = field(default_factory=dict)
     # Column header -> {"text": the cell as shown, "cell": "D3"}
     raw: dict[str, dict[str, str]] = field(default_factory=dict)
     # Rule (hl_deviation, multiplier_method, ccbt, plbt, app_bt, gold_loan, bonus, incentive,
-    # rental_income, co_applicant) -> {"text", "cell"}: what the engine cites in "How it is calculated".
+    # rental_income, co_applicant, min_cibil, minus_cibil_max_loan, enquiries, bounce and the
+    # CONDITION_LABELS keys) -> {"text", "cell"}: what the engine cites in "How it is calculated".
     cells: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
@@ -166,6 +219,8 @@ class PolicyWorkbook:
     rules_sheet: str | None = None
     warnings: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    # The PARSER_VERSION that read this workbook (a stored parse keeps the version that made it).
+    parser_version: int = PARSER_VERSION
 
     def bank(self, lender_id: str) -> BankPolicy | None:
         return next((b for b in self.banks if b.lender_id == lender_id), None)
@@ -183,7 +238,7 @@ class PolicyWorkbook:
         """The workbook to_json() gave (as stored with an upload)."""
 
         def value(v: dict) -> Value:
-            return Value(value=v.get("value"), cell=str(v.get("cell") or ""))
+            return Value(value=v.get("value"), cell=str(v.get("cell") or ""), not_offered=bool(v.get("not_offered")))
 
         def slab(s: dict) -> Slab:
             values = {k: {c: value(v) for c, v in col.items()} for k, col in (s.get("values") or {}).items()}
@@ -215,6 +270,7 @@ class PolicyWorkbook:
             rules_sheet=data.get("rules_sheet"),
             warnings=list(data.get("warnings") or []),
             notes=list(data.get("notes") or []),
+            parser_version=int(data.get("parser_version") or 1),
         )
 
 
@@ -465,6 +521,9 @@ def _text(cell: _Cell | None) -> str:
     if cell is None or cell.value is None:
         return ""
     if isinstance(cell.value, float):
+        # Whole numbers as digits (1000000, not 1e+06): the text is cited in "How it is calculated".
+        if cell.value == int(cell.value) and abs(cell.value) < 1e15:
+            return str(int(cell.value))
         return f"{cell.value:g}"
     return str(cell.value).strip()
 
@@ -585,6 +644,9 @@ def _parse_grid(sheet: _Sheet, out: PolicyWorkbook) -> list[BankPolicy]:
             values[param] = {}
             for code, col in by_code.items():
                 ref = f"{_column_letters(col)}{row}"
+                if _not_offered(sheet.get(col, row)):
+                    values[param][code] = Value(None, ref, not_offered=True)
+                    continue
                 number, why = _number(sheet, col, row)
                 where = f"{sheet.name} {ref} ({name}, slab {grouped(start)}, {PARAMETER_LABELS[param]} {code})"
                 if number is None:
@@ -631,6 +693,7 @@ def _parse_grid(sheet: _Sheet, out: PolicyWorkbook) -> list[BankPolicy]:
                     f"{len(group)} rows share slab {grouped(start)} for {name} with the same values; one is used"
                 )
         banks.append(BankPolicy(lender_id=lender_id, name=name, slabs=kept))
+        _not_offered_notes(name, kept, out)
         for slab in kept:
             calc = slab.values["calculation_tenure_months"]
             for code, value in calc.items():
@@ -649,8 +712,50 @@ def _plain(values: dict[str, Value] | None) -> dict[str, float | None]:
     return {k: v.value for k, v in (values or {}).items()}
 
 
+# A grid cell with one of these texts (or blank) means the bank does not lend to the category.
+_NOT_OFFERED_TEXTS = {"na", "n/a", "n.a.", "n.a", "-", "--", ""}
+
+
+def _not_offered(cell: _Cell | None) -> bool:
+    if cell is None or cell.value is None:
+        return cell is None or not cell.formula
+    return isinstance(cell.value, str) and _key(cell.value) in _NOT_OFFERED_TEXTS
+
+
+def category_text(code: str) -> str:
+    """'CAT_U' -> 'CAT U (unlisted)'; 'CAT_B' -> 'CAT B'."""
+    label = code.replace("_", " ").strip()
+    description = CATEGORY_DESCRIPTIONS.get(_category_key(code))
+    return f"{label} ({description})" if description else label
+
+
+def _not_offered_notes(name: str, slabs: list[Slab], out: PolicyWorkbook) -> None:
+    """One note per category the bank does not lend to; a warning where a slab's row mixes NA
+    with numbers for the category (the category is then not offered at that slab)."""
+    for category in out.categories:
+        code = category.code
+        closed = [s for s in slabs if s.not_offered(code)]
+        if not closed:
+            continue
+        where = "" if len(closed) == len(slabs) else f" at the slabs {', '.join(grouped(s.start) for s in closed)}"
+        out.notes.append(f"{category_text(code)}: {name} does not lend to this category{where}")
+        for slab in closed:
+            given = [
+                PARAMETER_LABELS[p]
+                for p, column in slab.values.items()
+                if column.get(code) is not None and not column[code].not_offered and column[code].value is not None
+            ]
+            if given:
+                out.warnings.append(
+                    f"{name}, slab {grouped(slab.start)}, {code}: some cells are NA but {', '.join(given)} "
+                    "has a number; the category is taken as not offered at this slab, please check"
+                )
+
+
 # ---------------------------------------------------------------- Sheet2
 
+# Sheet2 header (as _header_key gives it: lower case, "&" = "and", only letters and digits) -> rule.
+# The client's spellings ("Enquiers", "Permanant", "Employe", "accomodation") are listed as they are.
 _RULE_COLUMNS = {
     "hl deviation": "hl_deviation",
     "multiplier": "multiplier_method",
@@ -661,10 +766,97 @@ _RULE_COLUMNS = {
     "bonus calculation": "bonus",
     "incentive": "incentive",
     "rental income": "rental_income",
-    "co-applicant salary": "co_applicant",
     "co applicant salary": "co_applicant",
+    "cibil score": "min_cibil",
+    "minimum cibil score": "min_cibil",
+    "min cibil score": "min_cibil",
+    "min cibil": "min_cibil",
+    "cibil": "min_cibil",
+    "minus cibil max loan": "minus_cibil_max_loan",
+    "minus cibil maximum loan": "minus_cibil_max_loan",
+    "minus cibil": "minus_cibil_max_loan",
+    "enquiers": "enquiries",
+    "enquiries": "enquiries",
+    "enquires": "enquiries",
+    "enquiry": "enquiries",
+    "inquiries": "enquiries",
+    "bounce condition": "bounce",
+    "bounce": "bounce",
+    "bounces": "bounce",
+    "work from home": "work_from_home",
+    "wfh": "work_from_home",
+    "provident fund deduction": "pf_deduction",
+    "pf deduction": "pf_deduction",
+    "bachelor accommodation": "bachelor_accommodation",
+    "bachelor accomodation": "bachelor_accommodation",
+    "director and doctor profile": "director_doctor",
+    "director doctor profile": "director_doctor",
+    "consultant profile": "consultant",
+    "grade 4 employees": "grade_4",
+    "grade 4 employee": "grade_4",
+    "grade iv employees": "grade_4",
+    "contract basis employe": "contract_employee",
+    "contract basis employee": "contract_employee",
+    "contract basis employees": "contract_employee",
+    "contract employees": "contract_employee",
+    "permanant address proof": "permanent_address_proof",
+    "permanent address proof": "permanent_address_proof",
+    "co applicant hl obligation": "co_applicant_hl_obligation",
+    "co applicant home loan obligation": "co_applicant_hl_obligation",
+    "co applicant income": "co_applicant_income",
+    "guarantor obligation": "guarantor_obligation",
+    "trading transaction in bank statement": "trading_transactions",
+    "trading transactions in bank statement": "trading_transactions",
+    "trading transaction in bank": "trading_transactions",
+    "trading transactions": "trading_transactions",
+    "verification": "verification",
+    "officially verified document ovd": "ovd",
+    "officially verified document": "ovd",
+    "ovd": "ovd",
+    "topup facility": "topup",
+    "top up facility": "topup",
+    "topup": "topup",
+    "top up": "topup",
+    "recent funding eligibility": "recent_funding",
+    "recent funding": "recent_funding",
 }
-_NA = {"na", "n/a", "-", "nil", "none", ""}
+_NA = {"na", "n/a", "n.a.", "n.a", "-", "--", "nil", "none", ""}
+
+
+def _header_key(title: str) -> str:
+    """'Director & Doctor Profile' -> 'director and doctor profile'; 'Co-Applicant Salary' -> 'co applicant
+    salary'; 'Officially Verified Document (OVD' -> 'officially verified document ovd'."""
+    return re.sub(r"[^a-z0-9]+", " ", title.lower().replace("&", " and ")).strip()
+
+
+def _rule_kind(title: str) -> str | None:
+    return _RULE_COLUMNS.get(_header_key(title))
+
+
+_ENQUIRIES_DAYS_FIRST = re.compile(
+    r"^(?:in\s*)?(?:the\s*)?(?:last|past)\s*(\d+)\s*days?\s*[-:–,]?\s*(?:max(?:imum)?\s*)?(\d+)(?:\s*enquir\w*|\s*inquir\w*)?$"
+)
+_ENQUIRIES_COUNT_FIRST = re.compile(
+    r"^(?:max(?:imum)?\s*|upto\s*|up to\s*)?(\d+)(?:\s*enquir\w*|\s*inquir\w*)?\s*(?:in|within)?\s*(?:the\s*)?"
+    r"(?:last|past)\s*(\d+)\s*days?$"
+)
+_BOUNCE = re.compile(
+    r"^(?:no\s*bounces?\s*(?:in|for|during)?\s*(?:the\s*)?(?:last|past)?\s*(\d+)\s*months?"
+    r"|(\d+)\s*months?\s*(?:with\s*)?no\s*bounces?|no\s*bounces?\s*(\d+)\s*months?)$"
+)
+_AMOUNT_WORDS = {"lakh": 100_000, "lakhs": 100_000, "lac": 100_000, "lacs": 100_000, "l": 100_000, "cr": 10_000_000}
+
+
+def _amount(cell: _Cell | None) -> float | None:
+    """A rupee amount: a number, or text such as '10,00,000', 'Rs 10 lakh', '1.5 Cr'."""
+    if cell is not None and isinstance(cell.value, float):
+        return _clean(cell.value)
+    text = _key(_text(cell)).replace("₹", "").replace(",", "")
+    text = re.sub(r"^(rs\.?|inr)\s*", "", text).replace("/-", "").strip()
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([a-z]*)", text)
+    if not m or (m.group(2) and m.group(2) not in _AMOUNT_WORDS):
+        return None
+    return _clean(float(m.group(1)) * _AMOUNT_WORDS.get(m.group(2), 1))
 
 
 def _is_na(cell: _Cell | None) -> bool:
@@ -757,8 +949,48 @@ def _apply_rule(rules: BankRules, kind: str, cell: _Cell | None, where: str, out
     elif kind == "co_applicant":
         rule = CO_APPLICANT_RULES.get(_key(text))
         if rule is None and not _is_na(cell):
-            unknown('"Listed Company" or "All Companies except proprietor and partnership"')
+            unknown('"Consider", "Not Consider", "Listed Company" or "All Companies except proprietor and partnership"')
         rules.co_applicant_rule = rule
+    elif kind == "min_cibil":
+        if not _is_na(cell):
+            value = _fraction(cell)
+            if value is None:
+                m = re.fullmatch(r"(\d{3})\s*(?:\+|&\s*above|and\s*above|or\s*more|above)?", _key(text))
+                value = float(m.group(1)) if m else None
+            if value is None or not 300 <= value <= 900 or value != int(value):
+                unknown("a score such as 710, or NA")
+            else:
+                rules.min_cibil = int(value)
+    elif kind == "minus_cibil_max_loan":
+        if not _is_na(cell):
+            value = _amount(cell)
+            if value is None or value <= 0:
+                unknown("an amount such as 1000000, or NA")
+            else:
+                rules.minus_cibil_max_loan = value
+    elif kind == "enquiries":
+        if not _is_na(cell):
+            m = _ENQUIRIES_DAYS_FIRST.fullmatch(_key(text))
+            days, limit = (m.group(1), m.group(2)) if m else (None, None)
+            if m is None:
+                m = _ENQUIRIES_COUNT_FIRST.fullmatch(_key(text))
+                if m:
+                    limit, days = m.group(1), m.group(2)
+            if m is None or not 0 < int(days) <= 3650 or int(limit) > 999:
+                unknown('"Last 60 days 5" (at most 5 enquiries in the last 60 days), or NA')
+            else:
+                rules.enquiries_days, rules.enquiries_max = int(days), int(limit)
+    elif kind == "bounce":
+        if not _is_na(cell):
+            m = _BOUNCE.fullmatch(_key(text))
+            months = next((g for g in (m.groups() if m else ()) if g), None)
+            if months is None or not 0 < int(months) <= 120:
+                unknown('"No bounce in last 3 months", or NA')
+            else:
+                rules.bounce_months = int(months)
+    elif kind in CONDITION_LABELS:
+        if not _is_na(cell):
+            rules.conditions[kind] = text[:200]
 
 
 def _parse_rules(sheet: _Sheet, banks: list[BankPolicy], out: PolicyWorkbook) -> None:
@@ -773,16 +1005,24 @@ def _parse_rules(sheet: _Sheet, banks: list[BankPolicy], out: PolicyWorkbook) ->
         return
     bank_col = 0
     columns: dict[int, tuple[str, str]] = {}  # col -> (kind, header text)
+    unknown: list[str] = []
     for col in range(1, sheet.max_col(header) + 1):
         title = _text(sheet.get(col, header))
         if _key(title) in ("banks", "bank"):
             bank_col = col
         elif title:
-            kind = _RULE_COLUMNS.get(_key(title))
+            kind = _rule_kind(title)
             if kind is None:
-                out.warnings.append(f"{sheet.name}: column {title!r} is not known; it is not used")
+                unknown.append(title)
             else:
                 columns[col] = (kind, title)
+    if len(unknown) == 1:
+        out.warnings.append(f"{sheet.name}: column {unknown[0]!r} is not known; it is not used")
+    elif unknown:
+        out.warnings.append(
+            f"{sheet.name}: {len(unknown)} columns are not known and are not used: "
+            + ", ".join(repr(t) for t in unknown)
+        )
     by_id = {b.lender_id: b for b in banks}
     for row in [r for r in sheet.rows() if r > header]:
         name = _text(sheet.get(bank_col, row))

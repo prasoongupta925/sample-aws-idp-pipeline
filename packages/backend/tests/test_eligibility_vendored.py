@@ -215,3 +215,105 @@ def test_the_tool_applies_the_policy_sheet_as_the_api(table, policy_sheet, appli
         assert banks[0]["lender"] == answer["best_lender"]
         assert any(line.startswith("Suggested 1. ") for line in answer["summary"])
     assert len(banks) + len(answer["suggestion"]["declined"]) == len(answer["per_lender"])
+
+
+@pytest.fixture
+def policy_sheet_v2(table, monkeypatch):
+    """The client's corrected sheet (5 Oct: CAT_U NA for HDFC Bank and Bandhan Bank) saved as an admin would."""
+    from app import lender_policy
+    from app.policy_workbook import parse_policy_workbook
+    from tests.test_lender_policy import NOW, FakeS3, v2_bytes
+
+    s3 = FakeS3()
+    monkeypatch.setattr(lender_policy, "get_s3_client", lambda: s3)
+    monkeypatch.setattr(get_config(), "document_storage_bucket_name", "test-bucket")
+    lender_policy.reset_cache()
+    data = v2_bytes()
+    lender_policy.save(data, "Policy .xlsx", parse_policy_workbook(data, "Policy .xlsx"), NOW)
+    monkeypatch.setattr(loan_tools.time, "time", lambda: NOW.timestamp())
+    yield
+    lender_policy.reset_cache()
+
+
+def test_the_tool_gives_the_apis_not_offered_reason(table, policy_sheet_v2):
+    """A category the bank does not lend to (NA in the sheet): the same not-eligible reason in the chat."""
+    applicant = "Unlisted Applicant"
+    changes = {"profile__name": applicant, "profile__company": "Nowhere Listed Traders", "profile__net_income": 60000}
+    saved = client.put(
+        f"/projects/{PROJECT_ID}/eligibility/inputs",
+        headers=HEADERS,
+        json={"applicant": applicant, **example(**changes)},
+    )
+    assert saved.status_code == 200
+    api = client.post(f"/projects/{PROJECT_ID}/eligibility/calculate", headers=HEADERS, json={"applicant": applicant})
+    assert api.status_code == 200
+    answer = json.loads(json.dumps(tool(applicant)))
+    body = api.json()
+    assert [key for key in SAME if known(answer[key]) != known(body[key])] == []
+    for lender_id, bank in (("hdfc_bank", "HDFC Bank"), ("bandhan_bank", "Bandhan Bank")):
+        mine = next(r for r in answer["per_lender"] if r["lender_id"] == lender_id)
+        theirs = next(r for r in body["per_lender"] if r["lender_id"] == lender_id)
+        assert mine["reasons"][0] == theirs["reasons"][0]
+        assert mine["reasons"][0].startswith(f"{bank} does not lend to CAT U (unlisted) companies")
+        assert mine["not_offered"] == theirs["not_offered"]
+        declined = {d["lender_id"]: d["reason"] for d in answer["suggestion"]["declined"]}
+        assert declined[lender_id].startswith(f"{bank} does not lend to CAT U (unlisted) companies")
+
+
+@pytest.mark.parametrize(
+    "home_loan",
+    [
+        {"profile__has_running_home_loan": True},
+        {"cibil__tradelines": [{"loan_type": "home", "lender": "Synthetic Housing Finance", "emi": 4000}]},
+    ],
+)
+def test_the_tool_applies_the_hl_deviation_as_the_api(table, policy_sheet_v2, home_loan):
+    """A running home loan (entered, or a Home Loan tradeline) raises the FOIR alike in the chat."""
+    applicant = "Home Loan Applicant"
+    changes = {"profile__name": applicant, "profile__net_income": 60000, **home_loan}
+    saved = client.put(
+        f"/projects/{PROJECT_ID}/eligibility/inputs",
+        headers=HEADERS,
+        json={"applicant": applicant, **example(**changes)},
+    )
+    assert saved.status_code == 200, saved.text
+    api = client.post(f"/projects/{PROJECT_ID}/eligibility/calculate", headers=HEADERS, json={"applicant": applicant})
+    assert api.status_code == 200
+    answer = json.loads(json.dumps(tool(applicant)))
+    body = api.json()
+    assert body["home_loan"]["running"] is True and answer["home_loan"] == body["home_loan"]
+    assert [key for key in SAME if known(answer[key]) != known(body[key])] == []
+    hdfc = next(r for r in body["per_lender"] if r["lender_id"] == "hdfc_bank")
+    assert hdfc["policy_sheet"]["hl_deviation_applied"] is True
+    assert any("home-loan deviation" in line for line in hdfc["policy_sheet"]["lines"])
+
+
+def test_the_tool_applies_the_sheets_cibil_and_enquiry_rules_as_the_api(table, policy_sheet_v2):
+    """The corrected sheet's Cibil Score and Enquiries rules decline alike, and the chat carries the
+    same "Conditions to confirm"."""
+    applicant = "Sheet Rules Applicant"
+    changes = {
+        "profile__name": applicant,
+        "profile__net_income": 60000,
+        "cibil__score": 715,
+        "cibil__enquiries": {"d30": 5, "d60": 5, "d90": 6, "d120": 7},
+    }
+    saved = client.put(
+        f"/projects/{PROJECT_ID}/eligibility/inputs",
+        headers=HEADERS,
+        json={"applicant": applicant, **example(**changes)},
+    )
+    assert saved.status_code == 200, saved.text
+    api = client.post(f"/projects/{PROJECT_ID}/eligibility/calculate", headers=HEADERS, json={"applicant": applicant})
+    assert api.status_code == 200
+    answer = json.loads(json.dumps(tool(applicant)))
+    body = api.json()
+    assert [key for key in SAME if known(answer[key]) != known(body[key])] == []
+    rows = {r["lender_id"]: r for r in body["per_lender"]}
+    assert rows["icici_bank"]["reasons"][0].startswith("ICICI Bank needs CIBIL >= 720: the score is 715")
+    assert any(r.startswith("5 enquiries in the last 30 days: more than ICICI Bank's limit of 4") for r in rows["icici_bank"]["reasons"])
+    assert rows["hdfc_bank"]["policy_sheet"]["conditions"][0] == "Check the bank statement: no bounce in the last 3 months (cell F2)"
+    assert len(rows["hdfc_bank"]["policy_sheet"]["conditions"]) == 16
+    mine = {r["lender_id"]: r for r in answer["per_lender"]}
+    assert mine["hdfc_bank"]["policy_sheet"]["conditions"] == rows["hdfc_bank"]["policy_sheet"]["conditions"]
+    assert any(line.startswith("Says no: ICICI Bank – ICICI Bank needs CIBIL >= 720") for line in answer["summary"])

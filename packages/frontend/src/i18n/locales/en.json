@@ -1264,6 +1264,13 @@
         "parental": "Parental",
         "company_provided": "Company provided"
       },
+      "homeLoan": "Running home loan",
+      "homeLoanOption": {
+        "auto": "From the obligations",
+        "yes": "Yes",
+        "no": "No"
+      },
+      "homeLoanHint": "Banks with an HL deviation in your policy sheet add it to their FOIR (e.g. 70% + 5% = 75%).",
       "pincode": "Pincode",
       "pincodeInvalid": "A pincode has 6 digits.",
       "checkAvailability": "Check availability",
@@ -1342,8 +1349,8 @@
       "fromBureau": "from bureau",
       "report": "CIBIL report",
       "score": "CIBIL score",
-      "scoreHint": "300 to 900",
-      "scoreInvalid": "A CIBIL score is a whole number from 300 to 900.",
+      "scoreHint": "300 to 900; -1 or 0 when the report has no credit history",
+      "scoreInvalid": "A CIBIL score is a whole number from 300 to 900 (-1 or 0 for no credit history).",
       "enquiries": "Enquiries in the last",
       "enquiriesCumulative": "Enquiries add up over time: the {{first}} count cannot be more than the {{second}} count.",
       "window": {
@@ -1424,7 +1431,8 @@
       "title": "Suggested banks",
       "terms": "{{amount}} at {{roi}}, EMI {{emi}} over {{months}} months",
       "none": "No bank can sanction this loan with these details.",
-      "declined": "Banks that say no"
+      "declined": "Banks that say no",
+      "notOffered": "Not offered"
     },
     "lenders": {
       "empty": "No eligibility calculated yet",
@@ -1494,7 +1502,8 @@
         "apr": "APR: {{amount}} − fee {{fee}} = {{net}} is repaid by {{months}} EMIs of {{emi}}; {{net}} = EMI × (1 − (1 + r)⁻ⁿ) ÷ r gives r = {{monthly}} a month, APR = 12 × r = {{value}}",
         "aprNoFee": "APR: no processing fee, so the APR is the ROI, {{value}}",
         "totalCost": "Total cost: {{months}} × {{emi}} − {{amount}} + fee {{fee}} = {{value}}",
-        "sheetTitle": "From your policy sheet"
+        "sheetTitle": "From your policy sheet",
+        "conditionsTitle": "Conditions to confirm"
       },
       "otherIncomeCounted": "Other income counted:",
       "otherIncomeRow": "{{label}} {{pct}}% of {{monthly}} = {{value}}",

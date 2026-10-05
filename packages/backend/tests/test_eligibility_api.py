@@ -414,6 +414,8 @@ class TestProjectAndValidation:
             ({"profile__net_income": -5}, "net_income"),
             ({"profile__nickname": "x"}, "nickname"),
             ({"cibil__score": 950}, "score"),
+            ({"cibil__score": 150}, "score"),
+            ({"cibil__score": -2}, "score"),
             ({"cibil__enquiries": {"d30": 5, "d60": 2}}, "enquiries"),
             ({"cibil__tradelines": [{"emi": 100, "action": "sell"}]}, "action"),
             ({"cibil__tradelines": [{"emi": 100, "open_date": "2026-05-01", "last_payment_date": "2026-01-01"}]}, "0"),
@@ -426,6 +428,14 @@ class TestProjectAndValidation:
         assert response.status_code == 422
         assert any(field in [str(p) for p in err["loc"]] for err in response.json()["detail"]), response.json()
         assert table.of("ELIG#") == []
+
+    @pytest.mark.parametrize("score", [-1, 0])
+    def test_no_credit_history_scores_are_accepted(self, table, score):
+        """-1 and 0 are the bureau's "no credit history": a policy sheet may still lend (Minus Cibil Max Loan)."""
+        response = save(body=example(cibil__score=score))
+
+        assert response.status_code == 200, response.text
+        assert response.json()["inputs"]["cibil"]["score"] == score
 
     @pytest.mark.parametrize(
         ("section", "field", "value"),
@@ -1328,6 +1338,8 @@ class TestDocumentDraft:
             "company": "Konkan Softworks Pvt Ltd",
             "employment_type": "private_limited",
             "net_income": 82500.0,
+            # Not from a document: null means "found from the obligations".
+            "has_running_home_loan": None,
         }
         # The rent agreement (not the ITR's rental income too); the bonus on one slip in three is
         # yearly, the incentive on every slip monthly.

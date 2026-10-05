@@ -206,12 +206,15 @@ const INDIAN_NUMBER_4 = new Intl.NumberFormat('en-IN', {
 function HowCalculated({ row }: { row: LenderEligibility }) {
   const { t } = useTranslation();
   const sheet = row.policy_sheet?.lines ?? [];
+  const conditions = row.policy_sheet?.conditions ?? [];
   if (
     row.per_lakh_emi === null ||
     row.foir_eligibility === null ||
     row.multiplier_eligibility === null
   ) {
-    return sheet.length ? <SheetLines lines={sheet} /> : null;
+    return sheet.length ? (
+      <SheetLines lines={sheet} conditions={conditions} />
+    ) : null;
   }
   const lines = [
     t('eligibility.lenders.how.perLakh', {
@@ -264,13 +267,23 @@ function HowCalculated({ row }: { row: LenderEligibility }) {
           </li>
         ))}
       </ol>
-      {sheet.length > 0 && <SheetLines lines={sheet} />}
+      {sheet.length > 0 && <SheetLines lines={sheet} conditions={conditions} />}
     </div>
   );
 }
 
-/** The policy workbook's values and rules this bank used, each with its cell. */
-function SheetLines({ lines }: { lines: string[] }) {
+/**
+ * The policy workbook's values and rules this bank used, each with its cell;
+ * under them the bank's "Conditions to confirm" (the sheet's own words), which
+ * the DSA checks by hand.
+ */
+function SheetLines({
+  lines,
+  conditions,
+}: {
+  lines: string[];
+  conditions: string[];
+}) {
   const { t } = useTranslation();
   return (
     <div className="space-y-0.5" data-testid="policy-sheet-lines">
@@ -284,6 +297,20 @@ function SheetLines({ lines }: { lines: string[] }) {
           </li>
         ))}
       </ul>
+      {conditions.length > 0 && (
+        <div className="space-y-0.5 pt-1" data-testid="policy-sheet-conditions">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+            {t('eligibility.lenders.how.conditionsTitle')}
+          </p>
+          <ul className="list-disc space-y-0.5 pl-4 text-[11px] leading-snug text-slate-700 dark:text-slate-200">
+            {conditions.map((line, i) => (
+              <li key={i} className="break-words">
+                {line}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

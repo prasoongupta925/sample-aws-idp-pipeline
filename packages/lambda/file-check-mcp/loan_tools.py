@@ -73,7 +73,9 @@ ELIGIBILITY_INSTRUCTIONS = (
     'amount, rate or tenure. Label every figure "indicative — the lender '
     'decides"; while sample is true also say "sample policy — replace with '
     'your lender grid". Eligible is an indicative result of the policy, never '
-    'an approval.'
+    'an approval. A bank priced by the policy sheet lists, in '
+    'per_lender[].policy_sheet.conditions, the conditions the DSA confirms by '
+    'hand (the sheet\'s words): mention that they exist and read them out when asked.'
 )
 
 _PAN_RE = re.compile(r'^[A-Z]{5}[0-9]{4}[A-Z]$')
@@ -640,6 +642,9 @@ def _lender_line(row: dict) -> str:
     grid = next((n for n in row.get('notes') or [] if n.startswith('FOIR ')), None)
     if grid:
         line += f'; {grid}'
+    conditions = (row.get('policy_sheet') or {}).get('conditions') or []
+    if conditions:
+        line += f'; {len(conditions)} condition(s) to confirm (policy_sheet.conditions)'
     return line
 
 

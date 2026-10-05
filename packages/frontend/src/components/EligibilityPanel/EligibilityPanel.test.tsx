@@ -27,6 +27,7 @@ import {
 } from './fixtures';
 import {
   calculateRequestBody,
+  emptyTradeline,
   inputsKey,
   normalizeInputs,
   parseCalculateResponse,
@@ -154,6 +155,30 @@ describe('Suggested banks', () => {
     );
   });
 
+  it('marks a bank that does not lend to the category as not offered', () => {
+    const reason =
+      'HDFC Bank does not lend to CAT U (unlisted) companies (Sheet1, slab 60,000, CAT_U is NA, cell I8)';
+    const html = lenders({
+      result: {
+        ...RESULT,
+        suggestion: {
+          ...RESULT.suggestion,
+          declined: [
+            ...RESULT.suggestion.declined,
+            {
+              lender: 'HDFC Bank',
+              lender_id: 'hdfc_bank',
+              reason,
+              not_offered: true,
+            },
+          ],
+        },
+      },
+    });
+    expect(html.match(/data-testid="not-offered"/g)).toHaveLength(1);
+    expect(plain(html)).toContain(`HDFC Bank Not offered : ${reason}`);
+  });
+
   it('shows nothing without a suggestion', () => {
     const html = lenders({
       result: {
@@ -278,6 +303,10 @@ describe('Lenders table (the worked example)', () => {
       'HL deviation 5%: meaning to be confirmed with Smart Solutions (Sheet2, cell B4)',
       'Minimum CIBIL 700: Sample: not in your policy sheet',
     ];
+    const sheetConditions = [
+      'Check the bank statement: no bounce in the last 6 months (cell F3)',
+      'Bachelor accommodation: Not Funding (cell H3)',
+    ];
     const withSheet = {
       ...RESULT,
       per_lender: RESULT.per_lender.map((r) =>
@@ -292,6 +321,8 @@ describe('Lenders table (the worked example)', () => {
                 company_unlisted: false,
                 lines: sheetLines,
                 hl_deviation: 0.05,
+                hl_deviation_applied: false,
+                conditions: sheetConditions,
               },
             }
           : r,
@@ -304,6 +335,9 @@ describe('Lenders table (the worked example)', () => {
     );
     expect(sheet).toContain('From your policy sheet');
     for (const line of sheetLines) expect(sheet).toContain(line);
+    expect(icici).toContain('data-testid="policy-sheet-conditions"');
+    expect(sheet).toContain('Conditions to confirm');
+    for (const line of sheetConditions) expect(sheet).toContain(line);
     expect(html).toContain('data-testid="policy-sheet-legend"');
     expect(plain(html)).toContain('From Policy (your sheet)');
     // Without a sheet: neither.
@@ -543,6 +577,53 @@ describe('Profile', () => {
       />,
     );
     expect(edited.match(/data-testid="from-documents"/g)).toHaveLength(4);
+  });
+
+  it('asks about a running home loan, defaulting to the obligations', () => {
+    const profile = { ...parsed.inputs.profile, has_running_home_loan: null };
+    const auto = render(
+      <ProfileSection
+        inputs={{ ...parsed.inputs, profile }}
+        onEdit={noop}
+        prefill={prefill}
+      />,
+    );
+    expect(auto).toContain('data-testid="running-home-loan"');
+    expect(plain(auto)).toContain('Running home loan');
+    expect(plain(auto)).toContain('From the obligations: No');
+    const withHomeLoan = render(
+      <ProfileSection
+        inputs={{
+          ...parsed.inputs,
+          profile,
+          cibil: {
+            ...parsed.inputs.cibil,
+            tradelines: [
+              {
+                ...emptyTradeline(),
+                loan_type: 'home',
+                status: 'active',
+                action: 'obligate',
+              },
+            ],
+          },
+        }}
+        onEdit={noop}
+        prefill={prefill}
+      />,
+    );
+    expect(plain(withHomeLoan)).toContain('From the obligations: Yes');
+    const yes = render(
+      <ProfileSection
+        inputs={{
+          ...parsed.inputs,
+          profile: { ...profile, has_running_home_loan: true },
+        }}
+        onEdit={noop}
+        prefill={prefill}
+      />,
+    );
+    expect(yes).toMatch(/<option value="yes" selected="">/);
   });
 
   it('shows "Check availability" and "Check category" per lender', () => {

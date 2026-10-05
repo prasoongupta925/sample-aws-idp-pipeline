@@ -66,6 +66,7 @@ from boto3.dynamodb.conditions import Key
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, HTTPException, Path, Query
 from pydantic import (
+    AfterValidator,
     BaseModel,
     BeforeValidator,
     ConfigDict,
@@ -216,7 +217,14 @@ def _finite(value: Any) -> Any:
 
 Money = Annotated[Annotated[float, Field(ge=0, le=MAX_AMOUNT, allow_inf_nan=False)], BeforeValidator(_finite)]
 Count = Annotated[Annotated[int, Field(ge=0, le=999)], BeforeValidator(_finite)]
-Score = Annotated[Annotated[int, Field(ge=300, le=900)], BeforeValidator(_finite)]
+def _score(value: int) -> int:
+    """300 to 900; -1 and 0 are the bureau's "no credit history" (a policy sheet may still lend)."""
+    if value in eligibility.NO_HISTORY_SCORES or 300 <= value <= 900:
+        return value
+    raise ValueError("must be 300 to 900, or -1 / 0 for no credit history")
+
+
+Score = Annotated[Annotated[int, Field(ge=-1, le=900)], BeforeValidator(_finite), AfterValidator(_score)]
 InstalmentCount = Annotated[Annotated[int, Field(ge=0, le=600)], BeforeValidator(_finite)]
 TenureMonths = Annotated[Annotated[int, Field(ge=1, le=480)], BeforeValidator(_finite)]
 OptionalName = Annotated[
@@ -320,6 +328,11 @@ class Profile(_Input):
         default=None, description="Net monthly salary; a salary verified by the file check is used instead"
     )
     other_income: list[OtherIncome] = Field(default=[], max_length=10)
+    has_running_home_loan: bool | None = Field(
+        default=None,
+        description="The applicant has a running home loan: a policy sheet's HL deviation then raises that bank's "
+        "FOIR. null: found from the obligations (a Home Loan tradeline that keeps running)",
+    )
 
     @field_validator("dob")
     @classmethod
@@ -388,7 +401,9 @@ class Tradeline(_Input):
 
 
 class Cibil(_Input):
-    score: Score | None = Field(default=None, description="CIBIL score, 300-900")
+    score: Score | None = Field(
+        default=None, description="CIBIL score, 300-900; -1 or 0 when the bureau has no credit history (new to credit)"
+    )
     enquiries: Enquiries = Field(default_factory=Enquiries)
     tradelines: list[Tradeline] = Field(default=[], max_length=50)
     source: Annotated[CibilSourceId, _vocabulary(CIBIL_SOURCES)] = Field(
@@ -733,8 +748,25 @@ class PolicySheetTerms(BaseModel):
         'HDFC Bank, slab 35,000, CAT_B, cell L5)"; the sample values the sheet lacks, labelled',
     )
     hl_deviation: float | None = Field(
-        default=None, description="The sheet's HL deviation (0.05 = 5%): shown, never used (meaning to be confirmed)"
+        default=None,
+        description="The sheet's HL deviation (0.05 = 5 percentage points): added to the FOIR with a running home loan",
     )
+    hl_deviation_applied: bool = Field(
+        default=False, description="The applicant has a running home loan and the FOIR includes the HL deviation"
+    )
+    conditions: list[str] = Field(
+        default=[],
+        description='"Conditions to confirm": the bank\'s conditions the sheet gives that the DSA checks by hand, '
+        'in the sheet\'s words with the cell ("Bachelor accommodation: Not Funding (cell H2)"), and what the '
+        "engine could not decide (an enquiries limit with no count for its window; the bounce condition)",
+    )
+
+
+class NotOffered(BaseModel):
+    bank: str = Field(description="The bank as the sheet names it")
+    category: str = Field(description='As the app shows it: "CAT U"')
+    category_code: str = Field(description='As the sheet writes it: "CAT_U"')
+    slab_start: int = Field(description="The net monthly salary slab (rupees)")
 
 
 class LenderEligibility(BaseModel):
@@ -798,6 +830,10 @@ class LenderEligibility(BaseModel):
         default=None,
         description="The cells of your policy sheet this result used; null: the lender has none, or the sheet "
         "could not price this applicant",
+    )
+    not_offered: NotOffered | None = Field(
+        default=None,
+        description="The bank does not lend to this company category at this slab (NA in its sheet); null otherwise",
     )
 
 
@@ -885,6 +921,9 @@ class DeclinedBank(BaseModel):
     status: LenderStatus
     label: str | None
     reason: str = Field(description="One line on why the bank says no")
+    not_offered: bool = Field(
+        default=False, description="The bank does not lend to the company's category (NA in its policy sheet)"
+    )
 
 
 class Suggestion(BaseModel):
@@ -894,6 +933,14 @@ class Suggestion(BaseModel):
         "the first is best_lender"
     )
     declined: list[DeclinedBank]
+
+
+class HomeLoan(BaseModel):
+    running: bool = Field(description="A policy sheet's HL deviation raises that bank's FOIR")
+    source: Literal["entered", "obligations", "none"] = Field(
+        description="entered: profile.has_running_home_loan; obligations: a Home Loan tradeline that keeps running"
+    )
+    loans: list[str] = Field(default=[], description="The running Home Loan tradelines found")
 
 
 class CalculateResponse(BaseModel):
@@ -906,6 +953,7 @@ class CalculateResponse(BaseModel):
     income: EligibilityIncome
     obligations: float = Field(description="Monthly obligations counted")
     obligation_details: ObligationDetails
+    home_loan: HomeLoan | None = Field(default=None, description="The running home loan used for the HL deviation")
     bt_amount: float
     requested: RequestedLoan
     per_lender: list[LenderEligibility]

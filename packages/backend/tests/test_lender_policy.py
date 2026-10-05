@@ -7,7 +7,9 @@ and companies are synthetic.
 """
 
 import datetime as dt
+import json
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
@@ -300,8 +302,8 @@ def stored_policy(data: bytes | None = None) -> lender_policy.StoredPolicy:
     )
 
 
-def calculation_book(companies=None):
-    lists = reference_data.CalculationLists(None, companies, None, stored_policy())
+def calculation_book(companies=None, data: bytes | None = None):
+    lists = reference_data.CalculationLists(None, companies, None, stored_policy(data))
     return reference_data.CalculationBook(el.load_policy_book(), lists), lists
 
 
@@ -471,3 +473,355 @@ def test_a_policy_without_ttl_is_kept_until_replaced():
     assert not lender_policy._ttl_passed({"upload_id": "u1"}, now)
     assert lender_policy._ttl_passed({"upload_id": "u1", "expires_at": Decimal(int(now.timestamp()) - 1)}, now)
     assert not lender_policy._ttl_passed({"upload_id": "u1", "expires_at": Decimal(int(now.timestamp()) + 1)}, now)
+
+
+# ------------------------------------------------------------------ the corrected sheet: NA = not offered
+def v2_bytes() -> bytes:
+    return (Path(__file__).parent / "fixtures" / "policy_workbook_v2.xlsx").read_bytes()
+
+
+def test_a_category_the_bank_does_not_lend_to_is_not_eligible(store):
+    book, _ = calculation_book(data=v2_bytes())
+    result = el.calculate(applicant(company="Unheard Of Traders Pvt Ltd"), book=book)
+    for lender_id, bank in (("hdfc_bank", "HDFC Bank"), ("bandhan_bank", "Bandhan Bank")):
+        row = at(result, lender_id)
+        assert row["status"] == "not_eligible"
+        assert row["reasons"][0].startswith(f"{bank} does not lend to CAT U (unlisted) companies (Sheet1, slab 60,000")
+        assert row["not_offered"] == {
+            "bank": bank,
+            "category": "CAT U",
+            "category_code": "CAT_U",
+            "slab_start": 60000,
+        }
+        assert row["policy_sheet"] is None
+        assert row["eligible_amount"] == 0 and row["emi"] == 0
+        assert row["foir_eligibility"] is None and row["computed_amount"] is None
+        declined = next(d for d in result["suggestion"]["declined"] if d["lender_id"] == lender_id)
+        assert declined["reason"].startswith(f"{bank} does not lend to CAT U (unlisted) companies")
+        assert declined["not_offered"] is True
+    hdfc = at(result, "hdfc_bank")
+    assert "cell I8" in hdfc["reasons"][0]  # ROI CAT_U of HDFC's 60,000 row
+    # The banks whose sheet prices CAT U still do.
+    icici = at(result, "icici_bank")
+    assert all(not d["not_offered"] for d in result["suggestion"]["declined"] if d["lender_id"] == "icici_bank")
+    assert icici["not_offered"] is None and icici["policy_sheet"]["category"] == "CAT U"
+
+
+def test_a_listed_category_is_priced_as_before_on_the_corrected_sheet(store):
+    book, _ = calculation_book(data=v2_bytes())
+    result = el.calculate(applicant(), book=book)
+    hdfc = at(result, "hdfc_bank")  # Konkan Softworks is CAT A with HDFC Bank
+    assert hdfc["not_offered"] is None and hdfc["policy_sheet"]["slab_start"] == 60000
+    assert hdfc["status"] == "eligible"
+    # Bandhan Bank's company list does not have it: CAT U, which Bandhan Bank does not lend to.
+    assert at(result, "bandhan_bank")["not_offered"]["category_code"] == "CAT_U"
+
+
+# ------------------------------------------------------------------ the HL deviation: a running home loan
+V2_BANKS = ("hdfc_bank", "icici_bank", "axis_bank", "bandhan_bank", "indusind_bank")
+CAT_B_COMPANY = "Synthetic Cat B Works Pvt Ltd"
+
+
+def cat_b_book():
+    """The corrected sheet with a company list making CAT_B_COMPANY CAT B at every bank."""
+    rows = [[lender_id, CAT_B_COMPANY, "CAT B"] for lender_id in V2_BANKS]
+    companies = reference_data.StoredList(
+        kind="company_categories",
+        upload_id="c1",
+        filename="companies.csv",
+        uploaded_at=NOW.isoformat(),
+        expires_at=int(NOW.timestamp()) + 86400,
+        rows=rows,
+        lenders=["HDFC Bank", "ICICI Bank", "Axis Bank", "Bandhan Bank", "Indusind Bank"],
+    )
+    return calculation_book(companies, data=v2_bytes())[0]
+
+
+def home_loan_applicant(running=None, tradeline=None):
+    inputs = applicant(net=60000, emi=5000, company=CAT_B_COMPANY)
+    if running is not None:
+        inputs["profile"]["has_running_home_loan"] = running
+    if tradeline is not None:
+        inputs["cibil"]["tradelines"].append(tradeline)
+    return inputs
+
+
+def foir_eligibility(row, foir):
+    per_lakh = Decimal(str(row["per_lakh_emi"]))
+    obligations = Decimal(str(row["obligations"]))
+    want = (Decimal(str(row["income_considered"])) * Decimal(str(foir)) - obligations) / per_lakh * 100000
+    return pytest.approx(float(want), abs=1)
+
+
+def test_a_running_home_loan_raises_the_foir_by_the_hl_deviation(store):
+    book = cat_b_book()
+    without = {r["lender_id"]: r for r in el.calculate(home_loan_applicant(), book=book)["per_lender"]}
+    result = el.calculate(home_loan_applicant(running=True), book=book)
+    assert result["home_loan"] == {"running": True, "source": "entered", "loans": []}
+    raised = {r["lender_id"]: r for r in result["per_lender"]}
+    for lender_id in ("hdfc_bank", "icici_bank", "indusind_bank"):  # HL Deviation 0.05
+        before, after = without[lender_id], raised[lender_id]
+        assert before["foir"] == pytest.approx(0.6) and after["foir"] == pytest.approx(0.65)
+        assert before["foir_eligibility"] == foir_eligibility(before, 0.6)
+        assert after["foir_eligibility"] == foir_eligibility(after, 0.65)
+        # +5 points of 60,000 = 3,000 more a month for EMIs.
+        gain = Decimal(str(after["foir_eligibility"])) - Decimal(str(before["foir_eligibility"]))
+        assert float(gain) == pytest.approx(3000 / after["per_lakh_emi"] * 100000, abs=1)
+        assert after["policy_sheet"]["hl_deviation_applied"] is True
+        assert before["policy_sheet"]["hl_deviation_applied"] is False
+    hdfc = raised["hdfc_bank"]["policy_sheet"]["lines"]
+    assert "FOIR 60% + 5% home-loan deviation = 65% (HDFC Bank, Sheet2, cell U2)" in hdfc
+    assert not any("only with a running home loan" in line for line in hdfc)
+    assert any(
+        "only with a running home loan (none here)" in line for line in without["hdfc_bank"]["policy_sheet"]["lines"]
+    )
+    for lender_id in ("axis_bank", "bandhan_bank"):  # HL Deviation NA: unchanged
+        assert raised[lender_id]["foir"] == without[lender_id]["foir"] == pytest.approx(0.6)
+        assert raised[lender_id]["foir_eligibility"] == without[lender_id]["foir_eligibility"]
+        assert raised[lender_id]["policy_sheet"]["hl_deviation_applied"] is False
+        assert any(
+            line.startswith("Running home loan: no HL deviation for ") and "FOIR stays 60%" in line
+            for line in raised[lender_id]["policy_sheet"]["lines"]
+        )
+
+
+HOME_LOAN = {
+    "loan_type": "home",
+    "lender": "Synthetic Housing Finance",
+    "outstanding": 2500000,
+    "emi": 0,
+    "status": "active",
+    "action": "obligate",
+}
+
+
+def test_a_home_loan_in_the_obligations_is_found(store):
+    book = cat_b_book()
+    result = el.calculate(home_loan_applicant(tradeline=HOME_LOAN), book=book)
+    assert result["home_loan"]["running"] is True and result["home_loan"]["source"] == "obligations"
+    assert result["home_loan"]["loans"] == ["Tradeline 2 (Synthetic Housing Finance, Home Loan)"]
+    assert at(result, "hdfc_bank")["foir"] == pytest.approx(0.65)
+    assert any(n.startswith("Running home loan found in the obligations") for n in result["notes"])
+    # Closed, taken over (BT) or closed before disbursal: not running.
+    for change in ({"status": "closed"}, {"action": "close"}, {"action": "bt"}):
+        ended = el.calculate(home_loan_applicant(tradeline={**HOME_LOAN, **change}), book=book)
+        assert ended["home_loan"]["running"] is False, change
+        assert at(ended, "hdfc_bank")["foir"] == pytest.approx(0.6)
+
+
+def test_the_entered_answer_overrides_the_obligations(store):
+    book = cat_b_book()
+    result = el.calculate(home_loan_applicant(running=False, tradeline=HOME_LOAN), book=book)
+    assert result["home_loan"] == {
+        "running": False,
+        "source": "entered",
+        "loans": ["Tradeline 2 (Synthetic Housing Finance, Home Loan)"],
+    }
+    assert at(result, "hdfc_bank")["foir"] == pytest.approx(0.6)
+    assert any(n.startswith("Running home loan set to No") for n in result["notes"])
+
+
+def test_the_raised_foir_is_capped_at_100_percent(store):
+    rule = ["HDFC Bank", 0.05, "Salary * Multiplier", "NA", 3, "NA", "NA", "NA", "Monthly", 0.5, "Listed Company"]
+    sheet1 = grid_rows(banks=(("HDFC Bank", (25000, 50000)),), overrides={(4, "E"): 0.98, (5, "E"): 0.98})
+    data = workbook(sheet1=sheet1, sheet2=rules_rows(rule))
+    lists = reference_data.CalculationLists(None, None, None, stored_policy(data))
+    book = reference_data.CalculationBook(el.load_policy_book(), lists)
+    hdfc = at(el.calculate(applicant(net=60000, emi=0, tenure=48), book=book), "hdfc_bank")
+    assert hdfc["foir"] == pytest.approx(0.98)
+    inputs = applicant(net=60000, emi=0, tenure=48)
+    inputs["profile"]["has_running_home_loan"] = True
+    hdfc = at(el.calculate(inputs, book=book), "hdfc_bank")
+    assert hdfc["foir"] == pytest.approx(1.0)
+    assert (
+        "FOIR 98% + 5% home-loan deviation = 100% (capped at 100%) (HDFC Bank, Sheet2, cell C3)"
+        in (hdfc["policy_sheet"]["lines"])
+    )
+
+
+def test_lenders_without_a_sheet_ignore_the_home_loan(store):
+    book = cat_b_book()
+    before = at(el.calculate(home_loan_applicant(), book=book), "bajaj_finance")
+    after = at(el.calculate(home_loan_applicant(running=True), book=book), "bajaj_finance")
+    assert before["policy_sheet"] is None and after["foir"] == before["foir"]
+
+
+# ------------------------------------------------------------------ the corrected sheet's Sheet2 conditions (5 Oct)
+def v2_applicant(score=765, enquiries=None):
+    """Net 60,000, EMI 5,000, CAT B at every bank (cat_b_book); the CIBIL block as given."""
+    inputs = home_loan_applicant()
+    inputs["cibil"]["score"] = score
+    if enquiries is not None:
+        inputs["cibil"]["enquiries"] = enquiries
+    return inputs
+
+
+def test_the_sheets_minimum_cibil_replaces_the_sample(store):
+    book = cat_b_book()
+    result = el.calculate(v2_applicant(score=715), book=book)
+    hdfc, icici = at(result, "hdfc_bank"), at(result, "icici_bank")
+    assert hdfc["status"] == "eligible"  # Cibil Score 710 on the sheet; the sample policy said 750
+    lines = hdfc["policy_sheet"]["lines"]
+    assert 'Minimum CIBIL score 710 (Sheet2, HDFC Bank, Cibil Score "710", cell B2)' in lines
+    assert not any("CIBIL" in line and el.NOT_IN_SHEET_LABEL in line for line in lines)
+    assert icici["status"] == "not_eligible"
+    assert icici["reasons"] == [
+        'ICICI Bank needs CIBIL >= 720: the score is 715 (Sheet2, ICICI Bank, Cibil Score "720", cell B3)'
+    ]
+    declined = {d["lender_id"]: d["reason"] for d in result["suggestion"]["declined"]}
+    assert declined["icici_bank"].startswith("ICICI Bank needs CIBIL >= 720")
+    assert [book.lender(i).min_cibil_score for i in V2_BANKS] == [710, 720, 750, 700, 725]
+    # A lender without a sheet keeps its sample policy's wording.
+    tata = at(el.calculate(v2_applicant(score=695), book=book), "tata_capital")
+    assert "CIBIL score 695 is below Tata Capital's minimum 725" in tata["reasons"]
+
+
+@pytest.mark.parametrize("score", [-1, 0])
+def test_no_credit_history_is_lent_up_to_the_minus_cibil_max_loan(store, score):
+    book = cat_b_book()
+    result = el.calculate(v2_applicant(score=score), book=book)
+    hdfc = at(result, "hdfc_bank")
+    assert hdfc["status"] == "eligible"
+    assert (hdfc["eligible_amount"], hdfc["computed_amount"]) == (1000000, 1000000)  # the formulas give 11,55,000
+    assert (
+        f"No credit history (CIBIL {score}): HDFC Bank lends at most ₹10,00,000 "
+        '(Sheet2, HDFC Bank, Minus Cibil Max Loan "1000000", cell C2)'
+    ) in hdfc["policy_sheet"]["lines"]
+    assert at(result, "bandhan_bank")["eligible_amount"] == 400000
+    assert at(result, "indusind_bank")["eligible_amount"] == 600000
+    assert at(result, "icici_bank")["eligible_amount"] == 1260000  # below its 15,00,000: the formulas decide
+    # A lender without the rule declines.
+    tata = at(result, "tata_capital")
+    assert tata["status"] == "not_eligible"
+    assert f"CIBIL {score}: no credit history, and Tata Capital needs CIBIL >= 725" in tata["reasons"]
+
+
+def test_the_sheets_enquiry_limit_uses_its_own_window(store):
+    book = cat_b_book()
+    result = el.calculate(v2_applicant(enquiries={"d30": 5, "d60": 6, "d90": 6, "d120": 7}), book=book)
+    hdfc, icici, bandhan = at(result, "hdfc_bank"), at(result, "icici_bank"), at(result, "bandhan_bank")
+    assert hdfc["reasons"] == [
+        "6 enquiries in the last 60 days: more than HDFC Bank's limit of 5 "
+        '(Sheet2, HDFC Bank, Enquiries "Last 60 days 5", cell D2)'
+    ]
+    assert icici["reasons"][0].startswith("5 enquiries in the last 30 days: more than ICICI Bank's limit of 4")
+    assert bandhan["status"] == "eligible"  # Last 90 days 6: six is within
+    lines = bandhan["policy_sheet"]["lines"]
+    assert (
+        "6 enquiries in the last 90 days: within Bandhan Bank's limit of 6 "
+        '(Sheet2, Bandhan Bank, Enquiries "Last 90 days 6", cell D5)'
+    ) in lines
+    assert not any(line.startswith("Maximum enquiries in the last 90 days") for line in lines)
+    declined = {d["lender_id"]: d["reason"] for d in result["suggestion"]["declined"]}
+    assert declined["hdfc_bank"].startswith("6 enquiries in the last 60 days: more than HDFC Bank's limit of 5")
+
+
+def test_another_window_decides_where_it_can_else_the_report_is_to_be_checked(store):
+    book = cat_b_book()
+    # Indusind Bank: Last 270 days 9. The inputs stop at 120 days.
+    over = at(el.calculate(v2_applicant(enquiries={"d30": 2, "d60": 4, "d90": 7, "d120": 10}), book=book), "indusind_bank")
+    assert over["reasons"] == [
+        "10 enquiries in the last 120 days already: more than Indusind Bank's limit of 9 in 270 days "
+        '(Sheet2, Indusind Bank, Enquiries "Last 270 days 9", cell D6)'
+    ]
+    within = at(el.calculate(v2_applicant(enquiries={"d30": 0, "d60": 1, "d90": 2, "d120": 3}), book=book), "indusind_bank")
+    assert within["status"] == "eligible"
+    assert within["policy_sheet"]["conditions"][0] == (
+        "Check the credit report: at most 9 enquiries in the last 270 days "
+        "(3 enquiries in the last 120 days entered) (cell D6)"
+    )
+    # Only a 120-day count for HDFC Bank (Last 60 days 5): 2 in 120 days is within 5 in 60.
+    hdfc = at(el.calculate(v2_applicant(enquiries={"d120": 2}), book=book), "hdfc_bank")
+    assert hdfc["status"] == "eligible"
+    assert any(
+        line.startswith("2 enquiries in the last 120 days: within HDFC Bank's limit of 5 in 60 days")
+        for line in hdfc["policy_sheet"]["lines"]
+    )
+    # Only a 30-day count of 5: within 5 in 30, but 60 days could hold more: check.
+    hdfc = at(el.calculate(v2_applicant(enquiries={"d30": 5}), book=book), "hdfc_bank")
+    assert hdfc["status"] == "eligible"
+    assert hdfc["policy_sheet"]["conditions"][0] == (
+        "Check the credit report: at most 5 enquiries in the last 60 days (5 enquiries in the last 30 days entered) "
+        "(cell D2)"
+    )
+    # Nothing entered: as before, not eligible until it is.
+    none = at(el.calculate(v2_applicant(enquiries={}), book=book), "hdfc_bank")
+    assert "Enquiries in the last 60 days not entered" in none["reasons"]
+
+
+def test_conditions_to_confirm_are_the_sheets_words_with_their_cells(store):
+    book = cat_b_book()
+    result = el.calculate(v2_applicant(), book=book)
+    hdfc = at(result, "hdfc_bank")["policy_sheet"]["conditions"]
+    assert hdfc == [
+        "Check the bank statement: no bounce in the last 3 months (cell F2)",
+        "Work from home: HR Confirmation Required (cell E2)",
+        "PF deduction: Required (cell G2)",
+        "Bachelor accommodation: Not Funding (cell H2)",
+        "Director / doctor profile: Funding (cell I2)",
+        "Consultant profile: Funding (cell J2)",
+        "Grade 4 employees: Not Funding (cell K2)",
+        "Contract employees: Not Funding (cell L2)",
+        "Permanent address proof: Required (cell M2)",
+        "Co-applicant's home loan: Obligate (cell N2)",
+        "Co-applicant income: Consider (cell O2)",
+        "Guarantor obligation: Consider (cell P2)",
+        "Trading in the bank statement: Not Funding (cell Q2)",
+        "Verification: Home and Office (cell R2)",
+        "Top-up: Yes (cell T2)",
+        "Recent funding: 3 months Ok (cell Z2)",
+    ]  # OVD is NA for HDFC Bank
+    axis = at(result, "axis_bank")["policy_sheet"]["conditions"]
+    assert "OVD (officially verified document): Required (cell S4)" in axis and "Verification: Home (cell R4)" in axis
+    assert at(result, "tata_capital")["policy_sheet"] is None
+    # The first Policy.xlsx has none of these columns: no conditions, and the sample limits labelled.
+    old_book, _ = calculation_book()
+    old = at(el.calculate(applicant(), book=old_book), "hdfc_bank")["policy_sheet"]
+    assert old["conditions"] == []
+    assert any(line.startswith("Minimum CIBIL score") and el.NOT_IN_SHEET_LABEL in line for line in old["lines"])
+    assert any(line.startswith("Maximum enquiries") and el.NOT_IN_SHEET_LABEL in line for line in old["lines"])
+
+
+def test_co_applicant_salary_consider_and_not_consider(store):
+    book = cat_b_book()
+    inputs = v2_applicant()
+    inputs["co_applicant"] = {"net_income": 20000}
+    result = el.calculate(inputs, book=book)
+    hdfc = at(result, "hdfc_bank")  # Consider
+    assert hdfc["income_considered"] == 80000
+    assert any(
+        line.startswith("Co-applicant salary ₹20,000 added: HDFC Bank considers a co-applicant's salary")
+        for line in hdfc["policy_sheet"]["lines"]
+    )
+    bandhan = at(result, "bandhan_bank")  # Not Consider
+    assert bandhan["income_considered"] == 60000
+    assert any(
+        n.startswith("Co-applicant salary ₹20,000 not added: Bandhan Bank does not consider a co-applicant's salary")
+        for n in bandhan["notes"]
+    )
+
+
+def test_a_parse_stored_by_the_earlier_app_asks_for_a_new_upload(store, client):
+    table, s3, _ = store
+    assert post(client, v2_bytes(), filename="Policy .xlsx").status_code == 200
+    status = client.get("/eligibility/lender-policy").json()["current"]
+    assert not any(w.startswith("This sheet was read by an earlier version") for w in status["warnings"])
+    # The parse the earlier app stored: no parser_version, none of the new rule fields.
+    upload_id = table.items[("APP#LENDERPOLICY", "CURRENT")]["upload_id"]
+    key = (BUCKET, f"lender-policy/{upload_id}/policy.json")
+    old = json.loads(s3.objects[key]["Body"])
+    del old["parser_version"]
+    for bank in old["banks"]:
+        bank["rules"] = {
+            k: v
+            for k, v in bank["rules"].items()
+            if k not in ("min_cibil", "minus_cibil_max_loan", "enquiries_days", "enquiries_max", "bounce_months", "conditions")
+        }
+    s3.objects[key]["Body"] = json.dumps(old).encode()
+    lender_policy.reset_cache()
+    stored = lender_policy.load(NOW)
+    assert stored.workbook.parser_version == 1
+    status = client.get("/eligibility/lender-policy").json()["current"]
+    assert status["warnings"][0].startswith("This sheet was read by an earlier version of the app")
+    # Its policies still work, with the sample minimums.
+    assert stored.policies()["hdfc_bank"].min_cibil_score == el.load_policy_book().lender("hdfc_bank").min_cibil_score

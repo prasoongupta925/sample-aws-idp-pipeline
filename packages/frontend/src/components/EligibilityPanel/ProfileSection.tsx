@@ -35,6 +35,7 @@ import {
   fillFromDocuments,
   fillableFields,
   formatRupees,
+  homeLoanInObligations,
   incomeHasFrequency,
   isFutureDate,
   localToday,
@@ -461,6 +462,48 @@ export default function ProfileSection({
                     {t(`eligibility.profile.house.${value}`)}
                   </option>
                 ))}
+              </select>
+            )}
+          </Field>
+          <Field
+            id={idOf('has_running_home_loan')}
+            label={t('eligibility.profile.homeLoan')}
+            hint={t('eligibility.profile.homeLoanHint')}
+          >
+            {({ id, describedBy }) => (
+              <select
+                id={id}
+                value={
+                  p.has_running_home_loan == null
+                    ? ''
+                    : p.has_running_home_loan
+                      ? 'yes'
+                      : 'no'
+                }
+                onChange={(e) =>
+                  patch({
+                    has_running_home_loan:
+                      e.target.value === '' ? null : e.target.value === 'yes',
+                  })
+                }
+                aria-describedby={describedBy}
+                disabled={disabled}
+                className={CONTROL_CLASS}
+                data-testid="running-home-loan"
+              >
+                <option value="">
+                  {`${t('eligibility.profile.homeLoanOption.auto')}: ${t(
+                    homeLoanInObligations(inputs.cibil.tradelines)
+                      ? 'eligibility.profile.homeLoanOption.yes'
+                      : 'eligibility.profile.homeLoanOption.no',
+                  )}`}
+                </option>
+                <option value="yes">
+                  {t('eligibility.profile.homeLoanOption.yes')}
+                </option>
+                <option value="no">
+                  {t('eligibility.profile.homeLoanOption.no')}
+                </option>
               </select>
             )}
           </Field>

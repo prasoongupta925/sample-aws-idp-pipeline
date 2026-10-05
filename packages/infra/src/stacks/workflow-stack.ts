@@ -841,7 +841,7 @@ export class WorkflowStack extends Stack {
       ...commonLambdaProps,
       functionName: 'idp-v2-document-facts',
       handler: 'index.handler',
-      timeout: Duration.minutes(5),
+      timeout: Duration.minutes(10),
       memorySize: 512,
       code: lambda.Code.fromAsset(
         path.join(__dirname, '../functions/step-functions/document-facts'),
@@ -851,7 +851,7 @@ export class WorkflowStack extends Stack {
       environment: {
         ...commonLambdaProps.environment,
         FACTS_MODEL_ID: models.facts,
-        FACTS_MAX_CHARS: '60000',
+        FACTS_MAX_CHARS: '250000',
         // gpt-oss-120b reasons before the tool call; its output limit is 16K
         FACTS_MAX_OUTPUT_TOKENS: '16000',
         BEDROCK_SERVICE_TIER: pipelineServiceTier,

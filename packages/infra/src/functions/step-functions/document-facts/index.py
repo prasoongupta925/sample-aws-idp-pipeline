@@ -48,7 +48,7 @@ from normalize import normalise_fields
 SCHEMA_VERSION = 1
 SOURCE_MODEL = 'model'
 SOURCE_NONE = 'none'
-DEFAULT_MAX_CHARS = 60000
+DEFAULT_MAX_CHARS = 250000
 WEBREQ_FILE_TYPE = 'application/x-webreq'
 SEGMENT_FIELDS = ['segment_type', *MACHINE_TEXT_FIELDS, 'ai_analysis']
 

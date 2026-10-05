@@ -24,6 +24,7 @@ import {
   formatIndianNumber,
   parseAmount,
   parseCount,
+  parseScore,
 } from '../../lib/eligibility';
 
 // Form controls of the Eligibility & lenders panel (the File Check panel's look).
@@ -578,7 +579,7 @@ interface NumberInputProps {
   value: number | null;
   /** The typed number; null when blank; NaN when it is not a number. */
   onChange: (value: number | null) => void;
-  kind?: 'amount' | 'count';
+  kind?: 'amount' | 'count' | 'score';
   describedBy?: string;
   /** Shows a rupee sign in front (amounts). */
   rupees?: boolean;
@@ -617,7 +618,12 @@ export function NumberInput({
   const errorId = useId();
   const [text, setText] = useState(() => show(value));
   const [focused, setFocused] = useState(false);
-  const parse = kind === 'amount' ? parseAmount : parseCount;
+  const parse =
+    kind === 'amount'
+      ? parseAmount
+      : kind === 'score'
+        ? parseScore
+        : parseCount;
   const typedInvalid = Number.isNaN(parse(text) as number);
   const describedByIds =
     [describedBy, typedInvalid ? errorId : null].filter(Boolean).join(' ') ||

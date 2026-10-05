@@ -16,6 +16,7 @@ import {
   formatIndianNumber,
   formatRoi,
   formatRupees,
+  homeLoanInObligations,
   inputsKey,
   inputsRequestBody,
   isFutureDate,
@@ -31,9 +32,11 @@ import {
   parseInputsResponse,
   parseLenders,
   parseLoginResponse,
+  parseScore,
   removeTradeline,
   roiPercent,
   rowFromDocument,
+  scoreLooksValid,
   setCibil,
   setEnquiries,
   setFieldValue,
@@ -103,6 +106,19 @@ describe('Indian number formatting', () => {
     expect(parseCount('60')).toBe(60);
     expect(parseCount('6.5')).toBeNaN();
     expect(parseCount('')).toBeNull();
+  });
+
+  it('takes a CIBIL score of 300-900, or -1 / 0 for no credit history', () => {
+    expect(parseScore('760')).toBe(760);
+    expect(parseScore('-1')).toBe(-1);
+    expect(parseScore(' 0 ')).toBe(0);
+    expect(parseScore('')).toBeNull();
+    expect(parseScore('7.5')).toBeNaN();
+    expect(parseScore('NTC')).toBeNaN();
+    for (const score of [300, 760, 900, -1, 0])
+      expect(scoreLooksValid(score)).toBe(true);
+    for (const score of [299, 901, -2, 150, 760.5])
+      expect(scoreLooksValid(score)).toBe(false);
   });
 
   it('shows the ROI as a percent whether sent as 11 or 0.11', () => {
@@ -752,5 +768,67 @@ describe('document values (the auto-fill)', () => {
       file_ready: false,
       open_issues: 5,
     });
+  });
+});
+
+describe('home loan and not-offered categories', () => {
+  it('sends the running home loan answer, null when left to the obligations', () => {
+    const inputs = emptyInputs();
+    expect(calculateRequestBody(SNEHA, inputs).inputs?.profile).toMatchObject({
+      has_running_home_loan: null,
+    });
+    const yes = setProfile(inputs, { has_running_home_loan: true });
+    expect(calculateRequestBody(SNEHA, yes).inputs?.profile).toMatchObject({
+      has_running_home_loan: true,
+    });
+    const read = normalizeInputs({
+      profile: { has_running_home_loan: false },
+    });
+    expect(read.profile.has_running_home_loan).toBe(false);
+    expect(
+      normalizeInputs({ profile: { has_running_home_loan: 'yes' } }).profile
+        .has_running_home_loan,
+    ).toBeNull();
+  });
+
+  it('finds a running home loan in the obligations as the backend does', () => {
+    const home = {
+      ...addTradeline(emptyInputs()).cibil.tradelines[0],
+      loan_type: 'home' as const,
+      status: 'active' as const,
+      action: 'obligate' as const,
+    };
+    expect(homeLoanInObligations([home])).toBe(true);
+    expect(homeLoanInObligations([{ ...home, status: null }])).toBe(true);
+    expect(homeLoanInObligations([{ ...home, status: 'closed' }])).toBe(false);
+    expect(homeLoanInObligations([{ ...home, action: 'bt' }])).toBe(false);
+    expect(homeLoanInObligations([{ ...home, loan_type: 'car' }])).toBe(false);
+    expect(homeLoanInObligations([])).toBe(false);
+  });
+
+  it('reads not_offered and hl_deviation_applied', () => {
+    const raw = structuredClone(WORKED_EXAMPLE_RESPONSE) as unknown as {
+      per_lender: Record<string, unknown>[];
+      suggestion: { declined: Record<string, unknown>[] };
+    };
+    raw.suggestion.declined[0].not_offered = true;
+    raw.per_lender[0].policy_sheet = {
+      label: 'From Policy (your sheet)',
+      bank: 'HDFC Bank',
+      slab_start: 60000,
+      category: 'CAT B',
+      company_unlisted: false,
+      lines: [
+        'FOIR 60% + 5% home-loan deviation = 65% (HDFC Bank, Sheet2, cell U2)',
+      ],
+      hl_deviation: 0.05,
+      hl_deviation_applied: true,
+    };
+    const result = parseCalculateResponse(raw, SNEHA);
+    expect(result.suggestion.declined.map((d) => d.not_offered)).toEqual([
+      true,
+      false,
+    ]);
+    expect(result.per_lender[0].policy_sheet?.hl_deviation_applied).toBe(true);
   });
 });

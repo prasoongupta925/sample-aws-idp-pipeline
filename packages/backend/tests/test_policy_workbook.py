@@ -13,7 +13,10 @@ import pytest
 
 from app.policy_workbook import (
     MAX_FILE_BYTES,
+    PARSER_VERSION,
+    PolicyWorkbook,
     PolicyWorkbookError,
+    category_text,
     grouped,
     lender_id_for,
     parse_policy_workbook,
@@ -134,13 +137,135 @@ def test_real_sheet2_rules(real):
 def test_real_to_json_round_trips(real):
     data = json.loads(json.dumps(real.to_json()))
     assert data["effective_date"] == "2026-07-01"
-    assert data["banks"][0]["slabs"][0]["values"]["foir"]["CAT_A"] == {"value": 0.45, "cell": "K4"}
+    assert data["banks"][0]["slabs"][0]["values"]["foir"]["CAT_A"] == {
+        "value": 0.45,
+        "cell": "K4",
+        "not_offered": False,
+    }
 
 
 def test_fixture_has_no_author():
     with zipfile.ZipFile(FIXTURE) as z:
         core = z.read("docProps/core.xml").decode()
     assert "<dc:creator></dc:creator>" in core and "<cp:lastModifiedBy></cp:lastModifiedBy>" in core
+
+
+# ------------------------------------------------------------------ the client's corrected sheet (5 Oct)
+# tests/fixtures/policy_workbook_v2.xlsx: the corrected "Policy .xlsx", author fields blanked.
+FIXTURE_V2 = Path(__file__).parent / "fixtures" / "policy_workbook_v2.xlsx"
+NOT_OFFERING_CAT_U = ("hdfc_bank", "bandhan_bank")  # in this sheet, the other banks price CAT_U
+
+
+@pytest.fixture(scope="module")
+def v2():
+    return parse_policy_workbook(FIXTURE_V2.read_bytes(), "Policy .xlsx")
+
+
+def test_v2_slabs(v2):
+    assert [b.lender_id for b in v2.banks] == ["hdfc_bank", "icici_bank", "axis_bank", "bandhan_bank", "indusind_bank"]
+    for bank in v2.banks:
+        assert [s.start for s in bank.slabs] == [25000, 35000, 40000, 50000, 60000, 70000, 80000]
+
+
+def test_v2_na_is_not_offered_and_not_a_warning(v2):
+    assert len(v2.warnings) < 10
+    assert not any("is not a number" in m or "CAT_U" in m for m in v2.warnings)
+    for bank in v2.banks:
+        closed = [s.not_offered("CAT_U") for s in bank.slabs]
+        assert closed == [bank.lender_id in NOT_OFFERING_CAT_U] * 7, bank.name
+        assert not any(s.not_offered("CAT_B") for s in bank.slabs)
+    hdfc = v2.bank("hdfc_bank").slabs[0].values["roi"]["CAT_U"]
+    assert (hdfc.value, hdfc.cell, hdfc.not_offered) == (None, "I4", True)
+    cat_u = [n for n in v2.notes if n.startswith("CAT U (unlisted)")]
+    assert cat_u == [
+        "CAT U (unlisted): HDFC Bank does not lend to this category",
+        "CAT U (unlisted): Bandhan Bank does not lend to this category",
+    ]
+
+
+def test_v2_sheet2_new_columns_are_read(v2):
+    """The corrected sheet's 20 new per-bank columns (headers on row 1, typos and all) are rules now;
+    only the two "App BT: Yes" cells, whose meaning nobody gave, still warn."""
+    assert not any("not known" in m and "App BT" not in m for m in v2.warnings)
+    assert [m.split(":")[0] for m in v2.warnings] == ["Sheet2 Y3 (ICICI Bank, App BT)", "Sheet2 Y4 (Axis Bank, App BT)"]
+    rules = {b.lender_id: b.rules for b in v2.banks}
+    assert [r.hl_deviation for r in rules.values()] == [0.05, 0.05, None, None, 0.05]
+    assert [r.min_cibil for r in rules.values()] == [710, 720, 750, 700, 725]
+    assert [r.minus_cibil_max_loan for r in rules.values()] == [1000000, 1500000, 500000, 400000, 600000]
+    assert [(r.enquiries_days, r.enquiries_max) for r in rules.values()] == [
+        (60, 5),
+        (30, 4),
+        (30, 5),
+        (90, 6),
+        (270, 9),
+    ]
+    assert [r.bounce_months for r in rules.values()] == [3, 6, 4, 2, 3]
+    # "Co-Applicant Salary" now only says whether the salary is added.
+    assert [r.co_applicant_rule for r in rules.values()] == ["consider"] * 3 + ["not_consider"] * 2
+    hdfc = rules["hdfc_bank"]
+    assert hdfc.conditions == {
+        "work_from_home": "HR Confirmation Required",
+        "pf_deduction": "Required",
+        "bachelor_accommodation": "Not Funding",
+        "director_doctor": "Funding",
+        "consultant": "Funding",
+        "grade_4": "Not Funding",
+        "contract_employee": "Not Funding",
+        "permanent_address_proof": "Required",
+        "co_applicant_hl_obligation": "Obligate",
+        "co_applicant_income": "Consider",
+        "guarantor_obligation": "Consider",
+        "trading_transactions": "Not Funding",
+        "verification": "Home and Office",
+        "topup": "Yes",
+        "recent_funding": "3 months Ok",
+    }  # OVD is NA for HDFC Bank: left out
+    assert rules["axis_bank"].conditions["ovd"] == "Required" and rules["axis_bank"].conditions["verification"] == "Home"
+    assert "pf_deduction" not in rules["indusind_bank"].conditions  # NA
+    assert hdfc.cells["enquiries"] == {"text": "Last 60 days 5", "cell": "D2"}
+    assert hdfc.cells["min_cibil"] == {"text": "710", "cell": "B2"}
+    assert hdfc.cells["minus_cibil_max_loan"] == {"text": "1000000", "cell": "C2"}
+    assert hdfc.cells["bounce"] == {"text": "No bounce in last 3 months", "cell": "F2"}
+    assert hdfc.cells["work_from_home"] == {"text": "HR Confirmation Required", "cell": "E2"}
+    assert hdfc.raw["Enquiers"] == {"text": "Last 60 days 5", "cell": "D2"}
+    assert v2.parser_version == PARSER_VERSION == 2
+
+
+def test_v2_rules_round_trip(v2):
+    back = PolicyWorkbook.from_json(json.loads(json.dumps(v2.to_json())))
+    assert back.bank("indusind_bank").rules == v2.bank("indusind_bank").rules
+    assert back.parser_version == 2
+    # A parse stored by the earlier app has no version: it is version 1.
+    old = v2.to_json()
+    del old["parser_version"]
+    for bank in old["banks"]:
+        for key in ("min_cibil", "minus_cibil_max_loan", "enquiries_days", "enquiries_max", "bounce_months", "conditions"):
+            del bank["rules"][key]
+    older = PolicyWorkbook.from_json(old)
+    assert older.parser_version == 1
+    assert older.bank("hdfc_bank").rules.min_cibil is None and older.bank("hdfc_bank").rules.conditions == {}
+
+
+def test_v2_not_offered_round_trips(v2):
+    back = PolicyWorkbook.from_json(json.loads(json.dumps(v2.to_json())))
+    assert back.bank("hdfc_bank").slabs[3].not_offered("CAT_U")
+    assert not back.bank("icici_bank").slabs[3].not_offered("CAT_U")
+
+
+def test_v2_fixture_has_no_author():
+    with zipfile.ZipFile(FIXTURE_V2) as z:
+        core = z.read("docProps/core.xml").decode()
+    assert "<dc:creator></dc:creator>" in core and "<cp:lastModifiedBy></cp:lastModifiedBy>" in core
+
+
+def test_na_forms_and_category_text():
+    overrides = {(4, "D"): "N/A", (4, "F"): "-", (4, "H"): " na ", (4, "J"): None, (4, "L"): "n.a.", (4, "N"): "NA"}
+    w = parse_policy_workbook(workbook(grid_rows(overrides=overrides)))
+    assert w.warnings == []
+    first, second = w.bank("test_bank").slabs
+    assert first.not_offered("CAT_B") and not first.not_offered("CAT_A") and not second.not_offered("CAT_B")
+    assert w.notes.count("CAT B: Test Bank does not lend to this category at the slabs 25,000") == 1
+    assert category_text("CAT_U") == "CAT U (unlisted)" and category_text("CAT_B") == "CAT B"
 
 
 # ------------------------------------------------------------------ synthetic workbooks
@@ -332,7 +457,11 @@ def test_out_of_range_and_text_values_warn():
     )
     assert "E4 (Test Bank, slab 25,000, FOIR CAT_A) is not a number ('sixty')" in joined
     assert "K4" in joined and "Maximum Tenure" in joined  # 60.5 months is not whole
-    assert "D5 (Test Bank, slab 50,000, ROI CAT_B) is empty" in joined
+    # A blank cell is not a warning: the bank does not lend to CAT_B at that slab.
+    assert "D5" not in joined
+    assert w.bank("test_bank").slabs[1].not_offered("CAT_B")
+    assert "CAT B: Test Bank does not lend to this category at the slabs 50,000" in w.notes
+    assert any("Test Bank, slab 50,000, CAT_B: some cells are NA but FOIR" in m for m in w.warnings)
     assert w.bank("test_bank").slabs[0].values["roi"]["CAT_A"].value is None
 
 
@@ -419,6 +548,102 @@ def test_sheet2_other_spellings():
     assert r.incentive_frequencies == ["quarterly", "half_yearly", "yearly"]
     assert r.co_applicant_rule == "listed_company"
     assert w.warnings == []
+
+
+NEW_HEADERS = [
+    "Banks",
+    "Cibil Score",
+    "Minus Cibil Max Loan",
+    "Enquiers",
+    "Work From Home",
+    "Bounce Condition",
+    "Provident fund Deduction",
+    "Bachelor accommodation",
+    "Director &amp; Doctor Profile",  # XML-escaped: the sheet says "Director & Doctor Profile"
+    "Consultant Profile",
+    "Grade 4 Employees",
+    "Contract Basis Employe",
+    "Permanant address Proof",
+    "Co-Applicant HL Obligation",
+    "Co-Applicant Income",
+    "Guarantor Obligation",
+    "Trading Transaction in Bank Statement",
+    "Verification",
+    "Officially Verified Document (OVD",
+    "Topup Facility",
+    "Recent Funding Eligibility",
+    "Co-Applicant Salary",
+]
+
+
+def new_rules_rows(*bank_rows):
+    """Sheet2 as the corrected sheet lays it out: headers on row 1, one bank per row from row 2."""
+    rows = {1: {col(i + 1): h for i, h in enumerate(NEW_HEADERS)}}
+    for k, values in enumerate(bank_rows):
+        rows[2 + k] = {col(i + 1): v for i, v in enumerate(values)}
+    return rows
+
+
+def test_new_sheet2_columns_other_spellings():
+    row = [
+        "Test Bank",
+        "710+",
+        "Rs 10 lakh",
+        "max 5 enquiries in the last 60 days",
+        "NA",
+        "6 months no bounce",
+        "Required",
+        "Not Funding",
+        "Funding",
+        "NA",
+        "Funding",
+        "Not Funding",
+        "Required",
+        "Obligate",
+        "Consider",
+        "Not Consider",
+        "Not Funding",
+        "Home and Office",
+        "Required",
+        "Yes",
+        "3 months Ok",
+        "Not Consider",
+    ]
+    w = parse_policy_workbook(workbook(sheet2=new_rules_rows(row)))
+    assert w.warnings == [] and not any("not known" in n for n in w.notes)
+    r = w.bank("test_bank").rules
+    assert (r.min_cibil, r.minus_cibil_max_loan, r.enquiries_days, r.enquiries_max, r.bounce_months) == (
+        710,
+        1000000,
+        60,
+        5,
+        6,
+    )
+    assert r.co_applicant_rule == "not_consider"
+    assert "work_from_home" not in r.conditions and "consultant" not in r.conditions
+    assert r.conditions["ovd"] == "Required" and r.conditions["recent_funding"] == "3 months Ok"
+    assert r.cells["enquiries"] == {"text": "max 5 enquiries in the last 60 days", "cell": "D2"}
+    # The old layout (headers on row 2, the first ten rules) still reads, with none of the new fields.
+    old = parse_policy_workbook(workbook()).bank("test_bank").rules
+    assert (old.min_cibil, old.enquiries_days, old.bounce_months, old.conditions) == (None, None, None, {})
+
+
+def test_new_sheet2_columns_unknown_text_warns_and_is_not_used():
+    row = ["Test Bank", "good", "ten lakhs", "a few", "Yes", "never", *["NA"] * 15, "Maybe"]
+    w = parse_policy_workbook(workbook(sheet2=new_rules_rows(row)))
+    joined = "\n".join(w.warnings)
+    for ref, text in (("B2", "good"), ("C2", "ten lakhs"), ("D2", "a few"), ("F2", "never"), ("V2", "Maybe")):
+        assert f"Sheet2 {ref}" in joined and repr(text) in joined and "not used" in joined, ref
+    assert len(w.warnings) == 5
+    r = w.bank("test_bank").rules
+    assert (r.min_cibil, r.minus_cibil_max_loan, r.enquiries_days, r.enquiries_max, r.bounce_months) == (None,) * 5
+    assert r.conditions == {"work_from_home": "Yes"} and r.co_applicant_rule is None
+    # Out of range: a score of 95 or 1200, zero days, a negative amount.
+    row = ["Test Bank", 95, -5, "Last 0 days 5", *["NA"] * 17, "NA"]
+    w = parse_policy_workbook(workbook(sheet2=new_rules_rows(row)))
+    assert len(w.warnings) == 3
+    r = w.bank("test_bank").rules
+    assert (r.min_cibil, r.minus_cibil_max_loan, r.enquiries_days) == (None, None, None)
 
 
 def test_rules_for_banks_missing_on_either_side():
