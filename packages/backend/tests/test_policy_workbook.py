@@ -13,7 +13,9 @@ import pytest
 
 from app.policy_workbook import (
     MAX_FILE_BYTES,
+    PolicyWorkbook,
     PolicyWorkbookError,
+    category_text,
     grouped,
     lender_id_for,
     parse_policy_workbook,
@@ -134,13 +136,78 @@ def test_real_sheet2_rules(real):
 def test_real_to_json_round_trips(real):
     data = json.loads(json.dumps(real.to_json()))
     assert data["effective_date"] == "2026-07-01"
-    assert data["banks"][0]["slabs"][0]["values"]["foir"]["CAT_A"] == {"value": 0.45, "cell": "K4"}
+    assert data["banks"][0]["slabs"][0]["values"]["foir"]["CAT_A"] == {
+        "value": 0.45,
+        "cell": "K4",
+        "not_offered": False,
+    }
 
 
 def test_fixture_has_no_author():
     with zipfile.ZipFile(FIXTURE) as z:
         core = z.read("docProps/core.xml").decode()
     assert "<dc:creator></dc:creator>" in core and "<cp:lastModifiedBy></cp:lastModifiedBy>" in core
+
+
+# ------------------------------------------------------------------ the client's corrected sheet (5 Oct)
+# tests/fixtures/policy_workbook_v2.xlsx: the corrected "Policy .xlsx", author fields blanked.
+FIXTURE_V2 = Path(__file__).parent / "fixtures" / "policy_workbook_v2.xlsx"
+NOT_OFFERING_CAT_U = ("hdfc_bank", "bandhan_bank")  # in this sheet, the other banks price CAT_U
+
+
+@pytest.fixture(scope="module")
+def v2():
+    return parse_policy_workbook(FIXTURE_V2.read_bytes(), "Policy .xlsx")
+
+
+def test_v2_slabs(v2):
+    assert [b.lender_id for b in v2.banks] == ["hdfc_bank", "icici_bank", "axis_bank", "bandhan_bank", "indusind_bank"]
+    for bank in v2.banks:
+        assert [s.start for s in bank.slabs] == [25000, 35000, 40000, 50000, 60000, 70000, 80000]
+
+
+def test_v2_na_is_not_offered_and_not_a_warning(v2):
+    assert len(v2.warnings) < 10
+    assert not any("is not a number" in m or "CAT_U" in m for m in v2.warnings)
+    for bank in v2.banks:
+        closed = [s.not_offered("CAT_U") for s in bank.slabs]
+        assert closed == [bank.lender_id in NOT_OFFERING_CAT_U] * 7, bank.name
+        assert not any(s.not_offered("CAT_B") for s in bank.slabs)
+    hdfc = v2.bank("hdfc_bank").slabs[0].values["roi"]["CAT_U"]
+    assert (hdfc.value, hdfc.cell, hdfc.not_offered) == (None, "I4", True)
+    cat_u = [n for n in v2.notes if n.startswith("CAT U (unlisted)")]
+    assert cat_u == [
+        "CAT U (unlisted): HDFC Bank does not lend to this category",
+        "CAT U (unlisted): Bandhan Bank does not lend to this category",
+    ]
+
+
+def test_v2_unknown_sheet2_columns_are_one_warning(v2):
+    unknown = [m for m in v2.warnings if "not known" in m and "columns" in m]
+    assert len(unknown) == 1 and unknown[0].startswith("Sheet2: 20 columns are not known")
+    assert [r.rules.hl_deviation for r in v2.banks] == [0.05, 0.05, None, None, 0.05]
+
+
+def test_v2_not_offered_round_trips(v2):
+    back = PolicyWorkbook.from_json(json.loads(json.dumps(v2.to_json())))
+    assert back.bank("hdfc_bank").slabs[3].not_offered("CAT_U")
+    assert not back.bank("icici_bank").slabs[3].not_offered("CAT_U")
+
+
+def test_v2_fixture_has_no_author():
+    with zipfile.ZipFile(FIXTURE_V2) as z:
+        core = z.read("docProps/core.xml").decode()
+    assert "<dc:creator></dc:creator>" in core and "<cp:lastModifiedBy></cp:lastModifiedBy>" in core
+
+
+def test_na_forms_and_category_text():
+    overrides = {(4, "D"): "N/A", (4, "F"): "-", (4, "H"): " na ", (4, "J"): None, (4, "L"): "n.a.", (4, "N"): "NA"}
+    w = parse_policy_workbook(workbook(grid_rows(overrides=overrides)))
+    assert w.warnings == []
+    first, second = w.bank("test_bank").slabs
+    assert first.not_offered("CAT_B") and not first.not_offered("CAT_A") and not second.not_offered("CAT_B")
+    assert w.notes.count("CAT B: Test Bank does not lend to this category at the slabs 25,000") == 1
+    assert category_text("CAT_U") == "CAT U (unlisted)" and category_text("CAT_B") == "CAT B"
 
 
 # ------------------------------------------------------------------ synthetic workbooks
@@ -332,7 +399,11 @@ def test_out_of_range_and_text_values_warn():
     )
     assert "E4 (Test Bank, slab 25,000, FOIR CAT_A) is not a number ('sixty')" in joined
     assert "K4" in joined and "Maximum Tenure" in joined  # 60.5 months is not whole
-    assert "D5 (Test Bank, slab 50,000, ROI CAT_B) is empty" in joined
+    # A blank cell is not a warning: the bank does not lend to CAT_B at that slab.
+    assert "D5" not in joined
+    assert w.bank("test_bank").slabs[1].not_offered("CAT_B")
+    assert "CAT B: Test Bank does not lend to this category at the slabs 50,000" in w.notes
+    assert any("Test Bank, slab 50,000, CAT_B: some cells are NA but FOIR" in m for m in w.warnings)
     assert w.bank("test_bank").slabs[0].values["roi"]["CAT_A"].value is None
 
 

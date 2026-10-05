@@ -65,6 +65,8 @@ BANK_IDS: dict[str, str] = {
 }
 
 INCENTIVE_FREQUENCIES = ("monthly", "quarterly", "half_yearly", "yearly")
+# What a category code stands for, shown next to it ("CAT U (unlisted)"); key: code without "_"/spaces.
+CATEGORY_DESCRIPTIONS = {"CATU": "unlisted"}
 _INCENTIVE_WORDS = {
     "monthly": "monthly",
     "quarterly": "quarterly",
@@ -102,6 +104,8 @@ class Category:
 class Value:
     value: float | None
     cell: str  # "E5" on Sheet1
+    # The cell is NA / N/A / "-" / blank: the bank does not lend to this category (value is None).
+    not_offered: bool = False
 
 
 @dataclass
@@ -110,6 +114,10 @@ class Slab:
     row: int
     # parameter key -> category code -> value
     values: dict[str, dict[str, Value]]
+
+    def not_offered(self, code: str) -> bool:
+        """The bank does not lend to this category at this slab: one of its cells is an NA form."""
+        return any(column.get(code) is not None and column[code].not_offered for column in self.values.values())
 
 
 @dataclass
@@ -183,7 +191,7 @@ class PolicyWorkbook:
         """The workbook to_json() gave (as stored with an upload)."""
 
         def value(v: dict) -> Value:
-            return Value(value=v.get("value"), cell=str(v.get("cell") or ""))
+            return Value(value=v.get("value"), cell=str(v.get("cell") or ""), not_offered=bool(v.get("not_offered")))
 
         def slab(s: dict) -> Slab:
             values = {k: {c: value(v) for c, v in col.items()} for k, col in (s.get("values") or {}).items()}
@@ -585,6 +593,9 @@ def _parse_grid(sheet: _Sheet, out: PolicyWorkbook) -> list[BankPolicy]:
             values[param] = {}
             for code, col in by_code.items():
                 ref = f"{_column_letters(col)}{row}"
+                if _not_offered(sheet.get(col, row)):
+                    values[param][code] = Value(None, ref, not_offered=True)
+                    continue
                 number, why = _number(sheet, col, row)
                 where = f"{sheet.name} {ref} ({name}, slab {grouped(start)}, {PARAMETER_LABELS[param]} {code})"
                 if number is None:
@@ -631,6 +642,7 @@ def _parse_grid(sheet: _Sheet, out: PolicyWorkbook) -> list[BankPolicy]:
                     f"{len(group)} rows share slab {grouped(start)} for {name} with the same values; one is used"
                 )
         banks.append(BankPolicy(lender_id=lender_id, name=name, slabs=kept))
+        _not_offered_notes(name, kept, out)
         for slab in kept:
             calc = slab.values["calculation_tenure_months"]
             for code, value in calc.items():
@@ -647,6 +659,46 @@ def _parse_grid(sheet: _Sheet, out: PolicyWorkbook) -> list[BankPolicy]:
 
 def _plain(values: dict[str, Value] | None) -> dict[str, float | None]:
     return {k: v.value for k, v in (values or {}).items()}
+
+
+# A grid cell with one of these texts (or blank) means the bank does not lend to the category.
+_NOT_OFFERED_TEXTS = {"na", "n/a", "n.a.", "n.a", "-", "--", ""}
+
+
+def _not_offered(cell: _Cell | None) -> bool:
+    if cell is None or cell.value is None:
+        return cell is None or not cell.formula
+    return isinstance(cell.value, str) and _key(cell.value) in _NOT_OFFERED_TEXTS
+
+
+def category_text(code: str) -> str:
+    """'CAT_U' -> 'CAT U (unlisted)'; 'CAT_B' -> 'CAT B'."""
+    label = code.replace("_", " ").strip()
+    description = CATEGORY_DESCRIPTIONS.get(_category_key(code))
+    return f"{label} ({description})" if description else label
+
+
+def _not_offered_notes(name: str, slabs: list[Slab], out: PolicyWorkbook) -> None:
+    """One note per category the bank does not lend to; a warning where a slab's row mixes NA
+    with numbers for the category (the category is then not offered at that slab)."""
+    for category in out.categories:
+        code = category.code
+        closed = [s for s in slabs if s.not_offered(code)]
+        if not closed:
+            continue
+        where = "" if len(closed) == len(slabs) else f" at the slabs {', '.join(grouped(s.start) for s in closed)}"
+        out.notes.append(f"{category_text(code)}: {name} does not lend to this category{where}")
+        for slab in closed:
+            given = [
+                PARAMETER_LABELS[p]
+                for p, column in slab.values.items()
+                if column.get(code) is not None and not column[code].not_offered and column[code].value is not None
+            ]
+            if given:
+                out.warnings.append(
+                    f"{name}, slab {grouped(slab.start)}, {code}: some cells are NA but {', '.join(given)} "
+                    "has a number; the category is taken as not offered at this slab, please check"
+                )
 
 
 # ---------------------------------------------------------------- Sheet2
@@ -773,6 +825,7 @@ def _parse_rules(sheet: _Sheet, banks: list[BankPolicy], out: PolicyWorkbook) ->
         return
     bank_col = 0
     columns: dict[int, tuple[str, str]] = {}  # col -> (kind, header text)
+    unknown: list[str] = []
     for col in range(1, sheet.max_col(header) + 1):
         title = _text(sheet.get(col, header))
         if _key(title) in ("banks", "bank"):
@@ -780,9 +833,16 @@ def _parse_rules(sheet: _Sheet, banks: list[BankPolicy], out: PolicyWorkbook) ->
         elif title:
             kind = _RULE_COLUMNS.get(_key(title))
             if kind is None:
-                out.warnings.append(f"{sheet.name}: column {title!r} is not known; it is not used")
+                unknown.append(title)
             else:
                 columns[col] = (kind, title)
+    if len(unknown) == 1:
+        out.warnings.append(f"{sheet.name}: column {unknown[0]!r} is not known; it is not used")
+    elif unknown:
+        out.warnings.append(
+            f"{sheet.name}: {len(unknown)} columns are not known and are not used: "
+            + ", ".join(repr(t) for t in unknown)
+        )
     by_id = {b.lender_id: b for b in banks}
     for row in [r for r in sheet.rows() if r > header]:
         name = _text(sheet.get(bank_col, row))
