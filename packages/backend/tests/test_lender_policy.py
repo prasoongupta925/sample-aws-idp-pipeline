@@ -497,10 +497,12 @@ def test_a_category_the_bank_does_not_lend_to_is_not_eligible(store):
         assert row["foir_eligibility"] is None and row["computed_amount"] is None
         declined = next(d for d in result["suggestion"]["declined"] if d["lender_id"] == lender_id)
         assert declined["reason"].startswith(f"{bank} does not lend to CAT U (unlisted) companies")
+        assert declined["not_offered"] is True
     hdfc = at(result, "hdfc_bank")
     assert "cell I8" in hdfc["reasons"][0]  # ROI CAT_U of HDFC's 60,000 row
     # The banks whose sheet prices CAT U still do.
     icici = at(result, "icici_bank")
+    assert all(not d["not_offered"] for d in result["suggestion"]["declined"] if d["lender_id"] == "icici_bank")
     assert icici["not_offered"] is None and icici["policy_sheet"]["category"] == "CAT U"
 
 

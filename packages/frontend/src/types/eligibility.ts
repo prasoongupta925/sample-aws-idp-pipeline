@@ -124,6 +124,11 @@ export interface EligibilityProfile {
   /** Net monthly salary; a salary the file check verified is used instead. */
   net_income: number | null;
   other_income: OtherIncome[];
+  /**
+   * A running home loan: a bank's HL deviation (policy sheet) raises its FOIR.
+   * null / absent: the backend finds it in the obligations (a Home Loan kept running).
+   */
+  has_running_home_loan?: boolean | null;
 }
 
 // ------------------------------------------------------------------ CIBIL
@@ -518,8 +523,10 @@ export interface PolicySheetTerms {
   company_unlisted: boolean;
   /** "How it is calculated": every value and rule with its cell. */
   lines: string[];
-  /** 0.05 = 5%: shown only, its meaning is to be confirmed. */
+  /** 0.05 = 5 percentage points added to the FOIR with a running home loan. */
   hl_deviation: number | null;
+  /** The FOIR includes the HL deviation (the applicant has a running home loan). */
+  hl_deviation_applied: boolean;
 }
 
 /** POST .../calculate {applicant, inputs?}: inputs are calculated, not saved. */
@@ -593,6 +600,8 @@ export interface DeclinedBank {
   lender: string;
   lender_id: string;
   reason: string;
+  /** The bank does not lend to the company's category (NA in its policy sheet). */
+  not_offered: boolean;
 }
 
 export interface EligibilitySuggestion {

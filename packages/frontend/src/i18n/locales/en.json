@@ -1264,6 +1264,13 @@
         "parental": "Parental",
         "company_provided": "Company provided"
       },
+      "homeLoan": "Running home loan",
+      "homeLoanOption": {
+        "auto": "From the obligations",
+        "yes": "Yes",
+        "no": "No"
+      },
+      "homeLoanHint": "Banks with an HL deviation in your policy sheet add it to their FOIR (e.g. 70% + 5% = 75%).",
       "pincode": "Pincode",
       "pincodeInvalid": "A pincode has 6 digits.",
       "checkAvailability": "Check availability",
@@ -1424,7 +1431,8 @@
       "title": "Suggested banks",
       "terms": "{{amount}} at {{roi}}, EMI {{emi}} over {{months}} months",
       "none": "No bank can sanction this loan with these details.",
-      "declined": "Banks that say no"
+      "declined": "Banks that say no",
+      "notOffered": "Not offered"
     },
     "lenders": {
       "empty": "No eligibility calculated yet",

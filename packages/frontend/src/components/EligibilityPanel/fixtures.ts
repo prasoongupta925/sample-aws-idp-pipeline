@@ -336,6 +336,7 @@ export const WORKED_EXAMPLE_RESPONSE = {
         status: 'not_serviceable',
         label: 'Sample policy',
         reason: 'Pincode 401303 is not serviceable by Axis Bank',
+        not_offered: false,
       },
       {
         lender: 'Bajaj Finance',
@@ -344,6 +345,7 @@ export const WORKED_EXAMPLE_RESPONSE = {
         label: 'Sample policy',
         reason:
           "7 enquiries in the last 90 days: more than Bajaj Finance's limit of 6",
+        not_offered: false,
       },
     ],
   },

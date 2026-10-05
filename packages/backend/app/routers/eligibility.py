@@ -905,6 +905,9 @@ class DeclinedBank(BaseModel):
     status: LenderStatus
     label: str | None
     reason: str = Field(description="One line on why the bank says no")
+    not_offered: bool = Field(
+        default=False, description="The bank does not lend to the company's category (NA in its policy sheet)"
+    )
 
 
 class Suggestion(BaseModel):

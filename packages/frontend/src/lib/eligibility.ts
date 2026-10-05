@@ -286,6 +286,7 @@ export function emptyProfile(): EligibilityProfile {
     employment_type: null,
     net_income: null,
     other_income: [],
+    has_running_home_loan: null,
   };
 }
 
@@ -295,6 +296,22 @@ let rowSeq = 0;
 export function rowKey(): string {
   rowSeq += 1;
   return `row-${rowSeq}`;
+}
+
+const ENDED_STATUSES = new Set(['closed', 'settled', 'written_off']);
+
+/**
+ * A Home Loan in the obligations that keeps running (not closed, settled or
+ * written off; marked Obligate): what the backend uses when "Running home
+ * loan" is left to the obligations.
+ */
+export function homeLoanInObligations(tradelines: Tradeline[]): boolean {
+  return tradelines.some(
+    (t) =>
+      t.loan_type === 'home' &&
+      !ENDED_STATUSES.has(t.status ?? '') &&
+      t.action === 'obligate',
+  );
 }
 
 export function emptyTradeline(): Tradeline {
@@ -367,6 +384,7 @@ function normalizeProfile(raw: unknown): EligibilityProfile {
           .map(normalizeOtherIncome)
           .filter((r): r is OtherIncome => r !== null)
       : [],
+    has_running_home_loan: bool(o.has_running_home_loan),
   };
 }
 
@@ -1026,6 +1044,7 @@ export function inputsBody(inputs: EligibilityInputs): EligibilityInputs {
         frequency: incomeHasFrequency(r.type) ? (r.frequency ?? null) : null,
         agreement: r.type === 'rented' ? (r.agreement ?? null) : null,
       })),
+      has_running_home_loan: p.has_running_home_loan ?? null,
     },
     cibil,
     loan: {
@@ -1398,6 +1417,7 @@ function policySheet(raw: unknown): PolicySheetTerms | null {
     company_unlisted: o.company_unlisted === true,
     lines: strings(o.lines),
     hl_deviation: finite(o.hl_deviation),
+    hl_deviation_applied: o.hl_deviation_applied === true,
   };
 }
 
@@ -1467,6 +1487,7 @@ function suggestion(raw: unknown): EligibilitySuggestion {
       lender,
       lender_id: lenderId,
       reason: text(d.reason) ?? '',
+      not_offered: d.not_offered === true,
     });
   }
   return { need: finite(o.need), banks, declined };

@@ -2217,6 +2217,8 @@ def _suggestion(results: list[dict], loan: dict, bt_amount: Decimal) -> dict:
             "status": row["status"],
             "label": row.get("label"),
             "reason": _decline_reason(row),
+            # The bank does not lend to the company's category (NA in its sheet).
+            "not_offered": row.get("not_offered") is not None,
         }
         for row in results
         if row["lender_id"] not in shown

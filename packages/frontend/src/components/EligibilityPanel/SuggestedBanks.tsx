@@ -94,6 +94,14 @@ export default function SuggestedBanks({
                   <span className="font-medium text-slate-800 dark:text-slate-100">
                     {bank.lender}
                   </span>
+                  {bank.not_offered && (
+                    <span
+                      className="ml-1 rounded bg-slate-200 px-1 py-px text-[10px] font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-200"
+                      data-testid="not-offered"
+                    >
+                      {t('eligibility.suggested.notOffered')}
+                    </span>
+                  )}
                   {': '}
                   {bank.reason}
                 </span>
