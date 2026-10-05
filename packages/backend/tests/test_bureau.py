@@ -52,6 +52,7 @@ def table(monkeypatch):
         "app.ddb.webhooks.get_table",
         "app.ddb.facts.get_table",
         "app.reference_data.get_table",
+        "app.lender_policy.get_table",
     ):
         monkeypatch.setattr(target, lambda: fake)
     monkeypatch.setattr(bureau_router, "_now", lambda: NOW)

@@ -116,6 +116,55 @@ function lenders(
   );
 }
 
+describe('Suggested banks', () => {
+  it('lists the ranked banks first, with terms and why, then those that say no', () => {
+    const html = lenders();
+    const box = html.slice(
+      html.indexOf('data-testid="suggested-banks"'),
+      html.indexOf('</section>'),
+    );
+    const text = plain(box);
+    expect(text).toContain('Suggested banks');
+    expect(text).toContain(
+      'ICICI Bank : ₹20,58,000 at 11%, EMI ₹39,172.13 over 72 months',
+    );
+    expect(text).toContain('Lowest ROI (11%) that covers ₹10,00,000');
+    expect(text.indexOf('ICICI Bank')).toBeLessThan(text.indexOf('HDFC Bank'));
+    expect(text).toContain('Banks that say no');
+    expect(text).toContain(
+      'Axis Bank : Pincode 401303 is not serviceable by Axis Bank',
+    );
+    expect(box.match(/data-testid="suggested-bank"/g)).toHaveLength(2);
+    expect(box.match(/data-testid="declined-bank"/g)).toHaveLength(2);
+    // At the top: before the summary tiles and the lenders table.
+    expect(html.indexOf('suggested-banks')).toBeLessThan(
+      html.indexOf('best-summary'),
+    );
+  });
+
+  it('says when no bank can sanction', () => {
+    const html = lenders({
+      result: {
+        ...RESULT,
+        suggestion: { ...RESULT.suggestion, banks: [] },
+      },
+    });
+    expect(plain(html)).toContain(
+      'No bank can sanction this loan with these details.',
+    );
+  });
+
+  it('shows nothing without a suggestion', () => {
+    const html = lenders({
+      result: {
+        ...RESULT,
+        suggestion: { need: null, banks: [], declined: [] },
+      },
+    });
+    expect(html).not.toContain('suggested-banks');
+  });
+});
+
 describe('Lenders table (the worked example)', () => {
   it('shows ICICI Bank at 20,58,000, 72 months, 11%, EMI 39,172.13', () => {
     const icici = lenderBody(lenders(), 'ICICI Bank');

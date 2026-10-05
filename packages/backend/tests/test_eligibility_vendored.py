@@ -60,6 +60,7 @@ def table(monkeypatch):
         "app.ddb.webhooks.get_table",
         "app.ddb.facts.get_table",
         "app.reference_data.get_table",
+        "app.lender_policy.get_table",
     ):
         monkeypatch.setattr(target, lambda: fake)
     monkeypatch.setattr(fc_index, "_table", fake)
@@ -88,6 +89,7 @@ SAME = (
     "best_lender",
     "best_lender_id",
     "best_lender_reason",
+    "suggestion",
     "income_considered",
     "income",
     "obligations",
@@ -162,3 +164,54 @@ def test_the_file_check_figures_are_the_apis(table):
         assert loan_tools.verified_income(found) == elig.verified_income(found)
         assert loan_tools.bank_statement_emis(found) == elig.bank_statement_emis(found)
     assert any(loan_tools.bank_statement_emis(found) for found in check["applicants"])
+
+
+@pytest.fixture
+def policy_sheet(table, monkeypatch):
+    """The app's lender policy workbook (the real sheet's fixture copy) saved as an admin would."""
+    from app import lender_policy
+    from app.policy_workbook import parse_policy_workbook
+    from tests.test_lender_policy import NOW, FakeS3, real_bytes
+
+    s3 = FakeS3()
+    monkeypatch.setattr(lender_policy, "get_s3_client", lambda: s3)
+    monkeypatch.setattr(get_config(), "document_storage_bucket_name", "test-bucket")
+    lender_policy.reset_cache()
+    data = real_bytes()
+    lender_policy.save(data, "Policy.xlsx", parse_policy_workbook(data, "Policy.xlsx"), NOW)
+    monkeypatch.setattr(loan_tools.time, "time", lambda: NOW.timestamp())
+    yield
+    lender_policy.reset_cache()
+
+
+@pytest.mark.parametrize(
+    ("applicant", "changes"),
+    [
+        (RAHUL, {"profile__net_income": 60000}),
+        ("Konkan Applicant", {"profile__name": "Konkan Applicant", "profile__net_income": 20000}),
+        ("Unlisted Applicant", {"profile__name": "Unlisted Applicant", "profile__company": "Nowhere Listed Traders"}),
+    ],
+)
+def test_the_tool_applies_the_policy_sheet_as_the_api(table, policy_sheet, applicant, changes):
+    """With a stored policy workbook the tool prices its banks from it and ranks the banks as the API."""
+    saved = client.put(
+        f"/projects/{PROJECT_ID}/eligibility/inputs",
+        headers=HEADERS,
+        json={"applicant": applicant, **example(**changes)},
+    )
+    assert saved.status_code == 200
+    api = client.post(f"/projects/{PROJECT_ID}/eligibility/calculate", headers=HEADERS, json={"applicant": applicant})
+    assert api.status_code == 200
+
+    answer = json.loads(json.dumps(tool(applicant)))
+
+    assert "error" not in answer, answer
+    body = api.json()
+    assert [key for key in SAME if known(answer[key]) != known(body[key])] == []
+    labels = {r["lender_id"]: r["label"] for r in answer["per_lender"]}
+    assert labels["bandhan_bank"] == labels["hdfc_bank"] == eligibility.SHEET_SOURCE_LABEL
+    banks = answer["suggestion"]["banks"]
+    if banks:
+        assert banks[0]["lender"] == answer["best_lender"]
+        assert any(line.startswith("Suggested 1. ") for line in answer["summary"])
+    assert len(banks) + len(answer["suggestion"]["declined"]) == len(answer["per_lender"])

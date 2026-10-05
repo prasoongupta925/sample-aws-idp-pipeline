@@ -303,6 +303,50 @@ export const WORKED_EXAMPLE_RESPONSE = {
   best_lender: 'ICICI Bank',
   best_lender_id: 'icici_bank',
   best_lender_reason: 'lowest ROI among the lenders that cover ₹10,00,000',
+  suggestion: {
+    need: 1000000,
+    banks: [
+      {
+        lender: 'ICICI Bank',
+        lender_id: 'icici_bank',
+        eligible_amount: 2058000,
+        roi: 11,
+        emi: 39172.13,
+        tenure_months: 72,
+        covers_need: true,
+        label: 'Sample policy',
+        why: 'Lowest ROI (11%) that covers ₹10,00,000',
+      },
+      {
+        lender: 'HDFC Bank',
+        lender_id: 'hdfc_bank',
+        eligible_amount: 1500000,
+        roi: 12,
+        emi: 33366.67,
+        tenure_months: 60,
+        covers_need: true,
+        label: 'Sample policy',
+        why: 'Covers ₹10,00,000 at 12%',
+      },
+    ],
+    declined: [
+      {
+        lender: 'Axis Bank',
+        lender_id: 'axis_bank',
+        status: 'not_serviceable',
+        label: 'Sample policy',
+        reason: 'Pincode 401303 is not serviceable by Axis Bank',
+      },
+      {
+        lender: 'Bajaj Finance',
+        lender_id: 'bajaj_finance',
+        status: 'not_eligible',
+        label: 'Sample policy',
+        reason:
+          "7 enquiries in the last 90 days: more than Bajaj Finance's limit of 6",
+      },
+    ],
+  },
   notes: [],
   disclaimers: [
     'Indicative — the lender decides: the final eligibility, amount, ROI and tenure are the lender’s decision.',

@@ -18,6 +18,7 @@ from app.routers import (
     graph,
     health,
     integrations,
+    lender_policy,
     projects,
     prompts,
     public_upload,
@@ -80,6 +81,7 @@ app.include_router(file_check.router)
 app.include_router(graph.router)
 app.include_router(health.router)
 app.include_router(integrations.router)
+app.include_router(lender_policy.router)
 app.include_router(projects.router)
 app.include_router(prompts.router)
 app.include_router(sagemaker.router)

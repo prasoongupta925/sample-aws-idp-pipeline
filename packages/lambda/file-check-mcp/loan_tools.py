@@ -13,9 +13,11 @@ Three tools of the File Check MCP Lambda (index.py registers them):
     applicant's CIBIL page (PROJ#{pid} ELIG# items) at every lender, through
     eligibility.py (a byte-identical copy of the backend's engine and its
     SAMPLE data) with the file check's verified salary and bank-statement EMIs,
-    as POST /projects/{id}/eligibility/calculate does. The DSA's uploaded
-    serviceability and company lists (REFDATA# items) are not applied here:
-    a note says when one is uploaded (the web page's figures can then differ).
+    as POST /projects/{id}/eligibility/calculate does, with the app's lender
+    policy workbook when one is stored (APP#LENDERPOLICY, its parsed policy
+    gzipped in the header), and the same "Suggested banks" ranking. The DSA's
+    uploaded serviceability and company lists (REFDATA# items) are not applied
+    here: a note says when one is uploaded (the web page's figures can differ).
 
 EMI(P, r, n) = P r (1 + r)^n / ((1 + r)^n - 1) with r = annual rate / 12 / 100
 (Excel PMT; P / n at 0%), kept exact (Decimal); totals come from the unrounded
@@ -24,7 +26,9 @@ pages do. Names, PANs and amounts are never logged.
 """
 
 import datetime as dt
+import gzip
 import hashlib
+import json
 import math
 import re
 import time
@@ -46,6 +50,9 @@ REFERENCE_LISTS = {
     'company_categories': 'company categories',
 }
 REFERENCE_SK_PREFIX = 'REFDATA#'
+# The app's lender policy workbook (app/lender_policy.py): its header carries the parsed policy, gzipped.
+POLICY_KEY = {'PK': 'APP#LENDERPOLICY', 'SK': 'CURRENT'}
+POLICY_ATTRIBUTE = 'policy_json_gz'
 
 INDICATIVE = 'indicative — the lender decides the final rate, amount and EMI'
 EMI_METHOD = (
@@ -59,7 +66,8 @@ FOIR_METHOD = (
     '× 1,00,000; rupees rounded half up'
 )
 ELIGIBILITY_INSTRUCTIONS = (
-    "Report the summary lines and each lender's status, reasons, amounts and "
+    'Start with the "Suggested" lines (the ranked banks) and the "Says no" '
+    'lines, then report the summary lines and each lender\'s status, reasons, amounts and '
     'EMIs exactly as returned (Indian digit grouping). Never recompute, round '
     'differently or estimate another figure: call emi_calculator for another '
     'amount, rate or tenure. Label every figure "indicative — the lender '
@@ -571,6 +579,41 @@ def uploaded_lists_note(table, project_id: str, now: int):
     )
 
 
+def stored_policy_book(table, now: int):
+    """(the book with the app's policy workbook's banks, a note) as the backend calculates; (None,
+    None) without a live policy; (None, a note) when it cannot be applied here."""
+    item = table.get_item(Key=POLICY_KEY, ConsistentRead=True).get('Item')
+    if not _live(plain(item), now):
+        return None, None
+    packed = item.get(POLICY_ATTRIBUTE)
+    packed = getattr(packed, 'value', packed)  # boto3 Binary
+    if not isinstance(packed, (bytes, bytearray)):
+        return None, (
+            'Your lender policy sheet is not applied in this answer (too large for the chat): the '
+            'Eligibility page applies it, so its figures can differ'
+        )
+    workbook = json.loads(gzip.decompress(bytes(packed)))
+    book = el.load_policy_book()
+    policies, _ = el.sheet_lenders(workbook, book)
+    if not policies:
+        return None, None
+    source = el.sheet_source_name(item.get('filename'), str(item.get('uploaded_at') or ''))
+    return el.SheetBook(book, policies), el.sheet_note([p.name for p in policies.values()], source)
+
+
+def suggestion_lines(suggestion: dict) -> list:
+    """The "Suggested banks" box as lines: the ranked eligible banks, then the banks that say no."""
+    lines = []
+    for n, bank in enumerate(suggestion.get('banks') or [], 1):
+        lines.append(
+            f"Suggested {n}. {bank['lender']}: {el.inr(bank['eligible_amount'])} at {bank['roi']:g}%, "
+            f"EMI {el.inr(bank['emi'])} over {bank['tenure_months']} months – {bank['why']}"
+        )
+    for bank in suggestion.get('declined') or []:
+        lines.append(f"Says no: {bank['lender']} – {bank['reason']}")
+    return lines
+
+
 def _lender_line(row: dict) -> str:
     status = row.get('status_label') or row.get('status')
     if row.get('status') != 'eligible':
@@ -627,17 +670,27 @@ def loan_eligibility(event: dict, table, run_file_check, now=None) -> dict:
             f"{len(check['pending_documents'])} document(s) still being analysed: "
             'the verified figures may change'
         )
+    try:
+        book, policy_note = stored_policy_book(table, now)
+    except Exception as e:  # noqa: BLE001 - the sample policy instead, said in a note
+        print(f'loan_eligibility project={project_id} policy not read ({type(e).__name__})')
+        book, policy_note = None, (
+            'Your lender policy sheet could not be read here: sample policies are used, so the '
+            "Eligibility page's figures can differ"
+        )
     result = el.calculate(
         inputs,
         verified_income=verified_income(found),
         bank_emis=bank_statement_emis(found),
+        book=book,
     )
     try:
         uploaded = uploaded_lists_note(table, project_id, now)
     except Exception as e:  # noqa: BLE001 - a note only: never fail the answer for it
         print(f'loan_eligibility project={project_id} lists not read ({type(e).__name__})')
         uploaded = None
-    result['notes'] = notes + result['notes'] + ([uploaded] if uploaded else [])
+    extra = [n for n in (policy_note, uploaded) if n]
+    result['notes'] = notes + result['notes'] + extra
     result['file_check'] = {
         'used': found is not None,
         'detail': detail,
@@ -661,7 +714,11 @@ def loan_eligibility(event: dict, table, run_file_check, now=None) -> dict:
         if best
         else 'No lender is eligible with these inputs'
     ]
-    result['summary'] = lines + [_lender_line(row) for row in result['per_lender']]
+    result['summary'] = (
+        lines
+        + suggestion_lines(result['suggestion'])
+        + [_lender_line(row) for row in result['per_lender']]
+    )
     result['assistant_instructions'] = ELIGIBILITY_INSTRUCTIONS
     eligible = sum(1 for row in result['per_lender'] if row['status'] == 'eligible')
     print(

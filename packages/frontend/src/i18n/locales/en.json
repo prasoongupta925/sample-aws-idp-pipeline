@@ -1420,6 +1420,12 @@
       "suggestedHint": "A loan EMI of the bank statement that no credit report lists: check it, then keep, change or remove it.",
       "enquiriesShown": "{{d30}} / {{d60}} / {{d90}} / {{d120}} in 30 / 60 / 90 / 120 days"
     },
+    "suggested": {
+      "title": "Suggested banks",
+      "terms": "{{amount}} at {{roi}}, EMI {{emi}} over {{months}} months",
+      "none": "No bank can sanction this loan with these details.",
+      "declined": "Banks that say no"
+    },
     "lenders": {
       "empty": "No eligibility calculated yet",
       "emptyHint": "Fill in the profile and the CIBIL details, then check the eligibility.",

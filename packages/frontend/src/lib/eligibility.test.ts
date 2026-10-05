@@ -377,6 +377,49 @@ describe('results', () => {
     ]);
   });
 
+  it('reads the suggested banks in the backend order', () => {
+    const { suggestion } = parseCalculateResponse(
+      WORKED_EXAMPLE_RESPONSE,
+      SNEHA,
+    );
+    expect(suggestion.need).toBe(1000000);
+    expect(suggestion.banks.map((b) => b.lender)).toEqual([
+      'ICICI Bank',
+      'HDFC Bank',
+    ]);
+    expect(suggestion.banks[0]).toMatchObject({
+      eligible_amount: 2058000,
+      roi: 11,
+      emi: 39172.13,
+      tenure_months: 72,
+      covers_need: true,
+    });
+    expect(suggestion.declined.map((d) => d.lender_id)).toEqual([
+      'axis_bank',
+      'bajaj_finance',
+    ]);
+  });
+
+  it('drops malformed suggestion rows and survives a missing box', () => {
+    const { suggestion } = parseCalculateResponse(
+      {
+        ...WORKED_EXAMPLE_RESPONSE,
+        suggestion: {
+          need: null,
+          banks: [{ lender: 'X Bank', lender_id: 'x', roi: 'high' }],
+          declined: [{ reason: 'no name' }],
+        },
+      },
+      SNEHA,
+    );
+    expect(suggestion).toEqual({ need: null, banks: [], declined: [] });
+    const missing = parseCalculateResponse(
+      { ...WORKED_EXAMPLE_RESPONSE, suggestion: undefined },
+      SNEHA,
+    );
+    expect(missing.suggestion).toEqual({ need: null, banks: [], declined: [] });
+  });
+
   it('drops a best lender that is not in the list', () => {
     const result = parseCalculateResponse(
       { ...WORKED_EXAMPLE_RESPONSE, best_lender: 'Some Bank' },

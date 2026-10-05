@@ -546,12 +546,43 @@ export interface EligibilityResult {
   per_lender: LenderEligibility[];
   best_lender: string | null;
   best_lender_reason: string | null;
+  /** "Suggested banks": the eligible banks ranked and those that say no. */
+  suggestion: EligibilitySuggestion;
   /** The policies are SAMPLE data. */
   sample: boolean;
   /** Whether the file check's verified figures were used (and why not), and its verdict. */
   file_check: EligibilityFileCheck | null;
   notes: string[];
   disclaimers: string[];
+}
+
+/** An eligible bank in the "Suggested banks" box, in ranked order. */
+export interface SuggestedBank {
+  lender: string;
+  lender_id: string;
+  eligible_amount: number;
+  roi: number;
+  emi: number;
+  tenure_months: number;
+  /** Covers the requested amount (and any balance transfer). */
+  covers_need: boolean;
+  /** Why it is ranked here, in one line. */
+  why: string;
+}
+
+/** A bank that says no, with one line on why. */
+export interface DeclinedBank {
+  lender: string;
+  lender_id: string;
+  reason: string;
+}
+
+export interface EligibilitySuggestion {
+  /** The amount to cover (requested amount, at least the BT); null: none requested. */
+  need: number | null;
+  /** Covering banks by lowest ROI, then the highest amount; the first is the best lender. */
+  banks: SuggestedBank[];
+  declined: DeclinedBank[];
 }
 
 /** The file check behind a calculation. */

@@ -244,7 +244,9 @@ EmploymentTypeId = Literal[
     "private_limited",
     "public_limited",
 ]
-LoanTypeId = Literal["personal", "home", "mortgage", "car", "education", "application", "consumer", "credit_card"]
+LoanTypeId = Literal[
+    "personal", "home", "mortgage", "car", "education", "application", "consumer", "credit_card", "gold"
+]
 TradelineActionId = Literal["bt", "obligate", "close"]
 TradelineStatusId = Literal[
     "active", "closed", "settled", "written_off", "suit_filed", "wilful_default", "restructured"
@@ -408,10 +410,22 @@ class Loan(_Input):
     )
 
 
+class CoApplicant(_Input):
+    """A co-applicant's salary: a bank of the policy sheet adds it only when its rule takes the
+    co-applicant's employer ("Listed Company", or every employer except a proprietorship/partnership)."""
+
+    company: OptionalName = Field(default=None, description="The co-applicant's employer")
+    employment_type: Annotated[
+        EmploymentTypeId | None, _vocabulary(eligibility.EMPLOYMENT_TYPES, eligibility.EMPLOYMENT_TYPE_ALIASES)
+    ] = None
+    net_income: Money | None = Field(default=None, description="The co-applicant's net monthly salary")
+
+
 class EligibilityInputs(_Input):
     profile: Profile = Field(default_factory=Profile)
     cibil: Cibil = Field(default_factory=Cibil)
     loan: Loan = Field(default_factory=Loan)
+    co_applicant: CoApplicant | None = None
 
 
 ApplicantName = Annotated[
@@ -695,6 +709,34 @@ class OtherIncomeConsidered(BaseModel):
     considered: float
 
 
+class PolicySheetValue(BaseModel):
+    value: float
+    cell: str = Field(description="The cell on the sheet, e.g. E5")
+    text: str = Field(description='"FOIR 60% (Sheet1, HDFC Bank, slab 35,000, CAT_B, cell L5)"')
+
+
+class PolicySheetTerms(BaseModel):
+    label: str = Field(description='"From Policy (your sheet)"')
+    bank: str = Field(description="The bank as the sheet names it")
+    slab_start: int = Field(description="The net monthly salary slab used (rupees)")
+    category: str = Field(description='As the app shows it: "CAT B"')
+    category_code: str = Field(description='As the sheet writes it: "CAT_B"')
+    company_unlisted: bool = Field(
+        default=False, description="The company is not in the bank's company list: the unlisted category applies"
+    )
+    values: dict[str, PolicySheetValue] = Field(
+        description="roi, foir, multiplier, max_funding, max_tenure_months, calculation_tenure_months"
+    )
+    lines: list[str] = Field(
+        default=[],
+        description='"How it is calculated": every value and rule used with its cell, e.g. "FOIR 60% (Sheet1, '
+        'HDFC Bank, slab 35,000, CAT_B, cell L5)"; the sample values the sheet lacks, labelled',
+    )
+    hl_deviation: float | None = Field(
+        default=None, description="The sheet's HL deviation (0.05 = 5%): shown, never used (meaning to be confirmed)"
+    )
+
+
 class LenderEligibility(BaseModel):
     lender: str
     lender_id: str
@@ -736,6 +778,9 @@ class LenderEligibility(BaseModel):
     obligations: float
     foir: float
     multiplier: float
+    multiplier_method: Literal["salary", "net_of_obligations"] = Field(
+        default="salary", description="salary: income × multiplier; net_of_obligations: (income − obligations) × it"
+    )
     company_category: str | None
     company_policy: Literal["category", "unlisted", "base"]
     max_amount: float
@@ -749,6 +794,11 @@ class LenderEligibility(BaseModel):
         description="policy = From Policy, formula = Formula Calculation, table = From Table"
     )
     label: str | None
+    policy_sheet: PolicySheetTerms | None = Field(
+        default=None,
+        description="The cells of your policy sheet this result used; null: the lender has none, or the sheet "
+        "could not price this applicant",
+    )
 
 
 class OtherIncomeRow(BaseModel):
@@ -768,6 +818,9 @@ class EligibilityIncome(BaseModel):
     verified_net_income: float | None
     other_income: list[OtherIncomeRow]
     other_income_monthly: float
+    co_applicant_net_income: float | None = Field(
+        default=None, description="The co-applicant's net monthly salary entered"
+    )
 
 
 class ObligationRow(BaseModel):
@@ -814,6 +867,35 @@ class RequestedLoan(BaseModel):
     tenure_months: int | None
 
 
+class SuggestedBank(BaseModel):
+    lender: str
+    lender_id: str
+    eligible_amount: float
+    roi: float
+    emi: float
+    tenure_months: int
+    covers_need: bool = Field(description="The eligible amount covers the requested amount (and any BT)")
+    label: str | None
+    why: str = Field(description="One line on why it is ranked here")
+
+
+class DeclinedBank(BaseModel):
+    lender: str
+    lender_id: str
+    status: LenderStatus
+    label: str | None
+    reason: str = Field(description="One line on why the bank says no")
+
+
+class Suggestion(BaseModel):
+    need: float | None = Field(description="The amount to cover: the requested amount, at least the BT; null: none")
+    banks: list[SuggestedBank] = Field(
+        description="The eligible banks ranked: those covering the need by lowest ROI, then the highest amount; "
+        "the first is best_lender"
+    )
+    declined: list[DeclinedBank]
+
+
 class CalculateResponse(BaseModel):
     applicant: str
     calculated_at: str
@@ -830,6 +912,7 @@ class CalculateResponse(BaseModel):
     best_lender: str | None
     best_lender_id: str | None
     best_lender_reason: str | None
+    suggestion: Suggestion
     file_check: FileCheckUse
     notes: list[str]
     disclaimers: list[str]

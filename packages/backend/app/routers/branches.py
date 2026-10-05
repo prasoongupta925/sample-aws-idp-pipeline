@@ -408,7 +408,13 @@ def upload_reference_data(
             status_code=413, detail=f"The file is over {reference_data.MAX_UPLOAD_BYTES // (1024 * 1024)} MB"
         )
     try:
-        parsed = reference_data.parse_csv(kind, upload.data)
+        # A company list is checked against the lenders and categories of the policy workbook too.
+        book = reference_data.effective_book(_now()) if kind == "company_categories" else None
+    except (BotoCoreError, ClientError) as e:
+        print(f"reference-data: policy unreadable project={project_id} ({type(e).__name__})")
+        book = None
+    try:
+        parsed = reference_data.parse_csv(kind, upload.data, book)
     except reference_data.CsvError as e:
         print(f"reference-data upload refused user={user_id} project={project_id} kind={kind} problems={len(e.errors)}")
         raise HTTPException(status_code=400, detail={"message": e.message, "errors": e.errors}) from e
