@@ -82,8 +82,8 @@ TOOL_SCHEMA = {
         'employer': {**_STR, 'description': 'Employer name exactly as printed; omit on bank statements, credit '
                                             'reports, rent agreements and pension slips'},
         'month': {**_STR, 'description': 'Salary slips and pension slips only: pay month as YYYY-MM'},
-        'gross_salary': {**_NUM, 'description': 'Salary slip: gross earnings for the month. Form-16: gross annual salary'},
-        'net_salary': {**_NUM, 'description': 'Salary slip: net pay (take-home) for the month'},
+        'gross_salary': {**_NUM, 'description': 'Salary slip: gross earnings ACTUALLY EARNED for the month (the earned / paid column, never the Master, Rate, Fixed, Standard or CTC column, which can be higher). Form-16: gross annual salary'},
+        'net_salary': {**_NUM, 'description': 'Salary slip: net pay (take-home) actually paid for the month'},
         'statement_from': {**_STR, 'description': 'Bank statement period start as YYYY-MM-DD'},
         'statement_to': {**_STR, 'description': 'Bank statement period end as YYYY-MM-DD'},
         'salary_credits': {

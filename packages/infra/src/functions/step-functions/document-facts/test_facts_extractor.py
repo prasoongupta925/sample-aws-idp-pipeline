@@ -557,3 +557,9 @@ def test_prices_equal_the_ask_feature():
     for model_id in shared:
         for tier, price in ask_prices[model_id].items():
             assert PRICES_PER_MILLION_USD[model_id][tier] == price, (model_id, tier)
+
+
+def test_salary_slip_gross_is_the_earned_column_not_the_master_column():
+    # A real slip had gross Master 53,600 vs earned 51,870 and the reading took the Master column.
+    text = str(TOOL_SCHEMA)
+    assert 'ACTUALLY EARNED' in text and 'never the Master' in text
