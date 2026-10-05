@@ -508,6 +508,7 @@ export default function EligibilityPanel({
                 projectId={projectId}
                 pincode={inputs.profile.pincode ?? undefined}
                 lenders={branchLenders}
+                onPolicyChanged={loadLenders}
               />
             )}
             {tab === 'lenders' && (

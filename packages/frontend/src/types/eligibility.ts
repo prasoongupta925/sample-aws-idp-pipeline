@@ -502,6 +502,24 @@ export interface LenderEligibility {
   serviceable: boolean | null;
   region: string | null;
   sources: ParameterSources;
+  /** Priced by the uploaded lender policy workbook; null: the sample policy. */
+  policy_sheet?: PolicySheetTerms | null;
+}
+
+/** What the lender policy workbook gave one bank (GET/POST .../calculate). */
+export interface PolicySheetTerms {
+  /** "From Policy (your sheet)". */
+  label: string;
+  bank: string;
+  slab_start: number | null;
+  /** As the app shows it: "CAT B". */
+  category: string | null;
+  /** The company is not in the bank's list: the unlisted category applied. */
+  company_unlisted: boolean;
+  /** "How it is calculated": every value and rule with its cell. */
+  lines: string[];
+  /** 0.05 = 5%: shown only, its meaning is to be confirmed. */
+  hl_deviation: number | null;
 }
 
 /** POST .../calculate {applicant, inputs?}: inputs are calculated, not saved. */

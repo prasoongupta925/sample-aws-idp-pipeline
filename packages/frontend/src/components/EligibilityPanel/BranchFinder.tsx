@@ -23,6 +23,7 @@ import {
 } from '../../lib/fileCheck';
 import { describeEligibilityError } from './errors';
 import { BUTTON_CLASS, SECTION_CLASS, SectionTitle } from './fields';
+import LenderPolicyPanel from './LenderPolicy';
 
 // "Nearest branch" of each lender at the applicant's pincode, as
 // GET .../eligibility/branches answers it (packages/backend/app/branches.py):
@@ -1552,17 +1553,21 @@ export interface BranchFinderProps {
   pincode: string | undefined;
   /** The lenders to show (e.g. the eligible ones), in this order. */
   lenders: string[];
+  /** After an admin saves or removes the lender policy workbook. */
+  onPolicyChanged?: () => void;
 }
 
 /**
  * Per lender: "Nearest branch: <name>, <city> (about N km)", whether it serves
  * the pincode and where the answer came from (your list, public data or
- * SAMPLE); below, the DSA's own lists, which come first once uploaded.
+ * SAMPLE); below, the DSA's own lists, which come first once uploaded, and
+ * for admins the app's lender policy workbook.
  */
 export default function BranchFinder({
   projectId,
   pincode,
   lenders,
+  onPolicyChanged,
 }: BranchFinderProps) {
   const { t } = useTranslation();
   const { fetchApi } = useAwsClient();
@@ -1618,6 +1623,7 @@ export default function BranchFinder({
         onCancel={lists.cancel}
         onRemove={lists.remove}
       />
+      <LenderPolicyPanel onChanged={onPolicyChanged} />
     </section>
   );
 }

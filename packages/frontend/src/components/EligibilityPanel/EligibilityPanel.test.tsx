@@ -272,6 +272,46 @@ describe('Lenders table (the worked example)', () => {
     ).not.toContain('EMI over 60 months');
   });
 
+  it('lists the policy sheet values with their cells and notes the sheet in the legend', () => {
+    const sheetLines = [
+      'ROI 11% (Sheet1, ICICI Bank, slab 80,000, CAT_A, cell C31)',
+      'HL deviation 5%: meaning to be confirmed with Smart Solutions (Sheet2, cell B4)',
+      'Minimum CIBIL 700: Sample: not in your policy sheet',
+    ];
+    const withSheet = {
+      ...RESULT,
+      per_lender: RESULT.per_lender.map((r) =>
+        r.lender === 'ICICI Bank'
+          ? {
+              ...r,
+              policy_sheet: {
+                label: 'From Policy (your sheet)',
+                bank: 'ICICI Bank',
+                slab_start: 80000,
+                category: 'CAT A',
+                company_unlisted: false,
+                lines: sheetLines,
+                hl_deviation: 0.05,
+              },
+            }
+          : r,
+      ),
+    };
+    const html = lenders({ result: withSheet });
+    const icici = lenderBody(html, 'ICICI Bank');
+    const sheet = plain(
+      icici.slice(icici.indexOf('data-testid="policy-sheet-lines"')),
+    );
+    expect(sheet).toContain('From your policy sheet');
+    for (const line of sheetLines) expect(sheet).toContain(line);
+    expect(html).toContain('data-testid="policy-sheet-legend"');
+    expect(plain(html)).toContain('From Policy (your sheet)');
+    // Without a sheet: neither.
+    const plainHtml = lenders();
+    expect(plainHtml).not.toContain('policy-sheet-legend');
+    expect(plainHtml).not.toContain('policy-sheet-lines');
+  });
+
   it('gives each lender its status with the reasons', () => {
     const html = lenders();
     const status = (lender: string) => {
