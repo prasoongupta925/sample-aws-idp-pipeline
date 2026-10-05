@@ -391,6 +391,85 @@ def test_group_applicants_ordering():
     assert names == sorted(names)
 
 
+# ------------------------------------------------------------------ relative-name safety net
+_FATHER_NOTE = (
+    "An ID document shows the name 'Ramesh Kulkarni' (perhaps the father's or "
+    "spouse's name on the card). Confirm it belongs to this applicant."
+)
+
+
+def _id_cards(pid='p9'):
+    """Holder's PAN card and Aadhaar, plus a card read with the father's name."""
+    return [
+        _doc(pid, 'k', '01_pan.jpg', 'identity_details',
+             applicant_name='Sneha Ramesh Kulkarni', pan='ABCPK1234F'),
+        _doc(pid, 'k', '02_aadhaar.jpg', 'identity_details',
+             applicant_name='Sneha Ramesh Kulkarni'),
+        _doc(pid, 'k', '03_card_back.jpg', 'identity_details',
+             applicant_name='Ramesh Kulkarni'),
+    ]
+
+
+def test_father_name_card_merges_into_holder(pl):
+    groups, unassigned = engine.group_applicants(_id_cards())
+    assert len(groups) == 1 and unassigned == []
+    assert len(groups[0]) == 3
+    res = engine.run_file_check(_id_cards(), pl)
+    assert len(res['applicants']) == 1
+    a = res['applicants'][0]
+    assert a['applicant'] == 'Sneha Ramesh Kulkarni'
+    assert a['pan'] == 'ABCPK1234F'
+    assert _FATHER_NOTE in a['needs_review']
+    # the merged card's name is not a name mismatch
+    checks = _by_id(a['consistency'], 'check_id')
+    assert checks['applicant_name']['status'] == 'OK'
+
+
+def test_father_name_card_sorted_first_does_not_take_display_name(pl):
+    facts = _id_cards()
+    facts[2]['document_name'] = '00_card_back.jpg'
+    res = engine.run_file_check(facts, pl)
+    assert [a['applicant'] for a in res['applicants']] == ['Sneha Ramesh Kulkarni']
+
+
+def test_two_applicants_with_own_pans_stay_apart(pl):
+    facts = [
+        _doc('p9', 'k', '01_pan.jpg', 'identity_details',
+             applicant_name='Sneha Ramesh Kulkarni', pan='ABCPK1234F'),
+        _doc('p9', 'r', '02_pan.jpg', 'identity_details',
+             applicant_name='Ramesh Kulkarni', pan='BCDPK5678G'),
+    ]
+    groups, _ = engine.group_applicants(facts)
+    assert len(groups) == 2
+    res = engine.run_file_check(facts, pl)
+    assert len(res['applicants']) == 2
+    assert all(_FATHER_NOTE not in a['needs_review'] for a in res['applicants'])
+
+
+def test_unrelated_lone_name_stays_separate():
+    facts = _id_cards()
+    facts[2]['fields']['applicant_name'] = 'Vikram Deshpande'
+    groups, _ = engine.group_applicants(facts)
+    assert len(groups) == 2
+    assert all(not d.get('merged_id_name') for g in groups for d in g)
+
+
+def test_no_merge_when_two_groups_could_take_the_name():
+    facts = _id_cards() + [
+        _doc('p9', 'm', '04_pan.jpg', 'identity_details',
+             applicant_name='Anil Ramesh Kulkarni', pan='CDEPK9012H'),
+    ]
+    groups, _ = engine.group_applicants(facts)
+    assert len(groups) == 3
+
+
+def test_non_identity_group_is_not_merged():
+    facts = _id_cards()
+    facts[2]['doc_type'] = 'salary_slip'
+    groups, _ = engine.group_applicants(facts)
+    assert len(groups) == 2
+
+
 # ------------------------------------------------------------------ classification
 def test_pending_documents_block_every_applicant(pl):
     facts = rahul() + sneha()

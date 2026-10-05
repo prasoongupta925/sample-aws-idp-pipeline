@@ -569,6 +569,9 @@ def _to_engine_doc(rec) -> dict:
         'fields': dict(rec.get('fields') or {}),
         'grounding': rec.get('grounding'),
         'usage': _usage_view(rec),
+        # set by group_applicants on an ID document merged in by the name
+        # safety net (the name on it is likely the father's or spouse's)
+        'merged_id_name': rec.get('merged_id_name'),
     }
 
 
@@ -587,6 +590,7 @@ def _name_of(doc):
 
 
 def _display_name(docs):
+    docs = [d for d in docs if not d.get('merged_id_name')]
     id_names = [
         d['fields']['applicant_name']
         for d in docs
@@ -617,6 +621,61 @@ def _group_pan(docs):
     best = max(counts.values())
     # ties: first in document_name order
     return next(p for p in pans if counts[p] == best)
+
+
+def _words_in_order(small, big) -> bool:
+    """Every word of `small` appears in `big`, in the same order."""
+    it = iter(big)
+    return all(w in it for w in small)
+
+
+def _merge_relative_names(groups):
+    """Safety net for a relative's name read as a second applicant.
+
+    A PAN card prints the father's name, which shares words with the holder's
+    full name (first name + father's first name + surname). A group with no PAN
+    made only of identity documents is merged into another group when exactly
+    one group with a PAN or more documents has a name holding all its words,
+    in order ("Ramesh Kulkarni" inside "Sneha Ramesh Kulkarni"). The merged
+    documents are marked (merged_id_name) so the applicant gets a needs-review
+    item and their name is left out of the display name and the name check.
+    """
+    def has_pan(g):
+        return any(_norm_pan(d['fields'].get('pan')) for d in g)
+
+    def names(g):
+        return {tuple(name_tokens(_name_of(d))) for d in g if _name_of(d)}
+
+    merges = {}
+    for i, g in enumerate(groups):
+        if has_pan(g) or not all(d['doc_type'] == 'identity_details' for d in g):
+            continue
+        own = names(g)
+        if len(own) != 1:
+            continue
+        (small,) = own
+        if len(small) < 2:
+            continue
+        targets = [
+            j
+            for j, h in enumerate(groups)
+            if j != i
+            and (has_pan(h) or len(h) > len(g))
+            and any(len(big) > len(small) and _words_in_order(small, big) for big in names(h))
+        ]
+        if len(targets) == 1:
+            merges[i] = targets[0]
+
+    # never merge into a group that is itself merged away
+    merges = {i: j for i, j in merges.items() if j not in merges}
+    if not merges:
+        return groups
+    out = {j: list(g) for j, g in enumerate(groups) if j not in merges}
+    for i, j in merges.items():
+        for d in groups[i]:
+            d['merged_id_name'] = _name_of(d)
+            out[j].append(d)
+    return [sorted(out[j], key=_sort_key) for j in sorted(out)]
 
 
 def group_applicants(docs):
@@ -658,7 +717,7 @@ def group_applicants(docs):
     buckets = {}
     for i, d in enumerate(keyed):
         buckets.setdefault(find(i), []).append(d)
-    groups = [buckets[k] for k in sorted(buckets)]
+    groups = _merge_relative_names([buckets[k] for k in sorted(buckets)])
     unassigned = []
     if len(groups) == 1:
         groups[0] = sorted(groups[0] + loose, key=_sort_key)
@@ -1797,16 +1856,18 @@ def _consistency(docs, checklist, tol, f16_tol, emi_tol):
                 )
 
     # Applicant name
+    # an ID document merged in by the relative-name safety net has its own
+    # needs-review item; its name is not compared here
     names = [
         (d['document_name'], d['fields']['applicant_name'])
         for d in docs
-        if d['fields'].get('applicant_name')
+        if d['fields'].get('applicant_name') and not d.get('merged_id_name')
     ]
     if 'applicant_name' in enabled and names:
         id_names = [
             d['fields']['applicant_name']
             for d in by_type.get('identity_details', [])
-            if d['fields'].get('applicant_name')
+            if d['fields'].get('applicant_name') and not d.get('merged_id_name')
         ]
         anchor = id_names[0] if id_names else max((n for _, n in names), key=len)
         bad = [(f, n) for f, n in names if not names_compatible(anchor, n)]
@@ -2127,6 +2188,11 @@ def evaluate_applicant(
     needs_review = [
         f"{c['check']}: {c['detail']}" for c in consistency if c['status'] == 'REVIEW'
     ]
+    for merged in sorted({d['merged_id_name'] for d in docs if d.get('merged_id_name')}):
+        needs_review.append(
+            f"An ID document shows the name '{merged}' (perhaps the father's or "
+            "spouse's name on the card). Confirm it belongs to this applicant."
+        )
 
     ready = all(
         r['status'] in MET_STATUSES for r in rows if r['required']
