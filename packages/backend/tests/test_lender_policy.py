@@ -512,3 +512,132 @@ def test_a_listed_category_is_priced_as_before_on_the_corrected_sheet(store):
     assert hdfc["status"] == "eligible"
     # Bandhan Bank's company list does not have it: CAT U, which Bandhan Bank does not lend to.
     assert at(result, "bandhan_bank")["not_offered"]["category_code"] == "CAT_U"
+
+
+# ------------------------------------------------------------------ the HL deviation: a running home loan
+V2_BANKS = ("hdfc_bank", "icici_bank", "axis_bank", "bandhan_bank", "indusind_bank")
+CAT_B_COMPANY = "Synthetic Cat B Works Pvt Ltd"
+
+
+def cat_b_book():
+    """The corrected sheet with a company list making CAT_B_COMPANY CAT B at every bank."""
+    rows = [[lender_id, CAT_B_COMPANY, "CAT B"] for lender_id in V2_BANKS]
+    companies = reference_data.StoredList(
+        kind="company_categories",
+        upload_id="c1",
+        filename="companies.csv",
+        uploaded_at=NOW.isoformat(),
+        expires_at=int(NOW.timestamp()) + 86400,
+        rows=rows,
+        lenders=["HDFC Bank", "ICICI Bank", "Axis Bank", "Bandhan Bank", "Indusind Bank"],
+    )
+    return calculation_book(companies, data=v2_bytes())[0]
+
+
+def home_loan_applicant(running=None, tradeline=None):
+    inputs = applicant(net=60000, emi=5000, company=CAT_B_COMPANY)
+    if running is not None:
+        inputs["profile"]["has_running_home_loan"] = running
+    if tradeline is not None:
+        inputs["cibil"]["tradelines"].append(tradeline)
+    return inputs
+
+
+def foir_eligibility(row, foir):
+    per_lakh = Decimal(str(row["per_lakh_emi"]))
+    obligations = Decimal(str(row["obligations"]))
+    want = (Decimal(str(row["income_considered"])) * Decimal(str(foir)) - obligations) / per_lakh * 100000
+    return pytest.approx(float(want), abs=1)
+
+
+def test_a_running_home_loan_raises_the_foir_by_the_hl_deviation(store):
+    book = cat_b_book()
+    without = {r["lender_id"]: r for r in el.calculate(home_loan_applicant(), book=book)["per_lender"]}
+    result = el.calculate(home_loan_applicant(running=True), book=book)
+    assert result["home_loan"] == {"running": True, "source": "entered", "loans": []}
+    raised = {r["lender_id"]: r for r in result["per_lender"]}
+    for lender_id in ("hdfc_bank", "icici_bank", "indusind_bank"):  # HL Deviation 0.05
+        before, after = without[lender_id], raised[lender_id]
+        assert before["foir"] == pytest.approx(0.6) and after["foir"] == pytest.approx(0.65)
+        assert before["foir_eligibility"] == foir_eligibility(before, 0.6)
+        assert after["foir_eligibility"] == foir_eligibility(after, 0.65)
+        # +5 points of 60,000 = 3,000 more a month for EMIs.
+        gain = Decimal(str(after["foir_eligibility"])) - Decimal(str(before["foir_eligibility"]))
+        assert float(gain) == pytest.approx(3000 / after["per_lakh_emi"] * 100000, abs=1)
+        assert after["policy_sheet"]["hl_deviation_applied"] is True
+        assert before["policy_sheet"]["hl_deviation_applied"] is False
+    hdfc = raised["hdfc_bank"]["policy_sheet"]["lines"]
+    assert "FOIR 60% + 5% home-loan deviation = 65% (HDFC Bank, Sheet2, cell U2)" in hdfc
+    assert not any("only with a running home loan" in line for line in hdfc)
+    assert any(
+        "only with a running home loan (none here)" in line for line in without["hdfc_bank"]["policy_sheet"]["lines"]
+    )
+    for lender_id in ("axis_bank", "bandhan_bank"):  # HL Deviation NA: unchanged
+        assert raised[lender_id]["foir"] == without[lender_id]["foir"] == pytest.approx(0.6)
+        assert raised[lender_id]["foir_eligibility"] == without[lender_id]["foir_eligibility"]
+        assert raised[lender_id]["policy_sheet"]["hl_deviation_applied"] is False
+        assert any(
+            line.startswith("Running home loan: no HL deviation for ") and "FOIR stays 60%" in line
+            for line in raised[lender_id]["policy_sheet"]["lines"]
+        )
+
+
+HOME_LOAN = {
+    "loan_type": "home",
+    "lender": "Synthetic Housing Finance",
+    "outstanding": 2500000,
+    "emi": 0,
+    "status": "active",
+    "action": "obligate",
+}
+
+
+def test_a_home_loan_in_the_obligations_is_found(store):
+    book = cat_b_book()
+    result = el.calculate(home_loan_applicant(tradeline=HOME_LOAN), book=book)
+    assert result["home_loan"]["running"] is True and result["home_loan"]["source"] == "obligations"
+    assert result["home_loan"]["loans"] == ["Tradeline 2 (Synthetic Housing Finance, Home Loan)"]
+    assert at(result, "hdfc_bank")["foir"] == pytest.approx(0.65)
+    assert any(n.startswith("Running home loan found in the obligations") for n in result["notes"])
+    # Closed, taken over (BT) or closed before disbursal: not running.
+    for change in ({"status": "closed"}, {"action": "close"}, {"action": "bt"}):
+        ended = el.calculate(home_loan_applicant(tradeline={**HOME_LOAN, **change}), book=book)
+        assert ended["home_loan"]["running"] is False, change
+        assert at(ended, "hdfc_bank")["foir"] == pytest.approx(0.6)
+
+
+def test_the_entered_answer_overrides_the_obligations(store):
+    book = cat_b_book()
+    result = el.calculate(home_loan_applicant(running=False, tradeline=HOME_LOAN), book=book)
+    assert result["home_loan"] == {
+        "running": False,
+        "source": "entered",
+        "loans": ["Tradeline 2 (Synthetic Housing Finance, Home Loan)"],
+    }
+    assert at(result, "hdfc_bank")["foir"] == pytest.approx(0.6)
+    assert any(n.startswith("Running home loan set to No") for n in result["notes"])
+
+
+def test_the_raised_foir_is_capped_at_100_percent(store):
+    rule = ["HDFC Bank", 0.05, "Salary * Multiplier", "NA", 3, "NA", "NA", "NA", "Monthly", 0.5, "Listed Company"]
+    sheet1 = grid_rows(banks=(("HDFC Bank", (25000, 50000)),), overrides={(4, "E"): 0.98, (5, "E"): 0.98})
+    data = workbook(sheet1=sheet1, sheet2=rules_rows(rule))
+    lists = reference_data.CalculationLists(None, None, None, stored_policy(data))
+    book = reference_data.CalculationBook(el.load_policy_book(), lists)
+    hdfc = at(el.calculate(applicant(net=60000, emi=0, tenure=48), book=book), "hdfc_bank")
+    assert hdfc["foir"] == pytest.approx(0.98)
+    inputs = applicant(net=60000, emi=0, tenure=48)
+    inputs["profile"]["has_running_home_loan"] = True
+    hdfc = at(el.calculate(inputs, book=book), "hdfc_bank")
+    assert hdfc["foir"] == pytest.approx(1.0)
+    assert (
+        "FOIR 98% + 5% home-loan deviation = 100% (capped at 100%) (HDFC Bank, Sheet2, cell C3)"
+        in (hdfc["policy_sheet"]["lines"])
+    )
+
+
+def test_lenders_without_a_sheet_ignore_the_home_loan(store):
+    book = cat_b_book()
+    before = at(el.calculate(home_loan_applicant(), book=book), "bajaj_finance")
+    after = at(el.calculate(home_loan_applicant(running=True), book=book), "bajaj_finance")
+    assert before["policy_sheet"] is None and after["foir"] == before["foir"]

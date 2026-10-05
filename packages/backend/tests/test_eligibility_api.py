@@ -1328,6 +1328,8 @@ class TestDocumentDraft:
             "company": "Konkan Softworks Pvt Ltd",
             "employment_type": "private_limited",
             "net_income": 82500.0,
+            # Not from a document: null means "found from the obligations".
+            "has_running_home_loan": None,
         }
         # The rent agreement (not the ITR's rental income too); the bonus on one slip in three is
         # yearly, the incentive on every slip monthly.

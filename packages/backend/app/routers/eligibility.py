@@ -320,6 +320,11 @@ class Profile(_Input):
         default=None, description="Net monthly salary; a salary verified by the file check is used instead"
     )
     other_income: list[OtherIncome] = Field(default=[], max_length=10)
+    has_running_home_loan: bool | None = Field(
+        default=None,
+        description="The applicant has a running home loan: a policy sheet's HL deviation then raises that bank's "
+        "FOIR. null: found from the obligations (a Home Loan tradeline that keeps running)",
+    )
 
     @field_validator("dob")
     @classmethod
@@ -733,7 +738,11 @@ class PolicySheetTerms(BaseModel):
         'HDFC Bank, slab 35,000, CAT_B, cell L5)"; the sample values the sheet lacks, labelled',
     )
     hl_deviation: float | None = Field(
-        default=None, description="The sheet's HL deviation (0.05 = 5%): shown, never used (meaning to be confirmed)"
+        default=None,
+        description="The sheet's HL deviation (0.05 = 5 percentage points): added to the FOIR with a running home loan",
+    )
+    hl_deviation_applied: bool = Field(
+        default=False, description="The applicant has a running home loan and the FOIR includes the HL deviation"
     )
 
 
@@ -907,6 +916,14 @@ class Suggestion(BaseModel):
     declined: list[DeclinedBank]
 
 
+class HomeLoan(BaseModel):
+    running: bool = Field(description="A policy sheet's HL deviation raises that bank's FOIR")
+    source: Literal["entered", "obligations", "none"] = Field(
+        description="entered: profile.has_running_home_loan; obligations: a Home Loan tradeline that keeps running"
+    )
+    loans: list[str] = Field(default=[], description="The running Home Loan tradelines found")
+
+
 class CalculateResponse(BaseModel):
     applicant: str
     calculated_at: str
@@ -917,6 +934,7 @@ class CalculateResponse(BaseModel):
     income: EligibilityIncome
     obligations: float = Field(description="Monthly obligations counted")
     obligation_details: ObligationDetails
+    home_loan: HomeLoan | None = Field(default=None, description="The running home loan used for the HL deviation")
     bt_amount: float
     requested: RequestedLoan
     per_lender: list[LenderEligibility]

@@ -136,10 +136,14 @@ class TestDetails:
             line.startswith("FOIR ") and "(Sheet1, HDFC Bank, slab 50,000, CAT_A, cell " in line for line in lines
         )
         assert any(line.startswith("Minimum CIBIL score") and el.NOT_IN_SHEET_LABEL in line for line in lines)
-        assert any("HL deviation 5%: meaning to be confirmed with Smart Solutions" in line for line in lines)
+        assert any(
+            line.startswith("HL deviation 5% (Sheet2, HDFC Bank, HL Deviation")
+            and line.endswith("raises the FOIR only with a running home loan (none here)")
+            for line in lines
+        )
         assert hdfc["policy_sheet"]["hl_deviation"] == pytest.approx(0.05)
 
-    def test_hl_deviation_does_not_change_the_result(self):
+    def test_hl_deviation_does_not_change_the_result_without_a_home_loan(self):
         book, _ = calculation_book()
         hdfc = book.lender("hdfc_bank")
         import dataclasses

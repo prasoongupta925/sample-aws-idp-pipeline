@@ -65,8 +65,10 @@ full), its rental-income share (none where NA); a co-applicant's net salary adde
 when the co-applicant's employer meets its rule ("Listed Company": in the bank's company list;
 "All Companies except proprietor and partnership"); a gold loan's obligation as a share of its
 outstanding a month where given (else its EMI: "gold loan: bank rule not given"); at most PLBT
-personal loans and CCBT credit cards (none where NA) marked BT. The HL deviation is shown, never
-used. What the sheet does not give (minimum CIBIL, maximum enquiries, employment types, processing
+personal loans and CCBT credit cards (none where NA) marked BT. With a running home loan (entered,
+or a Home Loan tradeline that keeps running) the HL deviation raises its FOIR by that many
+percentage points, at most 100%. A category whose cells are NA is one the bank does not lend to:
+not eligible there. What the sheet does not give (minimum CIBIL, maximum enquiries, employment types, processing
 fee, the pension share, the minimum loan) is the sample policy's, labelled "Sample: not in your
 policy sheet". `policy_sheet.lines` gives every value and rule used with its cell, for Details.
 
@@ -640,7 +642,7 @@ class SheetRules(_Data):
     SHEET_RULES key), the cell it came from and its text as the sheet shows it."""
 
     sheet: str = _spec(_text(min_length=1, max_length=100), "Sheet2")
-    # Stored and shown, never used: its meaning is to be confirmed with the client.
+    # Percentage points added to the FOIR when the applicant has a running home loan (0.05 = +5%).
     hl_deviation: float | None = _spec(_optional(_real(ge=0, le=1)), None)
     multiplier_method: str | None = _spec(_optional(_text(pattern="|".join(MULTIPLIER_METHODS))), None)
     # Credit cards a balance transfer may take over (0: none); personal loans (None: not given).
@@ -1239,6 +1241,37 @@ def _tradeline_name(index: int, tradeline: dict) -> str:
     return f"Tradeline {index}" + (f" ({', '.join(parts)})" if parts else "")
 
 
+# A home loan is running when it is not closed, settled or written off and it is not closed or
+# taken over (BT) before the disbursal.
+_ENDED_STATUSES = {"closed", "settled", "written_off"}
+
+
+def _home_loan(profile: dict, tradelines: list[dict], notes: list[str]) -> dict:
+    """Whether the applicant has a running home loan (a policy sheet's HL deviation then raises the
+    FOIR): profile.has_running_home_loan when entered (true / false), else found in the obligations
+    (a Home Loan tradeline that keeps running). {running, source: entered | obligations | none, loans}."""
+    loans = [
+        _tradeline_name(index, t)
+        for index, t in enumerate(tradelines, 1)
+        if t.get("loan_type") == "home"
+        and t.get("status") not in _ENDED_STATUSES
+        and (t.get("action") or "obligate") == "obligate"
+    ]
+    entered = profile.get("has_running_home_loan")
+    if isinstance(entered, bool):
+        if not entered and loans:
+            notes.append(
+                f"Running home loan set to No, though the obligations have {', '.join(loans)}: "
+                "no HL deviation is applied"
+            )
+        elif entered and not loans:
+            notes.append("Running home loan: as entered (none in the obligations)")
+        return {"running": entered, "source": "entered", "loans": loans}
+    if loans:
+        notes.append(f"Running home loan found in the obligations: {', '.join(loans)}")
+    return {"running": bool(loans), "source": "obligations" if loans else "none", "loans": loans}
+
+
 def _income(profile: dict, verified_income: dict | None, notes: list[str]) -> dict:
     entered = profile.get("net_income")
     verified = None
@@ -1735,14 +1768,34 @@ def _sheet_lines(
             if value is not None
         )
         lines.append(f"Processing fee {_number(dec(fee.pct))}% of the loan{limits} ({NOT_IN_SHEET_LABEL})")
-    if rules is not None and rules.hl_deviation is not None:
+    if rules is not None and rules.hl_deviation and not terms.get("hl_deviation_applied"):
         lines.append(
-            f"HL deviation {_pct(dec(rules.hl_deviation))}: meaning to be confirmed with Smart Solutions "
-            f"{_rule_ref(sheet, 'hl_deviation')}; it does not change the result"
+            f"HL deviation {_pct(dec(rules.hl_deviation))} {_rule_ref(sheet, 'hl_deviation')}: raises the FOIR "
+            "only with a running home loan (none here)"
         )
     if rules is not None and rules.app_bt:
         lines.append(f'App BT "{rules.app_bt}": meaning not known, not used {_rule_ref(sheet, "app_bt")}')
     return lines
+
+
+def _hl_deviation(sheet: SheetGrid, foir: Decimal, rule_lines: list[str], terms: dict) -> Decimal:
+    """The FOIR with a running home loan: the sheet's FOIR plus the bank's HL deviation (percentage
+    points, at most 100%); unchanged where Sheet2 has none (NA). Details says which."""
+    rules = sheet.rules
+    if rules is None or not rules.hl_deviation:
+        rule_lines.append(
+            f"Running home loan: no HL deviation for {sheet.bank} {_rule_ref(sheet, 'hl_deviation')}, "
+            f"FOIR stays {_pct(foir)}"
+        )
+        return foir
+    deviation = dec(rules.hl_deviation)
+    raised = min(foir + deviation, Decimal(1))
+    cell = rules.cells.get("hl_deviation")
+    where = ", ".join([sheet.bank, rules.sheet, *([f"cell {cell}"] if cell else [])])
+    capped = " (capped at 100%)" if foir + deviation > 1 else ""
+    rule_lines.append(f"FOIR {_pct(foir)} + {_pct(deviation)} home-loan deviation = {_pct(raised)}{capped} ({where})")
+    terms["hl_deviation_applied"] = True
+    return raised
 
 
 def _calculation_tenure(lender: LenderPolicy, requested: int | None, notes: list[str]) -> tuple[int, str]:
@@ -1805,6 +1858,7 @@ def _lender_result(
     obligations: dict,
     common_reasons: list[str],
     co_applicant: dict | None = None,
+    home_loan: dict | None = None,
 ) -> dict:
     reasons: list[str] = []
     notes: list[str] = []
@@ -1871,6 +1925,8 @@ def _lender_result(
             multiplier = dec(sheet_terms["values"]["multiplier"]["value"])
             category = sheet_terms["category"]
             company_policy = "category" if company_policy == "category" and category == listed else "unlisted"
+            if (home_loan or {}).get("running"):
+                foir = _hl_deviation(lender.sheet, foir, rule_lines, sheet_terms)
 
     score = cibil.get("score")
     if score is None:
@@ -1999,6 +2055,7 @@ def _lender_result(
             **sheet_terms,
             "lines": _sheet_lines(lender, sheet_terms, net, method, rule_lines + obligation_lines),
             "hl_deviation": rules.hl_deviation if rules is not None else None,
+            "hl_deviation_applied": bool(sheet_terms.get("hl_deviation_applied")),
         }
 
     return {
@@ -2195,8 +2252,11 @@ def calculate(
             common_reasons.append("Net monthly income not entered")
         common_reasons.extend(obligations["incomplete"])
         co_applicant = inputs.get("co_applicant") or None
+        home_loan = _home_loan(profile, list(cibil.get("tradelines") or []), notes)
         results = [
-            _lender_result(lender, book, profile, cibil, loan, income, obligations, common_reasons, co_applicant)
+            _lender_result(
+                lender, book, profile, cibil, loan, income, obligations, common_reasons, co_applicant, home_loan
+            )
             for lender in book.lenders
         ]
         best, why = _best_lender(results, loan, obligations["bt_amount"])
@@ -2252,6 +2312,8 @@ def calculate(
         },
         "obligations": money(obligations["total"]),
         "obligation_details": obligations["details"],
+        # The running home loan that lets a policy sheet's HL deviation raise the FOIR.
+        "home_loan": home_loan,
         "bt_amount": money(obligations["bt_amount"]),
         "requested": {"amount": money(loan.get("amount")), "tenure_months": loan.get("tenure_months")},
         "per_lender": results,

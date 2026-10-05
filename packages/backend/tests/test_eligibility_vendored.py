@@ -258,3 +258,31 @@ def test_the_tool_gives_the_apis_not_offered_reason(table, policy_sheet_v2):
         assert mine["not_offered"] == theirs["not_offered"]
         declined = {d["lender_id"]: d["reason"] for d in answer["suggestion"]["declined"]}
         assert declined[lender_id].startswith(f"{bank} does not lend to CAT U (unlisted) companies")
+
+
+@pytest.mark.parametrize(
+    "home_loan",
+    [
+        {"profile__has_running_home_loan": True},
+        {"cibil__tradelines": [{"loan_type": "home", "lender": "Synthetic Housing Finance", "emi": 4000}]},
+    ],
+)
+def test_the_tool_applies_the_hl_deviation_as_the_api(table, policy_sheet_v2, home_loan):
+    """A running home loan (entered, or a Home Loan tradeline) raises the FOIR alike in the chat."""
+    applicant = "Home Loan Applicant"
+    changes = {"profile__name": applicant, "profile__net_income": 60000, **home_loan}
+    saved = client.put(
+        f"/projects/{PROJECT_ID}/eligibility/inputs",
+        headers=HEADERS,
+        json={"applicant": applicant, **example(**changes)},
+    )
+    assert saved.status_code == 200, saved.text
+    api = client.post(f"/projects/{PROJECT_ID}/eligibility/calculate", headers=HEADERS, json={"applicant": applicant})
+    assert api.status_code == 200
+    answer = json.loads(json.dumps(tool(applicant)))
+    body = api.json()
+    assert body["home_loan"]["running"] is True and answer["home_loan"] == body["home_loan"]
+    assert [key for key in SAME if known(answer[key]) != known(body[key])] == []
+    hdfc = next(r for r in body["per_lender"] if r["lender_id"] == "hdfc_bank")
+    assert hdfc["policy_sheet"]["hl_deviation_applied"] is True
+    assert any("home-loan deviation" in line for line in hdfc["policy_sheet"]["lines"])
