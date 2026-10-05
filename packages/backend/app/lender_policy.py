@@ -40,125 +40,34 @@ from app.ddb.ask_usage import TTL_ATTRIBUTE
 from app.policy_workbook import MAX_FILE_BYTES, PolicyWorkbook, PolicyWorkbookError, parse_policy_workbook
 from app.s3 import PRESIGNED_URL_EXPIRES_IN, get_s3_client, get_s3_presign_client
 
-SOURCE_LABEL = "From Policy (your sheet)"
-NOT_IN_SHEET_LABEL = "Sample: not in your policy sheet"
+SOURCE_LABEL = eligibility.SHEET_SOURCE_LABEL
+NOT_IN_SHEET_LABEL = eligibility.NOT_IN_SHEET_LABEL
 S3_PREFIX = "lender-policy/"
 HEADER_KEY = {"PK": "APP#LENDERPOLICY", "SK": "CURRENT"}
 # Under the backend Lambda's 6 MB request limit (also as multipart), and the parser's own limit.
 MAX_UPLOAD_BYTES = min(4 * 1024 * 1024, MAX_FILE_BYTES)
 XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-TEMPLATE_LENDER = "hdfc_bank"
-_UNLISTED_CODE = "CAT_U"
+TEMPLATE_LENDER = eligibility.SHEET_TEMPLATE_LENDER
 
 __all__ = ["PolicyWorkbookError", "parse_policy_workbook"]
 
 
 # ------------------------------------------------------------------ workbook -> lender policies
-def _first(values: list[float | None], default: float, *, le: float | None = None) -> float:
-    """The first positive value (within `le`), else `default`: a placeholder for the policy's flat
-    fields, which the sheet's grid replaces in every calculation."""
-    for v in values:
-        if v is not None and v > 0 and (le is None or v <= le):
-            return float(v)
-    return default
-
-
 def sheet_grid(workbook: PolicyWorkbook, bank) -> eligibility.SheetGrid:
-    """The bank's grid as the engine takes it."""
-    labels = [c.label for c in workbook.categories]
-    codes = [c.code for c in workbook.categories]
-    values: dict[str, dict[str, list]] = {}
-    cells: dict[str, dict[str, list]] = {}
-    for key in eligibility.SHEET_PARAMETERS:
-        values[key] = {label: [] for label in labels}
-        cells[key] = {label: [] for label in labels}
-        for slab in bank.slabs:
-            column = slab.values.get(key) or {}
-            for code, label in zip(codes, labels, strict=True):
-                v = column.get(code)
-                values[key][label].append(v.value if v is not None else None)
-                cells[key][label].append(v.cell if v is not None else "")
-    unlisted = next((c.label for c in workbook.categories if c.code == _UNLISTED_CODE), None)
-    return eligibility.SheetGrid(
-        label=SOURCE_LABEL,
-        bank=bank.name,
-        sheet=workbook.grid_sheet,
-        slab_starts=tuple(s.start for s in bank.slabs),
-        categories=tuple(labels),
-        codes=tuple(codes),
-        unlisted_category=unlisted,
-        values=values,
-        cells=cells,
-    )
+    """The bank's grid (and Sheet2 rules) as the engine takes it."""
+    return eligibility.sheet_grid(workbook.to_json(), _bank_json(workbook, bank))
 
 
-def _lender_policy(workbook: PolicyWorkbook, bank, book: eligibility.PolicyBook) -> eligibility.LenderPolicy:
-    grid = sheet_grid(workbook, bank)
-    base = book.lender(bank.lender_id)
-    template = base or book.lender(TEMPLATE_LENDER) or book.lenders[0]
-    every = {key: [v for column in grid.values[key].values() for v in column] for key in grid.values}
-    rois = [v * 100 for v in every["roi"] if v is not None and 0 < v * 100 <= 60]
-    funding = max((v for v in every["max_funding"] if v), default=0) or template.max_amount
-    max_tenure = int(max((v for v in every["max_tenure_months"] if v and v <= 480), default=0)) or (
-        template.max_tenure_months
-    )
-    tenure = int(_first(every["calculation_tenure_months"], max_tenure, le=max_tenure))
-    categories = {
-        label: eligibility.CategoryPolicy(
-            foir=_first(grid.values["foir"][label], 0.5, le=1),
-            multiplier=_first(grid.values["multiplier"][label], 10, le=100),
-        )
-        for label in grid.categories
-    }
-    unlisted = (
-        eligibility.UnlistedCompanyPolicy(
-            accepted=True,
-            foir=categories[grid.unlisted_category].foir,
-            multiplier=categories[grid.unlisted_category].multiplier,
-        )
-        if grid.unlisted_category
-        else eligibility.UnlistedCompanyPolicy(accepted=False)
-    )
-    first = categories[grid.categories[0]]
-    return eligibility.LenderPolicy(
-        id=bank.lender_id,
-        name=base.name if base else bank.name,
-        product=template.product,
-        roi=min(rois) if rois else template.roi,
-        roi_max=max(rois) if rois and max(rois) > min(rois) else None,
-        foir=first.foir,
-        multiplier=first.multiplier,
-        min_tenure_months=min(template.min_tenure_months, tenure),
-        max_tenure_months=max_tenure,
-        calculation_tenure_months=tenure,
-        min_amount=min(template.min_amount, funding),
-        max_amount=funding,
-        min_cibil_score=template.min_cibil_score,
-        max_enquiries_90d=template.max_enquiries_90d,
-        employment_types=template.employment_types,
-        company_categories=categories,
-        unlisted_company=unlisted,
-        income_consideration_pct=template.income_consideration_pct,
-        processing_fee=base.processing_fee if base else None,
-        sheet=grid,
-    )
+def _bank_json(workbook: PolicyWorkbook, bank) -> dict:
+    return next(b for b in workbook.to_json()["banks"] if b["lender_id"] == bank.lender_id)
 
 
 def lender_policies(
     workbook: PolicyWorkbook, book: eligibility.PolicyBook
 ) -> tuple[dict[str, eligibility.LenderPolicy], list[str]]:
-    """Per lender id, the bank's policy from the workbook; and the banks that could not be used, why."""
-    out: dict[str, eligibility.LenderPolicy] = {}
-    problems: list[str] = []
-    for bank in workbook.banks:
-        if not bank.slabs:
-            problems.append(f"{bank.name}: no slab rows, so its sample policy is used")
-            continue
-        try:
-            out[bank.lender_id] = _lender_policy(workbook, bank, book)
-        except ValueError as e:
-            problems.append(f"{bank.name} cannot be used ({e}): its sample policy is used")
-    return out, problems
+    """Per lender id, the bank's policy from the workbook; and the banks that could not be used, why.
+    The same builder (eligibility.sheet_lenders) as the chat's tool, from the same JSON."""
+    return eligibility.sheet_lenders(workbook.to_json(), book)
 
 
 # ------------------------------------------------------------------ stored policy
@@ -186,13 +95,8 @@ class StoredPolicy:
 
     def source(self) -> dict[str, Any]:
         """The `sources` entry of an answer that used this policy."""
-        try:
-            uploaded = dt.datetime.fromisoformat(self.uploaded_at).strftime("%d %b %Y")
-        except ValueError:
-            uploaded = self.uploaded_at
-        detail = f"{self.filename}, uploaded {uploaded}" if self.filename else f"uploaded {uploaded}"
         return {
-            "name": f"{SOURCE_LABEL} ({detail})",
+            "name": eligibility.sheet_source_name(self.filename, self.uploaded_at),
             "licence": f"Your own data, deleted on {self.expires_on()}: re-upload needed by then",
             "url": None,
         }

@@ -1076,7 +1076,7 @@ class TestVocabulary:
         opts = el.options()
         assert [o["id"] for o in opts["tradeline_actions"]] == ["bt", "obligate", "close"]
         assert [o["label"] for o in opts["tradeline_actions"]] == ["BT", "Obligate", "Close"]
-        assert len(opts["employment_types"]) == 8 and len(opts["loan_types"]) == 8
+        assert len(opts["employment_types"]) == 8 and len(opts["loan_types"]) == 9
         assert {o["label"] for o in opts["sources"]} == {"From Policy", "Formula Calculation", "From Table"}
 
 

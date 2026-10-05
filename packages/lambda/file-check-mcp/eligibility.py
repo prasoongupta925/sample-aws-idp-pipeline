@@ -52,6 +52,24 @@ no column for gets no FOIR: either makes the lender "not_eligible" (the category
 kept for `computed_amount`). The slab and category that set the FOIR are noted ("FOIR 65% ·
 slab 50,000–74,999 · CAT A · From Policy"); the multiplier still comes from the category.
 
+A bank of the client's policy workbook (SheetGrid, built from the stored workbook by sheet_lenders)
+is priced by its cells and its rules instead: the slab is the highest slab start at or below the net
+monthly salary (below the lowest: not eligible, with the bank's minimum); the category is the
+company's with that bank, CAT U when the company is not in its list (and the note says so); ROI,
+FOIR, multiplier, Maximum Funding and both tenures are the cells of that slab and category; the
+per-lakh EMI is at the Tenure for Eligibility Calculation whatever tenure is requested, the EMI at
+the Maximum Tenure. Its second-sheet rules apply: the multiplier method (income x multiplier, or
+(income - obligations) x multiplier); the bonus formula (the bonus of the last N years x share / D
+months, a yearly bonus counting for each year), the incentive frequencies it accepts (counted in
+full), its rental-income share (none where NA); a co-applicant's net salary added in full only
+when the co-applicant's employer meets its rule ("Listed Company": in the bank's company list;
+"All Companies except proprietor and partnership"); a gold loan's obligation as a share of its
+outstanding a month where given (else its EMI: "gold loan: bank rule not given"); at most PLBT
+personal loans and CCBT credit cards (none where NA) marked BT. The HL deviation is shown, never
+used. What the sheet does not give (minimum CIBIL, maximum enquiries, employment types, processing
+fee, the pension share, the minimum loan) is the sample policy's, labelled "Sample: not in your
+policy sheet". `policy_sheet.lines` gives every value and rule used with its cell, for Details.
+
 Parameter sources follow the sheet's legend: "policy" (From Policy: the lender policy),
 "formula" (Formula Calculation) and "table" (From Table: the data entered or read from the
 documents, and the company and pincode lists).
@@ -71,6 +89,7 @@ The backend image and the Lambda asset are packaged from different folders, so t
 is copied instead of imported across packages.
 """
 
+import datetime as _dt
 import json
 import math
 import re
@@ -88,6 +107,9 @@ COMPANY_FILE = "companies.json"
 
 SAMPLE_LABEL = "sample policy — replace with your lender grid"
 INDICATIVE_LABEL = "indicative — the lender decides"
+# The client's policy workbook (app/policy_workbook.py): what it gives, and the sample values it lacks.
+SHEET_SOURCE_LABEL = "From Policy (your sheet)"
+NOT_IN_SHEET_LABEL = "Sample: not in your policy sheet"
 
 LAKH = Decimal(100_000)
 # The smallest loan worth offering (a lender's own min_amount may be higher).
@@ -135,6 +157,7 @@ LOAN_TYPES = {
     "application": "Application Loan",
     "consumer": "Consumer Loan",
     "credit_card": "Credit Card",
+    "gold": "Gold Loan",
 }
 LOAN_TYPE_ALIASES = {
     "pl": "personal",
@@ -578,6 +601,63 @@ class FoirGrid(_Data):
         return f"{start}–{_grouped(str(self.slab_starts[index + 1] - 1))}"
 
 
+# The policy workbook's second sheet: one row of rules per bank (rule -> its column).
+SHEET_RULES = {
+    "hl_deviation": "HL Deviation",
+    "multiplier_method": "Multiplier",
+    "ccbt": "CCBT",
+    "plbt": "PLBT",
+    "app_bt": "App BT",
+    "gold_loan": "Gold Loan",
+    "bonus": "Bonus Calculation",
+    "incentive": "Incentive",
+    "rental_income": "Rental Income",
+    "co_applicant": "Co-Applicant Salary",
+}
+MULTIPLIER_METHODS = {"salary": "income × multiplier", "net_of_obligations": "(income − obligations) × multiplier"}
+CO_APPLICANT_RULES = {
+    "listed_company": "Listed Company",
+    "all_except_proprietorship_partnership": "All Companies except proprietor and partnership",
+}
+
+
+@dataclass(frozen=True, kw_only=True)
+class SheetBonus(_Data):
+    """The bonus counted a month: the bonus of the last `years` years x `share`, divided by `divisor`."""
+
+    years: int = _spec(_whole(ge=1, le=10))
+    share: float = _spec(_real(gt=0, le=1))
+    divisor: int = _spec(_whole(ge=1, le=240))
+
+
+@dataclass(frozen=True, kw_only=True)
+class SheetRules(_Data):
+    """A bank's row of the policy workbook's second sheet; `cells` and `texts` give, per rule (a
+    SHEET_RULES key), the cell it came from and its text as the sheet shows it."""
+
+    sheet: str = _spec(_text(min_length=1, max_length=100), "Sheet2")
+    # Stored and shown, never used: its meaning is to be confirmed with the client.
+    hl_deviation: float | None = _spec(_optional(_real(ge=0, le=1)), None)
+    multiplier_method: str | None = _spec(_optional(_text(pattern="|".join(MULTIPLIER_METHODS))), None)
+    # Credit cards a balance transfer may take over (0: none); personal loans (None: not given).
+    ccbt_max_cards: int = _spec(_whole(ge=0, le=100), 0)
+    plbt_max_loans: int | None = _spec(_optional(_whole(ge=0, le=100)), None)
+    app_bt: str | None = _spec(_optional(_text(max_length=200)), None)
+    # A gold loan's obligation: this fraction of its outstanding a month (None: the EMI, as for any loan).
+    gold_loan_monthly_pct: float | None = _spec(_optional(_real(gt=0, le=0.2)), None)
+    bonus: SheetBonus | None = _spec(_optional(_record(SheetBonus)), None)
+    incentive_frequencies: tuple[str, ...] = _spec(_items(_text(pattern="|".join(INCOME_FREQUENCIES))), ())
+    rental_income_share: float | None = _spec(_optional(_real(ge=0, le=1)), None)
+    co_applicant_rule: str | None = _spec(_optional(_text(pattern="|".join(CO_APPLICANT_RULES))), None)
+    cells: dict[str, str] = _spec(_mapping(_text(max_length=12)))
+    texts: dict[str, str] = _spec(_mapping(_text(max_length=200)))
+
+    def _consistent(self) -> None:
+        unknown = sorted(set(self.cells) - set(SHEET_RULES)) + sorted(set(self.texts) - set(SHEET_RULES))
+        if unknown:
+            raise ValueError(f"unknown rules {unknown}")
+
+
 SHEET_PARAMETERS = {
     "roi": "ROI",
     "foir": "FOIR",
@@ -604,6 +684,8 @@ class SheetGrid(_Data):
     unlisted_category: str | None = _spec(_optional(_text()), None)
     values: dict[str, dict[str, tuple[float | None, ...]]] = _spec(_mapping(_mapping(_items(_optional(_real(ge=0))))))
     cells: dict[str, dict[str, tuple[str, ...]]] = _spec(_mapping(_mapping(_items(_text(max_length=12)))))
+    # The bank's rules of the second sheet; None: the sheet has no row for the bank.
+    rules: SheetRules | None = _spec(_optional(_record(SheetRules)), None)
 
     def _consistent(self) -> None:
         if list(self.slab_starts) != sorted(set(self.slab_starts)):
@@ -858,6 +940,201 @@ def load_policy_book() -> PolicyBook:
     )
 
 
+# ------------------------------------------------------------------ the client's policy workbook
+# The workbook as app/policy_workbook.py reads it (PolicyWorkbook.to_json(): categories, banks with
+# their slabs, values and cells, and their Sheet2 rules), turned into each bank's LenderPolicy here so
+# that the eligibility API and the chat's tool build the same policies from the same stored JSON.
+# A bank the SAMPLE book has keeps what the sheet does not give (minimum CIBIL, maximum enquiries,
+# employment types, processing fee, the pension share) from its sample policy; a new bank (Bandhan
+# Bank, Indusind Bank) gets them from SHEET_TEMPLATE_LENDER's, without a processing fee. Every such
+# value is labelled NOT_IN_SHEET_LABEL where it is shown.
+SHEET_TEMPLATE_LENDER = "hdfc_bank"
+SHEET_UNLISTED_CODE = "CAT_U"
+
+
+def _sheet_first(values: list[float | None], default: float, *, le: float | None = None) -> float:
+    """The first positive value (within `le`), else `default`: a placeholder for the policy's flat
+    fields, which the sheet's grid replaces in every calculation."""
+    for v in values:
+        if v is not None and v > 0 and (le is None or v <= le):
+            return float(v)
+    return default
+
+
+def _sheet_rules(workbook: dict, rules: dict | None) -> SheetRules | None:
+    if not rules:
+        return None
+    cited = {k: v for k, v in (rules.get("cells") or {}).items() if k in SHEET_RULES and isinstance(v, dict)}
+    bonus = rules.get("bonus")
+    app_bt = rules.get("app_bt")
+    return SheetRules(
+        sheet=str(workbook.get("rules_sheet") or "Sheet2")[:100],
+        hl_deviation=rules.get("hl_deviation"),
+        multiplier_method=rules.get("multiplier_method"),
+        ccbt_max_cards=int(rules.get("ccbt_max_cards") or 0),
+        plbt_max_loans=rules.get("plbt_max_loans"),
+        app_bt=str(app_bt)[:200] if app_bt else None,
+        gold_loan_monthly_pct=rules.get("gold_loan_monthly_pct"),
+        bonus=SheetBonus.model_validate(bonus, where="bonus") if bonus else None,
+        incentive_frequencies=tuple(rules.get("incentive_frequencies") or ()),
+        rental_income_share=rules.get("rental_income_share"),
+        co_applicant_rule=rules.get("co_applicant_rule"),
+        cells={k: str(v.get("cell") or "")[:12] for k, v in cited.items()},
+        texts={k: str(v.get("text") or "")[:200] for k, v in cited.items()},
+    )
+
+
+def sheet_grid(workbook: dict, bank: dict) -> SheetGrid:
+    """The bank's grid (and rules) as the engine takes it."""
+    categories = workbook.get("categories") or []
+    labels = [str(c["label"]) for c in categories]
+    codes = [str(c["code"]) for c in categories]
+    values: dict[str, dict[str, list]] = {}
+    cells: dict[str, dict[str, list]] = {}
+    for key in SHEET_PARAMETERS:
+        values[key] = {label: [] for label in labels}
+        cells[key] = {label: [] for label in labels}
+        for slab in bank.get("slabs") or []:
+            column = (slab.get("values") or {}).get(key) or {}
+            for code, label in zip(codes, labels, strict=True):
+                v = column.get(code)
+                values[key][label].append(v.get("value") if v else None)
+                cells[key][label].append(str(v.get("cell") or "") if v else "")
+    unlisted = next((str(c["label"]) for c in categories if c["code"] == SHEET_UNLISTED_CODE), None)
+    return SheetGrid(
+        label=SHEET_SOURCE_LABEL,
+        bank=str(bank["name"]),
+        sheet=str(workbook.get("grid_sheet") or "Sheet1"),
+        slab_starts=tuple(int(s["start"]) for s in bank.get("slabs") or []),
+        categories=tuple(labels),
+        codes=tuple(codes),
+        unlisted_category=unlisted,
+        values=values,
+        cells=cells,
+        rules=_sheet_rules(workbook, bank.get("rules")),
+    )
+
+
+def sheet_lender(workbook: dict, bank: dict, book: PolicyBook) -> LenderPolicy:
+    """The bank's LenderPolicy: the sheet's grid, and from its sample policy what the sheet lacks."""
+    grid = sheet_grid(workbook, bank)
+    base = book.lender(bank["lender_id"])
+    template = base or book.lender(SHEET_TEMPLATE_LENDER) or book.lenders[0]
+    every = {key: [v for column in grid.values[key].values() for v in column] for key in grid.values}
+    rois = [v * 100 for v in every["roi"] if v is not None and 0 < v * 100 <= 60]
+    funding = max((v for v in every["max_funding"] if v), default=0) or template.max_amount
+    max_tenure = int(max((v for v in every["max_tenure_months"] if v and v <= 480), default=0)) or (
+        template.max_tenure_months
+    )
+    tenure = int(_sheet_first(every["calculation_tenure_months"], max_tenure, le=max_tenure))
+    categories = {
+        label: CategoryPolicy(
+            foir=_sheet_first(grid.values["foir"][label], 0.5, le=1),
+            multiplier=_sheet_first(grid.values["multiplier"][label], 10, le=100),
+        )
+        for label in grid.categories
+    }
+    unlisted = (
+        UnlistedCompanyPolicy(
+            accepted=True,
+            foir=categories[grid.unlisted_category].foir,
+            multiplier=categories[grid.unlisted_category].multiplier,
+        )
+        if grid.unlisted_category
+        else UnlistedCompanyPolicy(accepted=False)
+    )
+    first = categories[grid.categories[0]]
+    return LenderPolicy(
+        id=str(bank["lender_id"]),
+        name=base.name if base else str(bank["name"]),
+        product=template.product,
+        roi=min(rois) if rois else template.roi,
+        roi_max=max(rois) if rois and max(rois) > min(rois) else None,
+        foir=first.foir,
+        multiplier=first.multiplier,
+        min_tenure_months=min(template.min_tenure_months, tenure),
+        max_tenure_months=max_tenure,
+        calculation_tenure_months=tenure,
+        min_amount=min(template.min_amount, funding),
+        max_amount=funding,
+        min_cibil_score=template.min_cibil_score,
+        max_enquiries_90d=template.max_enquiries_90d,
+        employment_types=template.employment_types,
+        company_categories=categories,
+        unlisted_company=unlisted,
+        income_consideration_pct=template.income_consideration_pct,
+        processing_fee=base.processing_fee if base else None,
+        sheet=grid,
+    )
+
+
+def sheet_lenders(workbook: dict, book: PolicyBook) -> tuple[dict[str, LenderPolicy], list[str]]:
+    """Per lender id, the bank's policy from the workbook (its to_json()); and the banks that could
+    not be used, and why (their sample policy applies)."""
+    out: dict[str, LenderPolicy] = {}
+    problems: list[str] = []
+    for bank in workbook.get("banks") or []:
+        name = str(bank.get("name") or bank.get("lender_id") or "a bank")
+        if not bank.get("slabs"):
+            problems.append(f"{name}: no slab rows, so its sample policy is used")
+            continue
+        try:
+            out[str(bank["lender_id"])] = sheet_lender(workbook, bank, book)
+        except (ValueError, KeyError, TypeError) as e:
+            problems.append(f"{name} cannot be used ({e}): its sample policy is used")
+    return out, problems
+
+
+def sheet_source_name(filename: str | None, uploaded_at: str) -> str:
+    """'From Policy (your sheet) (Policy.xlsx, uploaded 05 Oct 2026)'."""
+    try:
+        uploaded = _dt.datetime.fromisoformat(uploaded_at).strftime("%d %b %Y")
+    except ValueError:
+        uploaded = uploaded_at
+    detail = f"{filename}, uploaded {uploaded}" if filename else f"uploaded {uploaded}"
+    return f"{SHEET_SOURCE_LABEL} ({detail})"
+
+
+def sheet_note(names: Collection[str], source_name: str) -> str:
+    """The calculation's note naming the banks the policy sheet priced."""
+    return f"Policy of {', '.join(sorted(names))}: {source_name}"
+
+
+class SheetBook:
+    """A policy book with the policy workbook's banks (sheet_lenders), as calculate() takes a book: a
+    bank the sheet has is priced by it and labelled SHEET_SOURCE_LABEL; a bank only the sheet has
+    (not in the book) comes after the book's lenders, with no pincode list (serviceability not
+    checked). Everything else is the book's. (The eligibility API's reference_data.CalculationBook
+    does the same, with the DSA's uploaded lists on top.)"""
+
+    def __init__(self, book: PolicyBook, policies: dict[str, LenderPolicy]):
+        self._book = book
+        self.policies = policies
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._book, name)
+
+    @property
+    def lenders(self) -> tuple[LenderPolicy, ...]:
+        known = self._book.lenders
+        ids = {lender.id for lender in known}
+        return (
+            *(self.policies.get(lender.id, lender) for lender in known),
+            *(p for lender_id, p in self.policies.items() if lender_id not in ids),
+        )
+
+    def lender(self, id_or_name: str | None) -> LenderPolicy | None:
+        key = _enum_key(id_or_name or "")
+        return next((p for p in self.lenders if key and key in (p.id, _enum_key(p.name))), None)
+
+    def label_of(self, lender_id: str) -> str | None:
+        return SHEET_SOURCE_LABEL if lender_id in self.policies else self._book.label_of(lender_id)
+
+    def serviceable(self, lender_id: str, pincode: str) -> bool | None:
+        """None: a bank only the policy workbook has (no pincode list: not checked)."""
+        return self._book.serviceable(lender_id, pincode) if self._book.lender(lender_id) else None
+
+
 # ------------------------------------------------------------------ name matching
 _LENDER_STOP = frozenset(
     {
@@ -936,6 +1213,14 @@ def match_bank_emis(tradelines: list[dict], bank_emis: list[dict]) -> list[tuple
 
 
 # ------------------------------------------------------------------ calculation
+def _maybe_dec(value: Any) -> Decimal | None:
+    return None if value is None else dec(value)
+
+
+def _count(n: int, noun: str) -> str:
+    return f"{n} {noun}" + ("" if n == 1 else "s")
+
+
 def _tradeline_name(index: int, tradeline: dict) -> str:
     parts = [p for p in (tradeline.get("lender"), LOAN_TYPES.get(tradeline.get("loan_type") or "")) if p]
     return f"Tradeline {index}" + (f" ({', '.join(parts)})" if parts else "")
@@ -1008,7 +1293,9 @@ def _income(profile: dict, verified_income: dict | None, notes: list[str]) -> di
 
 
 def _obligations(tradelines: list[dict], bank_emis: list[dict], notes: list[str]) -> dict:
-    counted, bt_rows, closed, not_counted, incomplete = [], [], [], [], []
+    """The obligations of every lender: the total counts a gold loan at its EMI (where entered); a
+    lender with a gold loan rule counts it its own way (`gold`, see _lender_obligations)."""
+    counted, bt_rows, closed, not_counted, incomplete, gold = [], [], [], [], [], []
     bt_amount = Decimal(0)
     for index, tradeline in enumerate(tradelines, 1):
         name = _tradeline_name(index, tradeline)
@@ -1047,6 +1334,9 @@ def _obligations(tradelines: list[dict], bank_emis: list[dict], notes: list[str]
         elif action == "close":
             closed.append({**row, "note": "to be closed before disbursal"})
             notes.append(f"{name}: to be closed before disbursal (its EMI is not counted)")
+        elif tradeline.get("emi") is None and tradeline.get("loan_type") == "gold":
+            gold.append({"name": name, "emi": None, "outstanding": _maybe_dec(tradeline.get("outstanding"))})
+            not_counted.append({**row, "note": "EMI not entered: a lender's gold loan rule may count it instead"})
         elif tradeline.get("emi") is None:
             hint = (
                 ": enter the monthly amount the lender counts for the card (often 5% of the outstanding)"
@@ -1057,6 +1347,9 @@ def _obligations(tradelines: list[dict], bank_emis: list[dict], notes: list[str]
             not_counted.append({**row, "note": "EMI not entered"})
         else:
             counted.append({**row, "source": "tradeline", "flag": None, "_emi": dec(tradeline["emi"])})
+            if tradeline.get("loan_type") == "gold":
+                outstanding = _maybe_dec(tradeline.get("outstanding"))
+                gold.append({"name": name, "emi": dec(tradeline["emi"]), "outstanding": outstanding})
 
     bank_rows = []
     for bank, index in match_bank_emis(tradelines, bank_emis):
@@ -1099,6 +1392,7 @@ def _obligations(tradelines: list[dict], bank_emis: list[dict], notes: list[str]
         "total": total,
         "bt_amount": bt_amount,
         "incomplete": incomplete,
+        "gold": gold,
         "details": {
             "counted": counted,
             "bt": bt_rows,
@@ -1199,6 +1493,217 @@ def _sheet_terms(
     return updated, terms
 
 
+def _rule_ref(sheet: SheetGrid, kind: str) -> str:
+    """Where a rule is on the second sheet: '(Sheet2, HDFC Bank, Bonus Calculation "Last 2 years *70% / 24",
+    cell I3)'."""
+    rules = sheet.rules
+    text = (rules.texts.get(kind) or "").strip() if rules else ""
+    cell = rules.cells.get(kind) if rules else None
+    parts = [rules.sheet if rules else "Sheet2", sheet.bank, SHEET_RULES[kind] + (f' "{text}"' if text else "")]
+    return "(" + ", ".join([*parts, *([f"cell {cell}"] if cell else [])]) + ")"
+
+
+def _sheet_tenure(lender: LenderPolicy, terms: dict, requested: int | None, notes: list[str]) -> tuple[int, str]:
+    """A bank priced by its policy sheet calculates eligibility at the sheet's Tenure for Eligibility
+    Calculation, whatever tenure is requested (the EMI is shown at its Maximum Tenure)."""
+    tenure = lender.calculation_tenure
+    if requested is not None and requested != tenure:
+        cell = terms["values"]["calculation_tenure_months"]["cell"]
+        notes.append(
+            f"{terms['bank']} calculates eligibility at {tenure} months (Tenure for Eligibility Calculation, cell "
+            f"{cell}), not at the requested {requested}; the EMI is shown at its Maximum Tenure of "
+            f"{lender.max_tenure_months} months"
+        )
+    return tenure, "policy"
+
+
+def _lender_obligations(
+    lender: LenderPolicy, obligations: dict, reasons: list[str], notes: list[str], lines: list[str]
+) -> Decimal:
+    """The lender's monthly obligations: every lender's total, with each gold loan counted by the
+    lender's gold loan rule (a share of its outstanding a month) where its policy sheet gives one,
+    else at its EMI."""
+    total = obligations["total"]
+    sheet = lender.sheet
+    rule = sheet.rules.gold_loan_monthly_pct if sheet is not None and sheet.rules is not None else None
+    for gold in obligations["gold"]:
+        if rule is not None:
+            share = dec(rule)
+            ref = _rule_ref(sheet, "gold_loan")
+            if gold["outstanding"] is None:
+                reasons.append(
+                    f"Outstanding not entered for {gold['name']}: {sheet.bank} counts {_pct(share)} of a gold loan's "
+                    f"outstanding a month {ref}"
+                )
+                continue
+            counted = gold["outstanding"] * share
+            total += counted - (gold["emi"] or 0)
+            lines.append(
+                f"{gold['name']}: {_pct(share)} of the outstanding {inr(gold['outstanding'])} = {inr(counted)} a "
+                f"month is the obligation {ref}"
+            )
+            continue
+        given = f" (gold loan: bank rule not given {_rule_ref(sheet, 'gold_loan')})" if sheet is not None else ""
+        if gold["emi"] is None:
+            reasons.append(f"EMI not entered for {gold['name']} marked Obligate{given}")
+        elif sheet is not None:
+            notes.append(f"{gold['name']} is counted at its EMI {inr(gold['emi'])}{given}")
+    return total
+
+
+def _bt_limits(lender: LenderPolicy, obligations: dict, reasons: list[str], notes: list[str], lines: list[str]) -> None:
+    """The policy sheet's balance-transfer limits: at most PLBT personal loans, and credit cards only up
+    to the CCBT number of cards (none where CCBT is NA)."""
+    sheet = lender.sheet
+    rules = sheet.rules
+    rows = obligations["details"]["bt"]
+    for loan_type, kind, noun in (("personal", "plbt", "personal loan"), ("credit_card", "ccbt", "credit card")):
+        count = sum(1 for row in rows if row["loan_type"] == loan_type)
+        if not count:
+            continue
+        ref = _rule_ref(sheet, kind)
+        what = f"{_count(count, noun)} marked BT"
+        limit = None if rules is None else (rules.plbt_max_loans if kind == "plbt" else rules.ccbt_max_cards)
+        if limit is None:
+            notes.append(f"{what}: {sheet.bank}'s policy sheet gives no {SHEET_RULES[kind]} limit {ref}")
+        elif limit == 0 and kind == "ccbt":
+            reasons.append(f"{what}: {sheet.bank} does not take over credit cards {ref}")
+        elif count > limit:
+            reasons.append(f"{what}: {sheet.bank} takes over at most {_count(limit, noun)} {ref}")
+        else:
+            lines.append(f"{what}: within {sheet.bank}'s limit of {_count(limit, noun)} {ref}")
+
+
+def _income_share(lender: LenderPolicy, other: dict, lines: list[str], notes: list[str]) -> Decimal:
+    """The percent of an other income (normalised to a month) the lender counts: its policy sheet's
+    rule (bonus formula, incentive frequencies, rental share), else its sample policy's."""
+    sample = dec(getattr(lender.income_consideration_pct, other["key"]))
+    sheet = lender.sheet
+    if sheet is None:
+        return sample
+    rules = sheet.rules
+    kind = other["type"]
+    label = f"{other['label']} (other income {other['index']})"
+    if kind == "pension" or rules is None or kind not in ("bonus", "incentive", "rented"):
+        lines.append(f"{label}: {_number(sample)}% counted ({NOT_IN_SHEET_LABEL})")
+        return sample
+    if kind == "bonus":
+        ref = _rule_ref(sheet, "bonus")
+        bonus = rules.bonus
+        if bonus is None:
+            notes.append(f"{label} not counted: {sheet.bank} counts no bonus {ref}")
+            return Decimal(0)
+        # The bonus of a year, for each of the last `years` years, x share / divisor months.
+        pct = Decimal(12) * bonus.years * dec(bonus.share) / bonus.divisor * 100
+        yearly = other["amount"] * 12 / MONTHS_PER_PERIOD[other["frequency"]]
+        lines.append(
+            f"{label} {inr(yearly)} a year: last {_count(bonus.years, 'year')} × {_pct(dec(bonus.share))} ÷ "
+            f"{bonus.divisor} = {inr(other['monthly'] * pct / 100)} a month {ref}"
+        )
+        return pct
+    if kind == "incentive":
+        ref = _rule_ref(sheet, "incentive")
+        paid = INCOME_FREQUENCIES[other["frequency"]].lower()
+        if other["frequency"] in rules.incentive_frequencies:
+            lines.append(f"{label} paid {paid}: counted in full {ref}")
+            return Decimal(100)
+        accepted = " and ".join(INCOME_FREQUENCIES[f].lower() for f in rules.incentive_frequencies) or "no"
+        notes.append(f"{label} paid {paid} not counted: {sheet.bank} counts {accepted} incentive only {ref}")
+        return Decimal(0)
+    ref = _rule_ref(sheet, "rental_income")
+    share = rules.rental_income_share
+    if share is None:
+        notes.append(f"{label} not counted: {sheet.bank} counts no rental income {ref}")
+        return Decimal(0)
+    lines.append(f"{label}: {_pct(dec(share))} counted {ref}")
+    return dec(share) * 100
+
+
+def _co_applicant_income(
+    lender: LenderPolicy, book: PolicyBook, co_applicant: dict | None, lines: list[str], notes: list[str]
+) -> tuple[Decimal, Decimal] | None:
+    """(the co-applicant's net monthly salary, what the lender adds of it): all of it when the lender's
+    policy sheet takes the co-applicant's employer ("Listed Company": in the bank's company list;
+    "All Companies except proprietor and partnership"), else nothing, and why. None: none entered."""
+    if not co_applicant or co_applicant.get("net_income") is None:
+        return None
+    amount = dec(co_applicant["net_income"])
+    what = f"Co-applicant salary {inr(amount)}"
+    sheet = lender.sheet
+    if sheet is None:
+        notes.append(f"{what} not added: {lender.name}'s sample policy has no co-applicant rule")
+        return amount, Decimal(0)
+    rule = sheet.rules.co_applicant_rule if sheet.rules is not None else None
+    ref = _rule_ref(sheet, "co_applicant")
+    if rule is None:
+        notes.append(f"{what} not added: {sheet.bank}'s policy sheet gives no co-applicant rule {ref}")
+        return amount, Decimal(0)
+    if rule == "listed_company":
+        name = co_applicant.get("company")
+        if not name:
+            notes.append(
+                f"{what} not added: {sheet.bank} adds it only when the co-applicant works for a listed company; enter "
+                f"the co-applicant's company {ref}"
+            )
+            return amount, Decimal(0)
+        company = book.find_company(name)
+        shown = company.name if company else name
+        category = company.categories.get(lender.id) if company else None
+        if category is None or category not in sheet.categories or category == sheet.unlisted_category:
+            notes.append(
+                f"{what} not added: '{shown}' is not in {sheet.bank}'s company list, and {sheet.bank} adds it only "
+                f"for a listed company {ref}"
+            )
+            return amount, Decimal(0)
+        lines.append(f"{what} added: '{shown}' is {category} in {sheet.bank}'s company list {ref}")
+        return amount, amount
+    employment = co_applicant.get("employment_type")
+    if employment is None:
+        notes.append(
+            f"{what} not added: enter the co-applicant's employment type ({sheet.bank} adds it for every employer "
+            f"except a proprietorship or partnership) {ref}"
+        )
+        return amount, Decimal(0)
+    if employment == "partnership_proprietorship":
+        notes.append(f"{what} not added: {sheet.bank} does not add it for a proprietorship or partnership {ref}")
+        return amount, Decimal(0)
+    lines.append(f"{what} added: a {EMPLOYMENT_TYPES.get(employment, employment)} employer {ref}")
+    return amount, amount
+
+
+def _sheet_lines(
+    lender: LenderPolicy, terms: dict, net: Decimal | None, method: str, rule_lines: list[str]
+) -> list[str]:
+    """Details' "How it is calculated" for a bank priced by its policy sheet: every value and rule
+    used, each with its cell; the sample values the sheet lacks, labelled; the HL deviation, shown."""
+    sheet = lender.sheet
+    rules = sheet.rules
+    start = _grouped(str(terms["slab_start"]))
+    salary = f"Net salary {inr(net)}: " if net is not None else ""
+    lines = [f"{salary}slab {start}, company category {terms['category']} ({terms['category_code']})"]
+    lines += [terms["values"][key]["text"] for key in SHEET_PARAMETERS]
+    lines.append(f"Multiplier eligibility = {MULTIPLIER_METHODS[method]} {_rule_ref(sheet, 'multiplier_method')}")
+    lines += rule_lines
+    lines.append(f"Minimum CIBIL score {lender.min_cibil_score} ({NOT_IN_SHEET_LABEL})")
+    lines.append(f"Maximum enquiries in the last 90 days {lender.max_enquiries_90d} ({NOT_IN_SHEET_LABEL})")
+    fee = lender.processing_fee
+    if fee is not None:
+        limits = "".join(
+            f", {word} {inr(value)}"
+            for word, value in (("at least", fee.min_amount), ("at most", fee.max_amount))
+            if value is not None
+        )
+        lines.append(f"Processing fee {_number(dec(fee.pct))}% of the loan{limits} ({NOT_IN_SHEET_LABEL})")
+    if rules is not None and rules.hl_deviation is not None:
+        lines.append(
+            f"HL deviation {_pct(dec(rules.hl_deviation))}: meaning to be confirmed with Smart Solutions "
+            f"{_rule_ref(sheet, 'hl_deviation')}; it does not change the result"
+        )
+    if rules is not None and rules.app_bt:
+        lines.append(f'App BT "{rules.app_bt}": meaning not known, not used {_rule_ref(sheet, "app_bt")}')
+    return lines
+
+
 def _calculation_tenure(lender: LenderPolicy, requested: int | None, notes: list[str]) -> tuple[int, str]:
     """The per-lakh EMI's tenure and its source: the lender's calculation tenure ("policy"), or the
     requested tenure when that is shorter ("table"), raised to the lender's min tenure ("policy")."""
@@ -1258,9 +1763,14 @@ def _lender_result(
     income: dict,
     obligations: dict,
     common_reasons: list[str],
+    co_applicant: dict | None = None,
 ) -> dict:
     reasons: list[str] = []
     notes: list[str] = []
+    # A bank priced by the client's policy sheet: the rules it applied, each with its cell (Details), and
+    # the sample values it uses where the sheet gives none, labelled.
+    rule_lines: list[str] = []
+    sample = f" ({NOT_IN_SHEET_LABEL})" if lender.sheet is not None else ""
 
     pincode = profile.get("pincode")
     region = book.region_of(pincode)
@@ -1275,7 +1785,8 @@ def _lender_result(
         reasons.append("Employment type not entered")
     elif employment_type not in lender.employment_types:
         reasons.append(
-            f"Employment type {EMPLOYMENT_TYPES.get(employment_type, employment_type)} is not accepted by {lender.name}"
+            f"Employment type {EMPLOYMENT_TYPES.get(employment_type, employment_type)} is not accepted by "
+            f"{lender.name}{sample}"
         )
 
     foir, multiplier = dec(lender.foir), dec(lender.multiplier)
@@ -1324,7 +1835,7 @@ def _lender_result(
     if score is None:
         reasons.append("CIBIL score not entered")
     elif score < lender.min_cibil_score:
-        reasons.append(f"CIBIL score {score} is below {lender.name}'s minimum {lender.min_cibil_score}")
+        reasons.append(f"CIBIL score {score} is below {lender.name}'s minimum {lender.min_cibil_score}{sample}")
 
     enquiries_90d = (cibil.get("enquiries") or {}).get("d90")
     if enquiries_90d is None:
@@ -1332,14 +1843,27 @@ def _lender_result(
     elif enquiries_90d > lender.max_enquiries_90d:
         reasons.append(
             f"{enquiries_90d} enquiries in the last 90 days: more than {lender.name}'s limit of "
-            f"{lender.max_enquiries_90d}"
+            f"{lender.max_enquiries_90d}{sample}"
         )
 
     reasons.extend(common_reasons)
 
-    tenure, tenure_source = _calculation_tenure(lender, loan.get("tenure_months"), notes)
+    if sheet_terms is not None:
+        tenure, tenure_source = _sheet_tenure(lender, sheet_terms, loan.get("tenure_months"), notes)
+    else:
+        tenure, tenure_source = _calculation_tenure(lender, loan.get("tenure_months"), notes)
     per_lakh = emi(LAKH, lender.roi, tenure)
-    obligations_total = obligations["total"]
+    rules = lender.sheet.rules if lender.sheet is not None else None
+    method = "salary"
+    if rules is not None and rules.multiplier_method is not None:
+        method = rules.multiplier_method
+    elif lender.sheet is not None:
+        ref = _rule_ref(lender.sheet, "multiplier_method")
+        notes.append(f"{lender.sheet.bank}'s policy sheet gives no multiplier method {ref}: income × multiplier")
+    obligation_lines: list[str] = []
+    obligations_total = _lender_obligations(lender, obligations, reasons, notes, obligation_lines)
+    if lender.sheet is not None:
+        _bt_limits(lender, obligations, reasons, notes, obligation_lines)
     bt_amount = obligations["bt_amount"]
     net = income["net"]
     income_considered = foir_eligibility = multiplier_eligibility = computed = None
@@ -1347,7 +1871,7 @@ def _lender_result(
     if net is not None:
         other_total = Decimal(0)
         for other in income["others"]:
-            pct = dec(getattr(lender.income_consideration_pct, other["key"]))
+            pct = _income_share(lender, other, rule_lines, notes)
             considered = other["monthly"] * pct / 100
             other_total += considered
             breakdown.append(
@@ -1361,10 +1885,27 @@ def _lender_result(
                     "considered": money(considered),
                 }
             )
+        co = _co_applicant_income(lender, book, co_applicant, rule_lines, notes)
+        if co is not None:
+            amount, added = co
+            other_total += added
+            breakdown.append(
+                {
+                    "type": "co_applicant",
+                    "label": "Co-applicant salary",
+                    "agreement": None,
+                    "frequency": "monthly",
+                    "monthly_amount": money(amount),
+                    "consideration_pct": 100.0 if added else 0.0,
+                    "considered": money(added),
+                }
+            )
         income_considered = net + other_total
         headroom = income_considered * foir - obligations_total
         foir_eligibility = max(headroom, Decimal(0)) / per_lakh * LAKH
-        multiplier_eligibility = income_considered * multiplier
+        # The policy sheet's method: income x multiplier, or (income - obligations) x multiplier.
+        base = income_considered - obligations_total if method == "net_of_obligations" else income_considered
+        multiplier_eligibility = max(base, Decimal(0)) * multiplier
         # The sheet's =MIN(FOIR eligibility, multiplier eligibility), capped at the lender's maximum.
         computed = min(foir_eligibility, multiplier_eligibility, dec(lender.max_amount))
         if headroom <= 0:
@@ -1374,7 +1915,9 @@ def _lender_result(
             )
         elif computed < max(dec(lender.min_amount), MIN_LOAN_AMOUNT):
             minimum = max(dec(lender.min_amount), MIN_LOAN_AMOUNT)
-            reasons.append(f"Eligible amount {inr(computed)} is below {lender.name}'s minimum loan {inr(minimum)}")
+            reasons.append(
+                f"Eligible amount {inr(computed)} is below {lender.name}'s minimum loan {inr(minimum)}{sample}"
+            )
         if bt_amount > 0 and computed < bt_amount:
             reasons.append(f"Eligible amount {inr(computed)} does not cover the balance transfer of {inr(bt_amount)}")
 
@@ -1409,6 +1952,12 @@ def _lender_result(
         covers_requested = eligible >= dec(requested_amount)
         if not covers_requested:
             notes.append(f"{inr(eligible)} is less than the requested {inr(requested_amount)}")
+    if sheet_terms is not None:
+        sheet_terms = {
+            **sheet_terms,
+            "lines": _sheet_lines(lender, sheet_terms, net, method, rule_lines + obligation_lines),
+            "hl_deviation": rules.hl_deviation if rules is not None else None,
+        }
 
     return {
         "lender": lender.name,
@@ -1438,6 +1987,7 @@ def _lender_result(
         "obligations": money(obligations_total),
         "foir": float(foir),
         "multiplier": float(multiplier),
+        "multiplier_method": method,
         "company_category": category,
         "company_policy": company_policy,
         "max_amount": lender.max_amount,
@@ -1519,8 +2069,9 @@ def calculate(
         if income["net"] is None:
             common_reasons.append("Net monthly income not entered")
         common_reasons.extend(obligations["incomplete"])
+        co_applicant = inputs.get("co_applicant") or None
         results = [
-            _lender_result(lender, book, profile, cibil, loan, income, obligations, common_reasons)
+            _lender_result(lender, book, profile, cibil, loan, income, obligations, common_reasons, co_applicant)
             for lender in book.lenders
         ]
         best, why = _best_lender(results, loan, obligations["bt_amount"])
@@ -1531,7 +2082,15 @@ def calculate(
         "Calculated with fixed formulas in the backend (per-lakh EMI, FOIR and multiplier eligibility, EMI as "
         "Excel PMT); no AI model decides any number.",
     ]
-    if book.sample:
+    sheet_banks = [r["lender"] for r in results if r["label"] == SHEET_SOURCE_LABEL]
+    if book.sample and sheet_banks:
+        disclaimers.insert(
+            1,
+            f"{SHEET_SOURCE_LABEL}: {', '.join(sheet_banks)}. Sample policy — replace with your lender grid: the "
+            "other lenders' policies, the pincode lists and the company categories used here are SAMPLE data, "
+            "unless you uploaded your own.",
+        )
+    elif book.sample:
         disclaimers.insert(
             1,
             "Sample policy — replace with your lender grid: the lender policies, pincode lists and company "
@@ -1563,6 +2122,7 @@ def calculate(
                 for o in income["others"]
             ],
             "other_income_monthly": money(other_monthly),
+            "co_applicant_net_income": money((co_applicant or {}).get("net_income")),
         },
         "obligations": money(obligations["total"]),
         "obligation_details": obligations["details"],

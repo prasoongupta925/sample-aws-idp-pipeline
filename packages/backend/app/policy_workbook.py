@@ -134,6 +134,9 @@ class BankRules:
     co_applicant_rule: str | None = None
     # Column header -> {"text": the cell as shown, "cell": "D3"}
     raw: dict[str, dict[str, str]] = field(default_factory=dict)
+    # Rule (hl_deviation, multiplier_method, ccbt, plbt, app_bt, gold_loan, bonus, incentive,
+    # rental_income, co_applicant) -> {"text", "cell"}: what the engine cites in "How it is calculated".
+    cells: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -160,6 +163,7 @@ class PolicyWorkbook:
     effective_date: str | None = None  # ISO date
     effective_date_cell: str | None = None
     grid_sheet: str = "Sheet1"
+    rules_sheet: str | None = None
     warnings: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
@@ -208,6 +212,7 @@ class PolicyWorkbook:
             effective_date=data.get("effective_date"),
             effective_date_cell=data.get("effective_date_cell"),
             grid_sheet=str(data.get("grid_sheet") or "Sheet1"),
+            rules_sheet=data.get("rules_sheet"),
             warnings=list(data.get("warnings") or []),
             notes=list(data.get("notes") or []),
         )
@@ -795,6 +800,7 @@ def _parse_rules(sheet: _Sheet, banks: list[BankPolicy], out: PolicyWorkbook) ->
             ref = f"{_column_letters(col)}{row}"
             cell = sheet.get(col, row)
             rules.raw[title] = {"text": _text(cell) or "", "cell": ref}
+            rules.cells.setdefault(kind, {"text": _text(cell)[:200], "cell": ref})
             _apply_rule(rules, kind, cell, f"{sheet.name} {ref} ({name}, {title})", out)
         bank.rules = rules
     for bank in banks:
@@ -838,6 +844,7 @@ def parse_policy_workbook(data: bytes, filename: str | None = None) -> PolicyWor
     if rules is None:
         out.warnings.append("no second sheet with the per-bank rules")
     else:
+        out.rules_sheet = rules.name
         _parse_rules(rules, out.banks, out)
     _effective_date([s for s in (rules, grid) if s is not None], date_styles, date1904, out)
     if out.effective_date is None:

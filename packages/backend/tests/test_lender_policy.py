@@ -315,10 +315,11 @@ def applicant(net=60000, emi=5000, company="Konkan Softworks Pvt Ltd", tenure=72
     return inputs
 
 
-def expected(net, obligations, roi, foir, multiplier, funding, tenure):
+def expected(net, obligations, roi, foir, multiplier, funding, tenure, method="salary"):
     per_lakh = el.emi(100000, Decimal(str(roi)) * 100, tenure)
     by_foir = (Decimal(net) * Decimal(str(foir)) - obligations) / per_lakh * 100000
-    return min(by_foir, Decimal(net) * Decimal(str(multiplier)), Decimal(str(funding)))
+    base = Decimal(net) - obligations if method == "net_of_obligations" else Decimal(net)
+    return min(by_foir, base * Decimal(str(multiplier)), Decimal(str(funding)))
 
 
 def test_the_sheet_prices_its_banks_and_the_others_keep_the_sample(store):
@@ -344,7 +345,9 @@ def test_the_sheet_prices_its_banks_and_the_others_keep_the_sample(store):
         cells["multiplier"]["CAT_A"].value,
         cells["max_funding"]["CAT_A"].value,
         int(cells["calculation_tenure_months"]["CAT_A"].value),
+        workbook_bank.rules.multiplier_method,
     )
+    assert hdfc["multiplier_method"] == workbook_bank.rules.multiplier_method
     assert Decimal(str(hdfc["computed_amount"])) == want.quantize(Decimal("0.01"))
     assert sheet["values"]["foir"]["text"].startswith("FOIR ")
     assert "(Sheet1, HDFC Bank, slab 50,000, CAT_A, cell " in sheet["values"]["foir"]["text"]

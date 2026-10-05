@@ -244,7 +244,9 @@ EmploymentTypeId = Literal[
     "private_limited",
     "public_limited",
 ]
-LoanTypeId = Literal["personal", "home", "mortgage", "car", "education", "application", "consumer", "credit_card"]
+LoanTypeId = Literal[
+    "personal", "home", "mortgage", "car", "education", "application", "consumer", "credit_card", "gold"
+]
 TradelineActionId = Literal["bt", "obligate", "close"]
 TradelineStatusId = Literal[
     "active", "closed", "settled", "written_off", "suit_filed", "wilful_default", "restructured"
@@ -408,10 +410,22 @@ class Loan(_Input):
     )
 
 
+class CoApplicant(_Input):
+    """A co-applicant's salary: a bank of the policy sheet adds it only when its rule takes the
+    co-applicant's employer ("Listed Company", or every employer except a proprietorship/partnership)."""
+
+    company: OptionalName = Field(default=None, description="The co-applicant's employer")
+    employment_type: Annotated[
+        EmploymentTypeId | None, _vocabulary(eligibility.EMPLOYMENT_TYPES, eligibility.EMPLOYMENT_TYPE_ALIASES)
+    ] = None
+    net_income: Money | None = Field(default=None, description="The co-applicant's net monthly salary")
+
+
 class EligibilityInputs(_Input):
     profile: Profile = Field(default_factory=Profile)
     cibil: Cibil = Field(default_factory=Cibil)
     loan: Loan = Field(default_factory=Loan)
+    co_applicant: CoApplicant | None = None
 
 
 ApplicantName = Annotated[
@@ -710,6 +724,14 @@ class PolicySheetTerms(BaseModel):
     values: dict[str, PolicySheetValue] = Field(
         description="roi, foir, multiplier, max_funding, max_tenure_months, calculation_tenure_months"
     )
+    lines: list[str] = Field(
+        default=[],
+        description='"How it is calculated": every value and rule used with its cell, e.g. "FOIR 60% (Sheet1, '
+        'HDFC Bank, slab 35,000, CAT_B, cell L5)"; the sample values the sheet lacks, labelled',
+    )
+    hl_deviation: float | None = Field(
+        default=None, description="The sheet's HL deviation (0.05 = 5%): shown, never used (meaning to be confirmed)"
+    )
 
 
 class LenderEligibility(BaseModel):
@@ -753,6 +775,9 @@ class LenderEligibility(BaseModel):
     obligations: float
     foir: float
     multiplier: float
+    multiplier_method: Literal["salary", "net_of_obligations"] = Field(
+        default="salary", description="salary: income × multiplier; net_of_obligations: (income − obligations) × it"
+    )
     company_category: str | None
     company_policy: Literal["category", "unlisted", "base"]
     max_amount: float
@@ -790,6 +815,9 @@ class EligibilityIncome(BaseModel):
     verified_net_income: float | None
     other_income: list[OtherIncomeRow]
     other_income_monthly: float
+    co_applicant_net_income: float | None = Field(
+        default=None, description="The co-applicant's net monthly salary entered"
+    )
 
 
 class ObligationRow(BaseModel):
