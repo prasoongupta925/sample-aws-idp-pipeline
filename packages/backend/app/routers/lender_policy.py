@@ -54,8 +54,10 @@ _ADMIN = {403: {"model": ErrorResponse, "description": "Only admins can do this"
 class PolicyStatus(BaseModel):
     filename: str | None
     uploaded_at: str
-    expires_at: str = Field(description="When it is deleted (the retention period): re-upload needed by then")
-    reupload_by: str = Field(description='"12 Oct 2026"')
+    expires_at: str | None = Field(
+        default=None, description="None: kept until a new sheet replaces it (lender terms, not client data)"
+    )
+    reupload_by: str | None = Field(default=None, description="None: no re-upload needed")
     effective_date: str | None = Field(description="The workbook's date (Sheet2!SGQ1), ISO")
     size: int
     sha256: str = Field(description="Of the original file, as stored")
@@ -144,7 +146,13 @@ async def _read_xlsx(request: Request) -> XlsxUpload:
             await form.close()
     if content_type not in XLSX_TYPES:
         raise HTTPException(status_code=415, detail="Send an Excel workbook (.xlsx)")
-    return XlsxUpload(data=await request.body(), filename=None)
+    # Stop reading once past the limit: the caller answers 413 for anything over it.
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > limit:
+            break
+    return XlsxUpload(data=bytes(body[: limit + 1]), filename=None)
 
 
 def _preview(workbook: PolicyWorkbook, filename: str | None, *, preview: bool) -> dict[str, Any]:

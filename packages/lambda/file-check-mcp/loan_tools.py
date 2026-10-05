@@ -390,6 +390,15 @@ def _live(item, now: int) -> bool:
     return isinstance(expires_at, int) and expires_at > now
 
 
+def _policy_live(item, now: int) -> bool:
+    """The policy header is kept until replaced (no TTL: lender terms, not client data); an older
+    header with a TTL in the past is not used, as the backend does."""
+    if not item:
+        return False
+    expires_at = item.get(TTL_ATTRIBUTE)
+    return expires_at is None or (isinstance(expires_at, int) and expires_at > now)
+
+
 def _saved_items(table, project_id: str, now: int) -> list:
     """Every unexpired ELIG# item of the project (base-table Query, paginated)."""
     from boto3.dynamodb.conditions import Key
@@ -583,7 +592,7 @@ def stored_policy_book(table, now: int):
     """(the book with the app's policy workbook's banks, a note) as the backend calculates; (None,
     None) without a live policy; (None, a note) when it cannot be applied here."""
     item = table.get_item(Key=POLICY_KEY, ConsistentRead=True).get('Item')
-    if not _live(plain(item), now):
+    if not _policy_live(plain(item), now):
         return None, None
     packed = item.get(POLICY_ATTRIBUTE)
     packed = getattr(packed, 'value', packed)  # boto3 Binary

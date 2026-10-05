@@ -205,12 +205,13 @@ const INDIAN_NUMBER_4 = new Intl.NumberFormat('en-IN', {
 /** The sheet's formulas with this lender's numbers, as the backend returned them. */
 function HowCalculated({ row }: { row: LenderEligibility }) {
   const { t } = useTranslation();
+  const sheet = row.policy_sheet?.lines ?? [];
   if (
     row.per_lakh_emi === null ||
     row.foir_eligibility === null ||
     row.multiplier_eligibility === null
   ) {
-    return null;
+    return sheet.length ? <SheetLines lines={sheet} /> : null;
   }
   const lines = [
     t('eligibility.lenders.how.perLakh', {
@@ -263,6 +264,26 @@ function HowCalculated({ row }: { row: LenderEligibility }) {
           </li>
         ))}
       </ol>
+      {sheet.length > 0 && <SheetLines lines={sheet} />}
+    </div>
+  );
+}
+
+/** The policy workbook's values and rules this bank used, each with its cell. */
+function SheetLines({ lines }: { lines: string[] }) {
+  const { t } = useTranslation();
+  return (
+    <div className="space-y-0.5" data-testid="policy-sheet-lines">
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+        {t('eligibility.lenders.how.sheetTitle')}
+      </p>
+      <ul className="list-disc space-y-0.5 pl-4 text-[11px] leading-snug text-slate-700 dark:text-slate-200">
+        {lines.map((line, i) => (
+          <li key={i} className="break-words tabular-nums">
+            {line}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -1138,6 +1159,14 @@ export default function LendersSection({
       )}
 
       <SourceLegend />
+      {rows.some((r) => r.policy_sheet) && (
+        <p
+          className="text-[10px] leading-snug text-slate-500 dark:text-slate-400"
+          data-testid="policy-sheet-legend"
+        >
+          {t('eligibility.legend.policySheet')}
+        </p>
+      )}
       {!result ? (
         <>
           {stillNeeded && <StillNeededList items={stillNeeded} tab="lenders" />}

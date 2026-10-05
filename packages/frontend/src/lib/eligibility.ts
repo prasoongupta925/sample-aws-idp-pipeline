@@ -42,6 +42,7 @@ import type {
   OtherIncomeConsidered,
   OtherIncomeType,
   PincodeCheck,
+  PolicySheetTerms,
   PrefillField,
   ProcessingFeePolicy,
   RentAgreement,
@@ -1379,6 +1380,24 @@ function lenderRow(raw: unknown): LenderEligibility | null {
     serviceable: bool(o.serviceable),
     region: text(o.region),
     sources: sources(o.sources),
+    policy_sheet: policySheet(o.policy_sheet),
+  };
+}
+
+/** A lender row's `policy_sheet`; null when the sample policy priced it. */
+function policySheet(raw: unknown): PolicySheetTerms | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = obj(raw);
+  const label = text(o.label);
+  if (!label) return null;
+  return {
+    label,
+    bank: text(o.bank) ?? '',
+    slab_start: finite(o.slab_start),
+    category: text(o.category),
+    company_unlisted: o.company_unlisted === true,
+    lines: strings(o.lines),
+    hl_deviation: finite(o.hl_deviation),
   };
 }
 
