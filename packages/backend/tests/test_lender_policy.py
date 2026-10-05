@@ -8,6 +8,7 @@ and companies are synthetic.
 
 import datetime as dt
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
@@ -300,8 +301,8 @@ def stored_policy(data: bytes | None = None) -> lender_policy.StoredPolicy:
     )
 
 
-def calculation_book(companies=None):
-    lists = reference_data.CalculationLists(None, companies, None, stored_policy())
+def calculation_book(companies=None, data: bytes | None = None):
+    lists = reference_data.CalculationLists(None, companies, None, stored_policy(data))
     return reference_data.CalculationBook(el.load_policy_book(), lists), lists
 
 
@@ -471,3 +472,43 @@ def test_a_policy_without_ttl_is_kept_until_replaced():
     assert not lender_policy._ttl_passed({"upload_id": "u1"}, now)
     assert lender_policy._ttl_passed({"upload_id": "u1", "expires_at": Decimal(int(now.timestamp()) - 1)}, now)
     assert not lender_policy._ttl_passed({"upload_id": "u1", "expires_at": Decimal(int(now.timestamp()) + 1)}, now)
+
+
+# ------------------------------------------------------------------ the corrected sheet: NA = not offered
+def v2_bytes() -> bytes:
+    return (Path(__file__).parent / "fixtures" / "policy_workbook_v2.xlsx").read_bytes()
+
+
+def test_a_category_the_bank_does_not_lend_to_is_not_eligible(store):
+    book, _ = calculation_book(data=v2_bytes())
+    result = el.calculate(applicant(company="Unheard Of Traders Pvt Ltd"), book=book)
+    for lender_id, bank in (("hdfc_bank", "HDFC Bank"), ("bandhan_bank", "Bandhan Bank")):
+        row = at(result, lender_id)
+        assert row["status"] == "not_eligible"
+        assert row["reasons"][0].startswith(f"{bank} does not lend to CAT U (unlisted) companies (Sheet1, slab 60,000")
+        assert row["not_offered"] == {
+            "bank": bank,
+            "category": "CAT U",
+            "category_code": "CAT_U",
+            "slab_start": 60000,
+        }
+        assert row["policy_sheet"] is None
+        assert row["eligible_amount"] == 0 and row["emi"] == 0
+        assert row["foir_eligibility"] is None and row["computed_amount"] is None
+        declined = next(d for d in result["suggestion"]["declined"] if d["lender_id"] == lender_id)
+        assert declined["reason"].startswith(f"{bank} does not lend to CAT U (unlisted) companies")
+    hdfc = at(result, "hdfc_bank")
+    assert "cell I8" in hdfc["reasons"][0]  # ROI CAT_U of HDFC's 60,000 row
+    # The banks whose sheet prices CAT U still do.
+    icici = at(result, "icici_bank")
+    assert icici["not_offered"] is None and icici["policy_sheet"]["category"] == "CAT U"
+
+
+def test_a_listed_category_is_priced_as_before_on_the_corrected_sheet(store):
+    book, _ = calculation_book(data=v2_bytes())
+    result = el.calculate(applicant(), book=book)
+    hdfc = at(result, "hdfc_bank")  # Konkan Softworks is CAT A with HDFC Bank
+    assert hdfc["not_offered"] is None and hdfc["policy_sheet"]["slab_start"] == 60000
+    assert hdfc["status"] == "eligible"
+    # Bandhan Bank's company list does not have it: CAT U, which Bandhan Bank does not lend to.
+    assert at(result, "bandhan_bank")["not_offered"]["category_code"] == "CAT_U"

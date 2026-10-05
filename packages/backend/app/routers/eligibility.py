@@ -737,6 +737,13 @@ class PolicySheetTerms(BaseModel):
     )
 
 
+class NotOffered(BaseModel):
+    bank: str = Field(description="The bank as the sheet names it")
+    category: str = Field(description='As the app shows it: "CAT U"')
+    category_code: str = Field(description='As the sheet writes it: "CAT_U"')
+    slab_start: int = Field(description="The net monthly salary slab (rupees)")
+
+
 class LenderEligibility(BaseModel):
     lender: str
     lender_id: str
@@ -798,6 +805,10 @@ class LenderEligibility(BaseModel):
         default=None,
         description="The cells of your policy sheet this result used; null: the lender has none, or the sheet "
         "could not price this applicant",
+    )
+    not_offered: NotOffered | None = Field(
+        default=None,
+        description="The bank does not lend to this company category at this slab (NA in its sheet); null otherwise",
     )
 
 

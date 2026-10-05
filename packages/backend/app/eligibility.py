@@ -501,7 +501,11 @@ class _Data:
         unknown = sorted(str(key) for key in data if key not in names)
         if unknown:
             raise _invalid(where, f"unknown field(s) {', '.join(unknown)}")
-        missing = [spec.name for spec in fields(cls) if spec.default is MISSING and spec.name not in data]
+        missing = [
+            spec.name
+            for spec in fields(cls)
+            if spec.default is MISSING and spec.default_factory is MISSING and spec.name not in data
+        ]
         if missing:
             raise _invalid(where, f"missing field(s) {', '.join(missing)}")
         try:
@@ -684,6 +688,8 @@ class SheetGrid(_Data):
     unlisted_category: str | None = _spec(_optional(_text()), None)
     values: dict[str, dict[str, tuple[float | None, ...]]] = _spec(_mapping(_mapping(_items(_optional(_real(ge=0))))))
     cells: dict[str, dict[str, tuple[str, ...]]] = _spec(_mapping(_mapping(_items(_text(max_length=12)))))
+    # Per category, per slab: the sheet has NA / blank there, so the bank does not lend to it.
+    not_offered: dict[str, tuple[bool, ...]] = field(default_factory=dict, metadata={"check": _mapping(_items(_flag))})
     # The bank's rules of the second sheet; None: the sheet has no row for the bank.
     rules: SheetRules | None = _spec(_optional(_record(SheetRules)), None)
 
@@ -694,6 +700,9 @@ class SheetGrid(_Data):
             raise ValueError("one code per category")
         if self.unlisted_category is not None and self.unlisted_category not in self.categories:
             raise ValueError("unlisted_category is not one of the categories")
+        for category, flags in self.not_offered.items():
+            if category not in self.categories or len(flags) != len(self.slab_starts):
+                raise ValueError("not_offered needs a known category and one flag per slab")
         for key in SHEET_PARAMETERS:
             for table in (self.values, self.cells):
                 column = table.get(key)
@@ -991,15 +1000,18 @@ def sheet_grid(workbook: dict, bank: dict) -> SheetGrid:
     codes = [str(c["code"]) for c in categories]
     values: dict[str, dict[str, list]] = {}
     cells: dict[str, dict[str, list]] = {}
+    not_offered = {label: [False] * len(bank.get("slabs") or []) for label in labels}
     for key in SHEET_PARAMETERS:
         values[key] = {label: [] for label in labels}
         cells[key] = {label: [] for label in labels}
-        for slab in bank.get("slabs") or []:
+        for index, slab in enumerate(bank.get("slabs") or []):
             column = (slab.get("values") or {}).get(key) or {}
             for code, label in zip(codes, labels, strict=True):
                 v = column.get(code)
                 values[key][label].append(v.get("value") if v else None)
                 cells[key][label].append(str(v.get("cell") or "") if v else "")
+                if v and v.get("not_offered"):
+                    not_offered[label][index] = True
     unlisted = next((str(c["label"]) for c in categories if c["code"] == SHEET_UNLISTED_CODE), None)
     return SheetGrid(
         label=SHEET_SOURCE_LABEL,
@@ -1011,6 +1023,7 @@ def sheet_grid(workbook: dict, bank: dict) -> SheetGrid:
         unlisted_category=unlisted,
         values=values,
         cells=cells,
+        not_offered={label: flags for label, flags in not_offered.items() if any(flags)},
         rules=_sheet_rules(workbook, bank.get("rules")),
     )
 
@@ -1403,6 +1416,24 @@ def _obligations(tradelines: list[dict], bank_emis: list[dict], notes: list[str]
     }
 
 
+def category_text(sheet: SheetGrid, category: str) -> str:
+    """'CAT U (unlisted)' for the sheet's unlisted category, else the category as shown."""
+    return f"{category} (unlisted)" if category == sheet.unlisted_category else category
+
+
+def not_offered_reason(sheet: SheetGrid, category: str, slab: int) -> str:
+    """'HDFC Bank does not lend to CAT U (unlisted) companies (Sheet1, slab 60,000, CAT_U is NA, cell I8)'."""
+    cell = next(
+        (sheet.cells[key][category][slab] for key in SHEET_PARAMETERS if sheet.values[key][category][slab] is None),
+        "",
+    )
+    where = f"{sheet.sheet}, slab {_grouped(str(sheet.slab_starts[slab]))}, {sheet.code(category)} is NA"
+    return (
+        f"{sheet.bank} does not lend to {category_text(sheet, category)} companies"
+        f" ({where}{f', cell {cell}' if cell else ''})"
+    )
+
+
 def _sheet_terms(
     lender: LenderPolicy,
     category: str | None,
@@ -1410,27 +1441,28 @@ def _sheet_terms(
     salary: Decimal | None,
     reasons: list[str],
     notes: list[str],
-) -> tuple[LenderPolicy, dict | None]:
+) -> tuple[LenderPolicy, dict | None, dict | None]:
     """The lender's terms from its policy sheet at this net monthly salary and company category:
     the lender with the sheet's ROI, maximum funding and tenures, and what was used (slab, category,
     each value with its cell); else the lender unchanged and None, with why it is not eligible.
+    The third item: the category and slab the bank does not lend to (NA in the sheet), else None.
 
     A company not in the lender's company list, or with a category the sheet has no column for,
     gets the sheet's unlisted category (CAT U)."""
     sheet = lender.sheet
     if salary is None:
-        return lender, None
+        return lender, None, None
     slab = sheet.slab(salary)
     if slab is None:
         reasons.append(
             f"Not eligible: income {inr(salary)} is below {sheet.bank}'s minimum {inr(sheet.slab_starts[0])} "
             f"({sheet.label})"
         )
-        return lender, None
+        return lender, None, None
     if category not in sheet.categories:
         if sheet.unlisted_category is None:
             reasons.append(f"{sheet.bank}'s policy sheet has no category for a company not in its list")
-            return lender, None
+            return lender, None, None
         unlisted = category is None and bool(company)
         if category is not None:
             notes.append(
@@ -1446,12 +1478,16 @@ def _sheet_terms(
         unlisted = False
     code = sheet.code(category)
     start = sheet.slab_starts[slab]
+    if sheet.not_offered.get(category, ())[slab : slab + 1] == (True,):
+        reasons.insert(0, not_offered_reason(sheet, category, slab))
+        closed = {"bank": sheet.bank, "category": category, "category_code": code, "slab_start": start}
+        return lender, None, closed
     values: dict[str, dict] = {}
     for key, name in SHEET_PARAMETERS.items():
         value, cell = sheet.values[key][category][slab], sheet.cells[key][category][slab]
         if value is None or (key != "foir" and key != "roi" and value <= 0):
             reasons.append(f"{sheet.bank}'s policy sheet has no {name} for slab {_grouped(str(start))}, {code}")
-            return lender, None
+            return lender, None, None
         if key in ("roi", "foir"):
             text = f"{_number(dec(value) * 100)}%"
         elif key == "max_funding":
@@ -1495,7 +1531,7 @@ def _sheet_terms(
         "company_unlisted": unlisted,
         "values": values,
     }
-    return updated, terms
+    return updated, terms, None
 
 
 def _rule_ref(sheet: SheetGrid, kind: str) -> str:
@@ -1826,10 +1862,10 @@ def _lender_result(
             )
     if lender.foir_grid is not None and category is not None and income["net"] is not None:
         foir = _grid_foir(lender, category, income["net"], foir, reasons, notes)
-    sheet_terms = None
+    sheet_terms = not_offered = None
     if lender.sheet is not None:
         shown = (company.name if company else company_name) if company_name else None
-        lender, sheet_terms = _sheet_terms(lender, category, shown, income["net"], reasons, notes)
+        lender, sheet_terms, not_offered = _sheet_terms(lender, category, shown, income["net"], reasons, notes)
         if sheet_terms is not None:
             foir = dec(sheet_terms["values"]["foir"]["value"])
             multiplier = dec(sheet_terms["values"]["multiplier"]["value"])
@@ -1873,7 +1909,8 @@ def _lender_result(
     net = income["net"]
     income_considered = foir_eligibility = multiplier_eligibility = computed = None
     breakdown: list[dict] = []
-    if net is not None:
+    # A category the bank does not lend to: nothing to price (no ROI, EMI or eligibility from it).
+    if net is not None and not_offered is None:
         other_total = Decimal(0)
         for other in income["others"]:
             pct = _income_share(lender, other, rule_lines, notes)
@@ -2027,6 +2064,9 @@ def _lender_result(
         # The cells of the client's policy sheet this result used (slab, category, each value); null:
         # the lender has no sheet, or the sheet could not price this applicant (see reasons).
         "policy_sheet": sheet_terms,
+        # The bank does not lend to this category at this slab (NA in its sheet): bank, category,
+        # category_code, slab_start; null otherwise.
+        "not_offered": not_offered,
     }
 
 

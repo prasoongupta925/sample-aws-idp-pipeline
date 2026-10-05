@@ -215,3 +215,46 @@ def test_the_tool_applies_the_policy_sheet_as_the_api(table, policy_sheet, appli
         assert banks[0]["lender"] == answer["best_lender"]
         assert any(line.startswith("Suggested 1. ") for line in answer["summary"])
     assert len(banks) + len(answer["suggestion"]["declined"]) == len(answer["per_lender"])
+
+
+@pytest.fixture
+def policy_sheet_v2(table, monkeypatch):
+    """The client's corrected sheet (5 Oct: CAT_U NA for HDFC Bank and Bandhan Bank) saved as an admin would."""
+    from app import lender_policy
+    from app.policy_workbook import parse_policy_workbook
+    from tests.test_lender_policy import NOW, FakeS3, v2_bytes
+
+    s3 = FakeS3()
+    monkeypatch.setattr(lender_policy, "get_s3_client", lambda: s3)
+    monkeypatch.setattr(get_config(), "document_storage_bucket_name", "test-bucket")
+    lender_policy.reset_cache()
+    data = v2_bytes()
+    lender_policy.save(data, "Policy .xlsx", parse_policy_workbook(data, "Policy .xlsx"), NOW)
+    monkeypatch.setattr(loan_tools.time, "time", lambda: NOW.timestamp())
+    yield
+    lender_policy.reset_cache()
+
+
+def test_the_tool_gives_the_apis_not_offered_reason(table, policy_sheet_v2):
+    """A category the bank does not lend to (NA in the sheet): the same not-eligible reason in the chat."""
+    applicant = "Unlisted Applicant"
+    changes = {"profile__name": applicant, "profile__company": "Nowhere Listed Traders", "profile__net_income": 60000}
+    saved = client.put(
+        f"/projects/{PROJECT_ID}/eligibility/inputs",
+        headers=HEADERS,
+        json={"applicant": applicant, **example(**changes)},
+    )
+    assert saved.status_code == 200
+    api = client.post(f"/projects/{PROJECT_ID}/eligibility/calculate", headers=HEADERS, json={"applicant": applicant})
+    assert api.status_code == 200
+    answer = json.loads(json.dumps(tool(applicant)))
+    body = api.json()
+    assert [key for key in SAME if known(answer[key]) != known(body[key])] == []
+    for lender_id, bank in (("hdfc_bank", "HDFC Bank"), ("bandhan_bank", "Bandhan Bank")):
+        mine = next(r for r in answer["per_lender"] if r["lender_id"] == lender_id)
+        theirs = next(r for r in body["per_lender"] if r["lender_id"] == lender_id)
+        assert mine["reasons"][0] == theirs["reasons"][0]
+        assert mine["reasons"][0].startswith(f"{bank} does not lend to CAT U (unlisted) companies")
+        assert mine["not_offered"] == theirs["not_offered"]
+        declined = {d["lender_id"]: d["reason"] for d in answer["suggestion"]["declined"]}
+        assert declined[lender_id].startswith(f"{bank} does not lend to CAT U (unlisted) companies")
