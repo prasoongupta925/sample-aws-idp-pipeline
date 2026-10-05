@@ -7,6 +7,7 @@ and companies are synthetic.
 """
 
 import datetime as dt
+import json
 from decimal import Decimal
 from pathlib import Path
 
@@ -643,3 +644,184 @@ def test_lenders_without_a_sheet_ignore_the_home_loan(store):
     before = at(el.calculate(home_loan_applicant(), book=book), "bajaj_finance")
     after = at(el.calculate(home_loan_applicant(running=True), book=book), "bajaj_finance")
     assert before["policy_sheet"] is None and after["foir"] == before["foir"]
+
+
+# ------------------------------------------------------------------ the corrected sheet's Sheet2 conditions (5 Oct)
+def v2_applicant(score=765, enquiries=None):
+    """Net 60,000, EMI 5,000, CAT B at every bank (cat_b_book); the CIBIL block as given."""
+    inputs = home_loan_applicant()
+    inputs["cibil"]["score"] = score
+    if enquiries is not None:
+        inputs["cibil"]["enquiries"] = enquiries
+    return inputs
+
+
+def test_the_sheets_minimum_cibil_replaces_the_sample(store):
+    book = cat_b_book()
+    result = el.calculate(v2_applicant(score=715), book=book)
+    hdfc, icici = at(result, "hdfc_bank"), at(result, "icici_bank")
+    assert hdfc["status"] == "eligible"  # Cibil Score 710 on the sheet; the sample policy said 750
+    lines = hdfc["policy_sheet"]["lines"]
+    assert 'Minimum CIBIL score 710 (Sheet2, HDFC Bank, Cibil Score "710", cell B2)' in lines
+    assert not any("CIBIL" in line and el.NOT_IN_SHEET_LABEL in line for line in lines)
+    assert icici["status"] == "not_eligible"
+    assert icici["reasons"] == [
+        'ICICI Bank needs CIBIL >= 720: the score is 715 (Sheet2, ICICI Bank, Cibil Score "720", cell B3)'
+    ]
+    declined = {d["lender_id"]: d["reason"] for d in result["suggestion"]["declined"]}
+    assert declined["icici_bank"].startswith("ICICI Bank needs CIBIL >= 720")
+    assert [book.lender(i).min_cibil_score for i in V2_BANKS] == [710, 720, 750, 700, 725]
+    # A lender without a sheet keeps its sample policy's wording.
+    tata = at(el.calculate(v2_applicant(score=695), book=book), "tata_capital")
+    assert "CIBIL score 695 is below Tata Capital's minimum 725" in tata["reasons"]
+
+
+@pytest.mark.parametrize("score", [-1, 0])
+def test_no_credit_history_is_lent_up_to_the_minus_cibil_max_loan(store, score):
+    book = cat_b_book()
+    result = el.calculate(v2_applicant(score=score), book=book)
+    hdfc = at(result, "hdfc_bank")
+    assert hdfc["status"] == "eligible"
+    assert (hdfc["eligible_amount"], hdfc["computed_amount"]) == (1000000, 1000000)  # the formulas give 11,55,000
+    assert (
+        f"No credit history (CIBIL {score}): HDFC Bank lends at most ₹10,00,000 "
+        '(Sheet2, HDFC Bank, Minus Cibil Max Loan "1000000", cell C2)'
+    ) in hdfc["policy_sheet"]["lines"]
+    assert at(result, "bandhan_bank")["eligible_amount"] == 400000
+    assert at(result, "indusind_bank")["eligible_amount"] == 600000
+    assert at(result, "icici_bank")["eligible_amount"] == 1260000  # below its 15,00,000: the formulas decide
+    # A lender without the rule declines.
+    tata = at(result, "tata_capital")
+    assert tata["status"] == "not_eligible"
+    assert f"CIBIL {score}: no credit history, and Tata Capital needs CIBIL >= 725" in tata["reasons"]
+
+
+def test_the_sheets_enquiry_limit_uses_its_own_window(store):
+    book = cat_b_book()
+    result = el.calculate(v2_applicant(enquiries={"d30": 5, "d60": 6, "d90": 6, "d120": 7}), book=book)
+    hdfc, icici, bandhan = at(result, "hdfc_bank"), at(result, "icici_bank"), at(result, "bandhan_bank")
+    assert hdfc["reasons"] == [
+        "6 enquiries in the last 60 days: more than HDFC Bank's limit of 5 "
+        '(Sheet2, HDFC Bank, Enquiries "Last 60 days 5", cell D2)'
+    ]
+    assert icici["reasons"][0].startswith("5 enquiries in the last 30 days: more than ICICI Bank's limit of 4")
+    assert bandhan["status"] == "eligible"  # Last 90 days 6: six is within
+    lines = bandhan["policy_sheet"]["lines"]
+    assert (
+        "6 enquiries in the last 90 days: within Bandhan Bank's limit of 6 "
+        '(Sheet2, Bandhan Bank, Enquiries "Last 90 days 6", cell D5)'
+    ) in lines
+    assert not any(line.startswith("Maximum enquiries in the last 90 days") for line in lines)
+    declined = {d["lender_id"]: d["reason"] for d in result["suggestion"]["declined"]}
+    assert declined["hdfc_bank"].startswith("6 enquiries in the last 60 days: more than HDFC Bank's limit of 5")
+
+
+def test_another_window_decides_where_it_can_else_the_report_is_to_be_checked(store):
+    book = cat_b_book()
+    # Indusind Bank: Last 270 days 9. The inputs stop at 120 days.
+    over = at(el.calculate(v2_applicant(enquiries={"d30": 2, "d60": 4, "d90": 7, "d120": 10}), book=book), "indusind_bank")
+    assert over["reasons"] == [
+        "10 enquiries in the last 120 days already: more than Indusind Bank's limit of 9 in 270 days "
+        '(Sheet2, Indusind Bank, Enquiries "Last 270 days 9", cell D6)'
+    ]
+    within = at(el.calculate(v2_applicant(enquiries={"d30": 0, "d60": 1, "d90": 2, "d120": 3}), book=book), "indusind_bank")
+    assert within["status"] == "eligible"
+    assert within["policy_sheet"]["conditions"][0] == (
+        "Check the credit report: at most 9 enquiries in the last 270 days "
+        "(3 enquiries in the last 120 days entered) (cell D6)"
+    )
+    # Only a 120-day count for HDFC Bank (Last 60 days 5): 2 in 120 days is within 5 in 60.
+    hdfc = at(el.calculate(v2_applicant(enquiries={"d120": 2}), book=book), "hdfc_bank")
+    assert hdfc["status"] == "eligible"
+    assert any(
+        line.startswith("2 enquiries in the last 120 days: within HDFC Bank's limit of 5 in 60 days")
+        for line in hdfc["policy_sheet"]["lines"]
+    )
+    # Only a 30-day count of 5: within 5 in 30, but 60 days could hold more: check.
+    hdfc = at(el.calculate(v2_applicant(enquiries={"d30": 5}), book=book), "hdfc_bank")
+    assert hdfc["status"] == "eligible"
+    assert hdfc["policy_sheet"]["conditions"][0] == (
+        "Check the credit report: at most 5 enquiries in the last 60 days (5 enquiries in the last 30 days entered) "
+        "(cell D2)"
+    )
+    # Nothing entered: as before, not eligible until it is.
+    none = at(el.calculate(v2_applicant(enquiries={}), book=book), "hdfc_bank")
+    assert "Enquiries in the last 60 days not entered" in none["reasons"]
+
+
+def test_conditions_to_confirm_are_the_sheets_words_with_their_cells(store):
+    book = cat_b_book()
+    result = el.calculate(v2_applicant(), book=book)
+    hdfc = at(result, "hdfc_bank")["policy_sheet"]["conditions"]
+    assert hdfc == [
+        "Check the bank statement: no bounce in the last 3 months (cell F2)",
+        "Work from home: HR Confirmation Required (cell E2)",
+        "PF deduction: Required (cell G2)",
+        "Bachelor accommodation: Not Funding (cell H2)",
+        "Director / doctor profile: Funding (cell I2)",
+        "Consultant profile: Funding (cell J2)",
+        "Grade 4 employees: Not Funding (cell K2)",
+        "Contract employees: Not Funding (cell L2)",
+        "Permanent address proof: Required (cell M2)",
+        "Co-applicant's home loan: Obligate (cell N2)",
+        "Co-applicant income: Consider (cell O2)",
+        "Guarantor obligation: Consider (cell P2)",
+        "Trading in the bank statement: Not Funding (cell Q2)",
+        "Verification: Home and Office (cell R2)",
+        "Top-up: Yes (cell T2)",
+        "Recent funding: 3 months Ok (cell Z2)",
+    ]  # OVD is NA for HDFC Bank
+    axis = at(result, "axis_bank")["policy_sheet"]["conditions"]
+    assert "OVD (officially verified document): Required (cell S4)" in axis and "Verification: Home (cell R4)" in axis
+    assert at(result, "tata_capital")["policy_sheet"] is None
+    # The first Policy.xlsx has none of these columns: no conditions, and the sample limits labelled.
+    old_book, _ = calculation_book()
+    old = at(el.calculate(applicant(), book=old_book), "hdfc_bank")["policy_sheet"]
+    assert old["conditions"] == []
+    assert any(line.startswith("Minimum CIBIL score") and el.NOT_IN_SHEET_LABEL in line for line in old["lines"])
+    assert any(line.startswith("Maximum enquiries") and el.NOT_IN_SHEET_LABEL in line for line in old["lines"])
+
+
+def test_co_applicant_salary_consider_and_not_consider(store):
+    book = cat_b_book()
+    inputs = v2_applicant()
+    inputs["co_applicant"] = {"net_income": 20000}
+    result = el.calculate(inputs, book=book)
+    hdfc = at(result, "hdfc_bank")  # Consider
+    assert hdfc["income_considered"] == 80000
+    assert any(
+        line.startswith("Co-applicant salary ₹20,000 added: HDFC Bank considers a co-applicant's salary")
+        for line in hdfc["policy_sheet"]["lines"]
+    )
+    bandhan = at(result, "bandhan_bank")  # Not Consider
+    assert bandhan["income_considered"] == 60000
+    assert any(
+        n.startswith("Co-applicant salary ₹20,000 not added: Bandhan Bank does not consider a co-applicant's salary")
+        for n in bandhan["notes"]
+    )
+
+
+def test_a_parse_stored_by_the_earlier_app_asks_for_a_new_upload(store, client):
+    table, s3, _ = store
+    assert post(client, v2_bytes(), filename="Policy .xlsx").status_code == 200
+    status = client.get("/eligibility/lender-policy").json()["current"]
+    assert not any(w.startswith("This sheet was read by an earlier version") for w in status["warnings"])
+    # The parse the earlier app stored: no parser_version, none of the new rule fields.
+    upload_id = table.items[("APP#LENDERPOLICY", "CURRENT")]["upload_id"]
+    key = (BUCKET, f"lender-policy/{upload_id}/policy.json")
+    old = json.loads(s3.objects[key]["Body"])
+    del old["parser_version"]
+    for bank in old["banks"]:
+        bank["rules"] = {
+            k: v
+            for k, v in bank["rules"].items()
+            if k not in ("min_cibil", "minus_cibil_max_loan", "enquiries_days", "enquiries_max", "bounce_months", "conditions")
+        }
+    s3.objects[key]["Body"] = json.dumps(old).encode()
+    lender_policy.reset_cache()
+    stored = lender_policy.load(NOW)
+    assert stored.workbook.parser_version == 1
+    status = client.get("/eligibility/lender-policy").json()["current"]
+    assert status["warnings"][0].startswith("This sheet was read by an earlier version of the app")
+    # Its policies still work, with the sample minimums.
+    assert stored.policies()["hdfc_bank"].min_cibil_score == el.load_policy_book().lender("hdfc_bank").min_cibil_score

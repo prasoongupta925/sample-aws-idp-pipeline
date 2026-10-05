@@ -619,11 +619,56 @@ SHEET_RULES = {
     "incentive": "Incentive",
     "rental_income": "Rental Income",
     "co_applicant": "Co-Applicant Salary",
+    # The corrected sheet (5 Oct 2026): applied by the engine.
+    "min_cibil": "Cibil Score",
+    "minus_cibil_max_loan": "Minus Cibil Max Loan",
+    "enquiries": "Enquiries",
+    "bounce": "Bounce Condition",
+    # Shown as the bank's "Conditions to confirm" (SHEET_CONDITIONS), not decided.
+    "work_from_home": "Work From Home",
+    "pf_deduction": "Provident Fund Deduction",
+    "bachelor_accommodation": "Bachelor Accommodation",
+    "director_doctor": "Director & Doctor Profile",
+    "consultant": "Consultant Profile",
+    "grade_4": "Grade 4 Employees",
+    "contract_employee": "Contract Basis Employee",
+    "permanent_address_proof": "Permanent Address Proof",
+    "co_applicant_hl_obligation": "Co-Applicant HL Obligation",
+    "co_applicant_income": "Co-Applicant Income",
+    "guarantor_obligation": "Guarantor Obligation",
+    "trading_transactions": "Trading Transaction in Bank Statement",
+    "verification": "Verification",
+    "ovd": "Officially Verified Document (OVD)",
+    "topup": "Topup Facility",
+    "recent_funding": "Recent Funding Eligibility",
 }
+# Rule -> the short label of its "Conditions to confirm" line, in the order shown.
+SHEET_CONDITIONS = {
+    "work_from_home": "Work from home",
+    "pf_deduction": "PF deduction",
+    "bachelor_accommodation": "Bachelor accommodation",
+    "director_doctor": "Director / doctor profile",
+    "consultant": "Consultant profile",
+    "grade_4": "Grade 4 employees",
+    "contract_employee": "Contract employees",
+    "permanent_address_proof": "Permanent address proof",
+    "co_applicant_hl_obligation": "Co-applicant's home loan",
+    "co_applicant_income": "Co-applicant income",
+    "guarantor_obligation": "Guarantor obligation",
+    "trading_transactions": "Trading in the bank statement",
+    "verification": "Verification",
+    "ovd": "OVD (officially verified document)",
+    "topup": "Top-up",
+    "recent_funding": "Recent funding",
+}
+# The bureau enquiry windows the inputs carry (cibil.enquiries.d30 .. d120), in days.
+ENQUIRY_WINDOW_DAYS = {"d30": 30, "d60": 60, "d90": 90, "d120": 120}
 MULTIPLIER_METHODS = {"salary": "income × multiplier", "net_of_obligations": "(income − obligations) × multiplier"}
 CO_APPLICANT_RULES = {
     "listed_company": "Listed Company",
     "all_except_proprietorship_partnership": "All Companies except proprietor and partnership",
+    "consider": "Consider",
+    "not_consider": "Not Consider",
 }
 
 
@@ -655,13 +700,27 @@ class SheetRules(_Data):
     incentive_frequencies: tuple[str, ...] = _spec(_items(_text(pattern="|".join(INCOME_FREQUENCIES))), ())
     rental_income_share: float | None = _spec(_optional(_real(ge=0, le=1)), None)
     co_applicant_rule: str | None = _spec(_optional(_text(pattern="|".join(CO_APPLICANT_RULES))), None)
+    # The bank's minimum CIBIL score (replaces the sample policy's where given).
+    min_cibil: int | None = _spec(_optional(_whole(ge=300, le=900)), None)
+    # The most lent to an applicant with no credit history (CIBIL -1 / 0).
+    minus_cibil_max_loan: float | None = _spec(_optional(_real(gt=0)), None)
+    # At most `enquiries_max` bureau enquiries in the last `enquiries_days` days.
+    enquiries_days: int | None = _spec(_optional(_whole(ge=1, le=3650)), None)
+    enquiries_max: int | None = _spec(_optional(_whole(ge=0, le=999)), None)
+    # No bounce in the bank statement over this many months (checked by the DSA: a check line).
+    bounce_months: int | None = _spec(_optional(_whole(ge=1, le=120)), None)
+    # SHEET_CONDITIONS key -> the sheet's text, for the conditions the bank's row gives (not NA).
+    conditions: dict[str, str] = field(default_factory=dict, metadata={"check": _mapping(_text(max_length=200))})
     cells: dict[str, str] = _spec(_mapping(_text(max_length=12)))
     texts: dict[str, str] = _spec(_mapping(_text(max_length=200)))
 
     def _consistent(self) -> None:
         unknown = sorted(set(self.cells) - set(SHEET_RULES)) + sorted(set(self.texts) - set(SHEET_RULES))
+        unknown += sorted(set(self.conditions) - set(SHEET_CONDITIONS))
         if unknown:
             raise ValueError(f"unknown rules {unknown}")
+        if (self.enquiries_days is None) != (self.enquiries_max is None):
+            raise ValueError("enquiries_days and enquiries_max go together")
 
 
 SHEET_PARAMETERS = {
@@ -955,10 +1014,11 @@ def load_policy_book() -> PolicyBook:
 # The workbook as app/policy_workbook.py reads it (PolicyWorkbook.to_json(): categories, banks with
 # their slabs, values and cells, and their Sheet2 rules), turned into each bank's LenderPolicy here so
 # that the eligibility API and the chat's tool build the same policies from the same stored JSON.
-# A bank the SAMPLE book has keeps what the sheet does not give (minimum CIBIL, maximum enquiries,
-# employment types, processing fee, the pension share) from its sample policy; a new bank (Bandhan
-# Bank, Indusind Bank) gets them from SHEET_TEMPLATE_LENDER's, without a processing fee. Every such
-# value is labelled NOT_IN_SHEET_LABEL where it is shown.
+# A bank the SAMPLE book has keeps what the sheet does not give (minimum CIBIL and maximum enquiries
+# where the sheet has no Cibil Score / Enquiries column, employment types, processing fee, the
+# pension share) from its sample policy; a new bank (Bandhan Bank, Indusind Bank) gets them from
+# SHEET_TEMPLATE_LENDER's, without a processing fee. Every such value is labelled NOT_IN_SHEET_LABEL
+# where it is shown.
 SHEET_TEMPLATE_LENDER = "hdfc_bank"
 SHEET_UNLISTED_CODE = "CAT_U"
 
@@ -978,6 +1038,11 @@ def _sheet_rules(workbook: dict, rules: dict | None) -> SheetRules | None:
     cited = {k: v for k, v in (rules.get("cells") or {}).items() if k in SHEET_RULES and isinstance(v, dict)}
     bonus = rules.get("bonus")
     app_bt = rules.get("app_bt")
+    # A parse stored by an earlier app has none of the corrected sheet's fields.
+    conditions = rules.get("conditions") or {}
+    enquiries_days, enquiries_max = rules.get("enquiries_days"), rules.get("enquiries_max")
+    if enquiries_days is None or enquiries_max is None:
+        enquiries_days = enquiries_max = None
     return SheetRules(
         sheet=str(workbook.get("rules_sheet") or "Sheet2")[:100],
         hl_deviation=rules.get("hl_deviation"),
@@ -990,6 +1055,12 @@ def _sheet_rules(workbook: dict, rules: dict | None) -> SheetRules | None:
         incentive_frequencies=tuple(rules.get("incentive_frequencies") or ()),
         rental_income_share=rules.get("rental_income_share"),
         co_applicant_rule=rules.get("co_applicant_rule"),
+        min_cibil=rules.get("min_cibil"),
+        minus_cibil_max_loan=rules.get("minus_cibil_max_loan"),
+        enquiries_days=enquiries_days,
+        enquiries_max=enquiries_max,
+        bounce_months=rules.get("bounce_months"),
+        conditions={str(k): str(v)[:200] for k, v in conditions.items() if k in SHEET_CONDITIONS and v},
         cells={k: str(v.get("cell") or "")[:12] for k, v in cited.items()},
         texts={k: str(v.get("text") or "")[:200] for k, v in cited.items()},
     )
@@ -1072,7 +1143,8 @@ def sheet_lender(workbook: dict, bank: dict, book: PolicyBook) -> LenderPolicy:
         calculation_tenure_months=tenure,
         min_amount=min(template.min_amount, funding),
         max_amount=funding,
-        min_cibil_score=template.min_cibil_score,
+        # The sheet's Cibil Score where the corrected sheet gives it; the sample's otherwise.
+        min_cibil_score=grid.rules.min_cibil if grid.rules and grid.rules.min_cibil else template.min_cibil_score,
         max_enquiries_90d=template.max_enquiries_90d,
         employment_types=template.employment_types,
         company_categories=categories,
@@ -1697,8 +1769,9 @@ def _co_applicant_income(
     lender: LenderPolicy, book: PolicyBook, co_applicant: dict | None, lines: list[str], notes: list[str]
 ) -> tuple[Decimal, Decimal] | None:
     """(the co-applicant's net monthly salary, what the lender adds of it): all of it when the lender's
-    policy sheet takes the co-applicant's employer ("Listed Company": in the bank's company list;
-    "All Companies except proprietor and partnership"), else nothing, and why. None: none entered."""
+    policy sheet says "Consider", or takes the co-applicant's employer ("Listed Company": in the bank's
+    company list; "All Companies except proprietor and partnership"), else nothing, and why. None:
+    none entered."""
     if not co_applicant or co_applicant.get("net_income") is None:
         return None
     amount = dec(co_applicant["net_income"])
@@ -1712,6 +1785,12 @@ def _co_applicant_income(
     if rule is None:
         notes.append(f"{what} not added: {sheet.bank}'s policy sheet gives no co-applicant rule {ref}")
         return amount, Decimal(0)
+    if rule == "not_consider":
+        notes.append(f"{what} not added: {sheet.bank} does not consider a co-applicant's salary {ref}")
+        return amount, Decimal(0)
+    if rule == "consider":
+        lines.append(f"{what} added: {sheet.bank} considers a co-applicant's salary {ref}")
+        return amount, amount
     if rule == "listed_company":
         name = co_applicant.get("company")
         if not name:
@@ -1758,8 +1837,12 @@ def _sheet_lines(
     lines += [terms["values"][key]["text"] for key in SHEET_PARAMETERS]
     lines.append(f"Multiplier eligibility = {MULTIPLIER_METHODS[method]} {_rule_ref(sheet, 'multiplier_method')}")
     lines += rule_lines
-    lines.append(f"Minimum CIBIL score {lender.min_cibil_score} ({NOT_IN_SHEET_LABEL})")
-    lines.append(f"Maximum enquiries in the last 90 days {lender.max_enquiries_90d} ({NOT_IN_SHEET_LABEL})")
+    if rules is not None and rules.min_cibil is not None:
+        lines.append(f"Minimum CIBIL score {lender.min_cibil_score} {_rule_ref(sheet, 'min_cibil')}")
+    else:
+        lines.append(f"Minimum CIBIL score {lender.min_cibil_score} ({NOT_IN_SHEET_LABEL})")
+    if rules is None or rules.enquiries_days is None:
+        lines.append(f"Maximum enquiries in the last 90 days {lender.max_enquiries_90d} ({NOT_IN_SHEET_LABEL})")
     fee = lender.processing_fee
     if fee is not None:
         limits = "".join(
@@ -1796,6 +1879,105 @@ def _hl_deviation(sheet: SheetGrid, foir: Decimal, rule_lines: list[str], terms:
     rule_lines.append(f"FOIR {_pct(foir)} + {_pct(deviation)} home-loan deviation = {_pct(raised)}{capped} ({where})")
     terms["hl_deviation_applied"] = True
     return raised
+
+
+# A CIBIL score of -1 or 0: the bureau has no credit history for the applicant (new to credit).
+NO_HISTORY_SCORES = frozenset({-1, 0})
+
+
+def _cibil_check(lender: LenderPolicy, score: int | None, sample: str, reasons: list[str], rule_lines: list[str]) -> Decimal | None:
+    """The CIBIL score against the lender's minimum: the policy sheet's Cibil Score where the sheet
+    gives it, else the sample policy's. No credit history (-1 / 0) is lent up to the sheet's Minus
+    Cibil Max Loan where given (returned, to cap the eligible amount), else declined."""
+    sheet = lender.sheet
+    rules = sheet.rules if sheet is not None else None
+    from_sheet = rules is not None and rules.min_cibil is not None
+    minimum = lender.min_cibil_score
+    if score is None:
+        reasons.append("CIBIL score not entered")
+        return None
+    if score in NO_HISTORY_SCORES:
+        if rules is not None and rules.minus_cibil_max_loan is not None:
+            cap = dec(rules.minus_cibil_max_loan)
+            rule_lines.append(
+                f"No credit history (CIBIL {score}): {sheet.bank} lends at most {inr(cap)} "
+                f"{_rule_ref(sheet, 'minus_cibil_max_loan')}"
+            )
+            return cap
+        where = f" {_rule_ref(sheet, 'min_cibil')}" if from_sheet else sample
+        reasons.append(f"CIBIL {score}: no credit history, and {lender.name} needs CIBIL >= {minimum}{where}")
+        return None
+    if score < minimum:
+        if from_sheet:
+            reasons.append(f"{lender.name} needs CIBIL >= {minimum}: the score is {score} {_rule_ref(sheet, 'min_cibil')}")
+        else:
+            reasons.append(f"CIBIL score {score} is below {lender.name}'s minimum {minimum}{sample}")
+    return None
+
+
+def _enquiries(n: int) -> str:
+    return f"{n} {'enquiry' if n == 1 else 'enquiries'}"
+
+
+def _sheet_enquiries(sheet: SheetGrid, windows: dict, reasons: list[str], rule_lines: list[str], checks: list[str]) -> None:
+    """The sheet's Enquiries rule ("Last 60 days 5": at most 5 in the last 60 days) against the bureau
+    counts the inputs carry (the last 30, 60, 90 and 120 days). The rule's own window decides; failing
+    that, another window where it can (more than the limit already in a shorter window: over it;
+    within the limit in a longer window: within it); else a line to check the report by hand."""
+    rules = sheet.rules
+    days, limit = rules.enquiries_days, rules.enquiries_max
+    ref = _rule_ref(sheet, "enquiries")
+    counts = {ENQUIRY_WINDOW_DAYS[k]: int(windows[k]) for k in ENQUIRY_WINDOW_DAYS if windows.get(k) is not None}
+    if not counts:
+        reasons.append(f"Enquiries in the last {days} days not entered")
+        return
+    exact = counts.get(days)
+    if exact is not None:
+        if exact > limit:
+            reasons.append(f"{_enquiries(exact)} in the last {days} days: more than {sheet.bank}'s limit of {limit} {ref}")
+        else:
+            rule_lines.append(f"{_enquiries(exact)} in the last {days} days: within {sheet.bank}'s limit of {limit} {ref}")
+        return
+    shorter = max((d for d in counts if d < days), default=None)
+    longer = min((d for d in counts if d > days), default=None)
+    if shorter is not None and counts[shorter] > limit:
+        reasons.append(
+            f"{_enquiries(counts[shorter])} in the last {shorter} days already: more than {sheet.bank}'s limit of "
+            f"{limit} in {days} days {ref}"
+        )
+    elif longer is not None and counts[longer] <= limit:
+        rule_lines.append(
+            f"{_enquiries(counts[longer])} in the last {longer} days: within {sheet.bank}'s limit of {limit} in "
+            f"{days} days {ref}"
+        )
+    else:
+        known = shorter if shorter is not None else longer
+        cell = rules.cells.get("enquiries")
+        checks.append(
+            f"Check the credit report: at most {limit} enquiries in the last {days} days "
+            f"({_enquiries(counts[known])} in the last {known} days entered){f' (cell {cell})' if cell else ''}"
+        )
+
+
+def _sheet_conditions(sheet: SheetGrid, checks: list[str]) -> list[str]:
+    """The bank's "Conditions to confirm" (Details): what the engine could not decide (`checks`), the
+    bounce condition, then the sheet's own conditions as it words them, each with its cell."""
+    rules = sheet.rules
+    out = list(checks)
+    if rules is None:
+        return out
+    if rules.bounce_months:
+        cell = rules.cells.get("bounce")
+        out.append(
+            f"Check the bank statement: no bounce in the last {_count(rules.bounce_months, 'month')}"
+            f"{f' (cell {cell})' if cell else ''}"
+        )
+    for kind, label in SHEET_CONDITIONS.items():
+        text = rules.conditions.get(kind)
+        if text:
+            cell = rules.cells.get(kind)
+            out.append(f"{label}: {text}{f' (cell {cell})' if cell else ''}")
+    return out
 
 
 def _calculation_tenure(lender: LenderPolicy, requested: int | None, notes: list[str]) -> tuple[int, str]:
@@ -1928,20 +2110,24 @@ def _lender_result(
             if (home_loan or {}).get("running"):
                 foir = _hl_deviation(lender.sheet, foir, rule_lines, sheet_terms)
 
-    score = cibil.get("score")
-    if score is None:
-        reasons.append("CIBIL score not entered")
-    elif score < lender.min_cibil_score:
-        reasons.append(f"CIBIL score {score} is below {lender.name}'s minimum {lender.min_cibil_score}{sample}")
+    rules = lender.sheet.rules if lender.sheet is not None else None
+    # The policy sheet's conditions the engine cannot decide (Details' "Conditions to confirm").
+    checks: list[str] = []
+    # The sheet's Minus Cibil Max Loan: the most lent to an applicant with no credit history.
+    no_history_cap = _cibil_check(lender, cibil.get("score"), sample, reasons, rule_lines)
 
-    enquiries_90d = (cibil.get("enquiries") or {}).get("d90")
-    if enquiries_90d is None:
-        reasons.append("Enquiries in the last 90 days not entered")
-    elif enquiries_90d > lender.max_enquiries_90d:
-        reasons.append(
-            f"{enquiries_90d} enquiries in the last 90 days: more than {lender.name}'s limit of "
-            f"{lender.max_enquiries_90d}{sample}"
-        )
+    windows = cibil.get("enquiries") or {}
+    if rules is not None and rules.enquiries_days is not None:
+        _sheet_enquiries(lender.sheet, windows, reasons, rule_lines, checks)
+    else:
+        enquiries_90d = windows.get("d90")
+        if enquiries_90d is None:
+            reasons.append("Enquiries in the last 90 days not entered")
+        elif enquiries_90d > lender.max_enquiries_90d:
+            reasons.append(
+                f"{enquiries_90d} enquiries in the last 90 days: more than {lender.name}'s limit of "
+                f"{lender.max_enquiries_90d}{sample}"
+            )
 
     reasons.extend(common_reasons)
 
@@ -1950,7 +2136,6 @@ def _lender_result(
     else:
         tenure, tenure_source = _calculation_tenure(lender, loan.get("tenure_months"), notes)
     per_lakh = emi(LAKH, lender.roi, tenure)
-    rules = lender.sheet.rules if lender.sheet is not None else None
     method = "salary"
     if rules is not None and rules.multiplier_method is not None:
         method = rules.multiplier_method
@@ -2004,8 +2189,11 @@ def _lender_result(
         # The policy sheet's method: income x multiplier, or (income - obligations) x multiplier.
         base = income_considered - obligations_total if method == "net_of_obligations" else income_considered
         multiplier_eligibility = max(base, Decimal(0)) * multiplier
-        # The sheet's =MIN(FOIR eligibility, multiplier eligibility), capped at the lender's maximum.
+        # The sheet's =MIN(FOIR eligibility, multiplier eligibility), capped at the lender's maximum
+        # (and at its Minus Cibil Max Loan for an applicant with no credit history).
         computed = min(foir_eligibility, multiplier_eligibility, dec(lender.max_amount))
+        if no_history_cap is not None:
+            computed = min(computed, no_history_cap)
         if headroom <= 0:
             reasons.append(
                 f"Existing obligations {inr(obligations_total)} leave no room within FOIR {_pct(foir)} of "
@@ -2056,6 +2244,8 @@ def _lender_result(
             "lines": _sheet_lines(lender, sheet_terms, net, method, rule_lines + obligation_lines),
             "hl_deviation": rules.hl_deviation if rules is not None else None,
             "hl_deviation_applied": bool(sheet_terms.get("hl_deviation_applied")),
+            # The bank's conditions the DSA confirms by hand (the sheet's words, each with its cell).
+            "conditions": _sheet_conditions(lender.sheet, checks),
         }
 
     return {

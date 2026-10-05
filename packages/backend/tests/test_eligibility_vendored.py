@@ -286,3 +286,34 @@ def test_the_tool_applies_the_hl_deviation_as_the_api(table, policy_sheet_v2, ho
     hdfc = next(r for r in body["per_lender"] if r["lender_id"] == "hdfc_bank")
     assert hdfc["policy_sheet"]["hl_deviation_applied"] is True
     assert any("home-loan deviation" in line for line in hdfc["policy_sheet"]["lines"])
+
+
+def test_the_tool_applies_the_sheets_cibil_and_enquiry_rules_as_the_api(table, policy_sheet_v2):
+    """The corrected sheet's Cibil Score and Enquiries rules decline alike, and the chat carries the
+    same "Conditions to confirm"."""
+    applicant = "Sheet Rules Applicant"
+    changes = {
+        "profile__name": applicant,
+        "profile__net_income": 60000,
+        "cibil__score": 715,
+        "cibil__enquiries": {"d30": 5, "d60": 5, "d90": 6, "d120": 7},
+    }
+    saved = client.put(
+        f"/projects/{PROJECT_ID}/eligibility/inputs",
+        headers=HEADERS,
+        json={"applicant": applicant, **example(**changes)},
+    )
+    assert saved.status_code == 200, saved.text
+    api = client.post(f"/projects/{PROJECT_ID}/eligibility/calculate", headers=HEADERS, json={"applicant": applicant})
+    assert api.status_code == 200
+    answer = json.loads(json.dumps(tool(applicant)))
+    body = api.json()
+    assert [key for key in SAME if known(answer[key]) != known(body[key])] == []
+    rows = {r["lender_id"]: r for r in body["per_lender"]}
+    assert rows["icici_bank"]["reasons"][0].startswith("ICICI Bank needs CIBIL >= 720: the score is 715")
+    assert any(r.startswith("5 enquiries in the last 30 days: more than ICICI Bank's limit of 4") for r in rows["icici_bank"]["reasons"])
+    assert rows["hdfc_bank"]["policy_sheet"]["conditions"][0] == "Check the bank statement: no bounce in the last 3 months (cell F2)"
+    assert len(rows["hdfc_bank"]["policy_sheet"]["conditions"]) == 16
+    mine = {r["lender_id"]: r for r in answer["per_lender"]}
+    assert mine["hdfc_bank"]["policy_sheet"]["conditions"] == rows["hdfc_bank"]["policy_sheet"]["conditions"]
+    assert any(line.startswith("Says no: ICICI Bank – ICICI Bank needs CIBIL >= 720") for line in answer["summary"])

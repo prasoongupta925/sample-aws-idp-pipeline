@@ -39,7 +39,13 @@ from app import eligibility
 from app.config import get_config
 from app.ddb import get_table
 from app.ddb.ask_usage import TTL_ATTRIBUTE
-from app.policy_workbook import MAX_FILE_BYTES, PolicyWorkbook, PolicyWorkbookError, parse_policy_workbook
+from app.policy_workbook import (
+    MAX_FILE_BYTES,
+    PARSER_VERSION,
+    PolicyWorkbook,
+    PolicyWorkbookError,
+    parse_policy_workbook,
+)
 from app.s3 import PRESIGNED_URL_EXPIRES_IN, get_s3_client, get_s3_presign_client
 
 SOURCE_LABEL = eligibility.SHEET_SOURCE_LABEL
@@ -127,8 +133,18 @@ class StoredPolicy:
             "sha256": self.sha256,
             "banks": [b.name for b in self.workbook.banks],
             "lender_ids": [b.lender_id for b in self.workbook.banks],
-            "warnings": list(self.workbook.warnings),
+            "warnings": self.reupload_warnings() + list(self.workbook.warnings),
         }
+
+    def reupload_warnings(self) -> list[str]:
+        """A parse stored by an earlier app misses what the parser reads now: say so first."""
+        if self.workbook.parser_version >= PARSER_VERSION:
+            return []
+        return [
+            "This sheet was read by an earlier version of the app, before it applied the Cibil Score, Minus "
+            "Cibil Max Loan, Enquiries, Bounce Condition and the other conditions of Sheet2: upload it again "
+            "to apply them"
+        ]
 
 
 _cache: dict[str, StoredPolicy] = {}

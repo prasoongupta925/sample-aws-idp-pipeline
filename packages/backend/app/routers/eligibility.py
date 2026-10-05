@@ -66,6 +66,7 @@ from boto3.dynamodb.conditions import Key
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, HTTPException, Path, Query
 from pydantic import (
+    AfterValidator,
     BaseModel,
     BeforeValidator,
     ConfigDict,
@@ -216,7 +217,14 @@ def _finite(value: Any) -> Any:
 
 Money = Annotated[Annotated[float, Field(ge=0, le=MAX_AMOUNT, allow_inf_nan=False)], BeforeValidator(_finite)]
 Count = Annotated[Annotated[int, Field(ge=0, le=999)], BeforeValidator(_finite)]
-Score = Annotated[Annotated[int, Field(ge=300, le=900)], BeforeValidator(_finite)]
+def _score(value: int) -> int:
+    """300 to 900; -1 and 0 are the bureau's "no credit history" (a policy sheet may still lend)."""
+    if value in eligibility.NO_HISTORY_SCORES or 300 <= value <= 900:
+        return value
+    raise ValueError("must be 300 to 900, or -1 / 0 for no credit history")
+
+
+Score = Annotated[Annotated[int, Field(ge=-1, le=900)], BeforeValidator(_finite), AfterValidator(_score)]
 InstalmentCount = Annotated[Annotated[int, Field(ge=0, le=600)], BeforeValidator(_finite)]
 TenureMonths = Annotated[Annotated[int, Field(ge=1, le=480)], BeforeValidator(_finite)]
 OptionalName = Annotated[
@@ -393,7 +401,9 @@ class Tradeline(_Input):
 
 
 class Cibil(_Input):
-    score: Score | None = Field(default=None, description="CIBIL score, 300-900")
+    score: Score | None = Field(
+        default=None, description="CIBIL score, 300-900; -1 or 0 when the bureau has no credit history (new to credit)"
+    )
     enquiries: Enquiries = Field(default_factory=Enquiries)
     tradelines: list[Tradeline] = Field(default=[], max_length=50)
     source: Annotated[CibilSourceId, _vocabulary(CIBIL_SOURCES)] = Field(
@@ -743,6 +753,12 @@ class PolicySheetTerms(BaseModel):
     )
     hl_deviation_applied: bool = Field(
         default=False, description="The applicant has a running home loan and the FOIR includes the HL deviation"
+    )
+    conditions: list[str] = Field(
+        default=[],
+        description='"Conditions to confirm": the bank\'s conditions the sheet gives that the DSA checks by hand, '
+        'in the sheet\'s words with the cell ("Bachelor accommodation: Not Funding (cell H2)"), and what the '
+        "engine could not decide (an enquiries limit with no count for its window; the bounce condition)",
     )
 
 
