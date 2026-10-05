@@ -144,7 +144,13 @@ async def _read_xlsx(request: Request) -> XlsxUpload:
             await form.close()
     if content_type not in XLSX_TYPES:
         raise HTTPException(status_code=415, detail="Send an Excel workbook (.xlsx)")
-    return XlsxUpload(data=await request.body(), filename=None)
+    # Stop reading once past the limit: the caller answers 413 for anything over it.
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > limit:
+            break
+    return XlsxUpload(data=bytes(body[: limit + 1]), filename=None)
 
 
 def _preview(workbook: PolicyWorkbook, filename: str | None, *, preview: bool) -> dict[str, Any]:
