@@ -284,7 +284,9 @@ describe('requests', () => {
 
 describe('wording', () => {
   it('a policy kept until replaced has no re-upload date', () => {
-    expect(reuploadByText({ ...STATUS, expires_at: null, reupload_by: null })).toBeNull();
+    expect(
+      reuploadByText({ ...STATUS, expires_at: null, reupload_by: null }),
+    ).toBeNull();
     expect(reuploadByText(STATUS)).not.toBeNull();
   });
 
@@ -374,6 +376,13 @@ describe('LenderPolicyCard', () => {
     expect(text).toContain(en.eligibility.lenderPolicy.download);
     expect(text).toContain(en.eligibility.lenderPolicy.replace);
     expect(text).toContain('HDFC Bank, Bandhan Bank');
+  });
+
+  it('the intro says the sheet is kept until a new one is uploaded, not deleted after 7 days', () => {
+    const text = plain(card({ info: parseLenderPolicy(RAW_INFO) }));
+    expect(text).toContain(en.eligibility.lenderPolicy.intro);
+    expect(text).toContain('kept until you upload a new one or remove it');
+    expect(text).not.toMatch(/deleted after \d+ days/);
   });
 
   it('shows a failure and a retry when the status cannot be read', () => {

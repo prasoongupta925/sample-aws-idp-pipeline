@@ -1040,11 +1040,7 @@ export function LenderPolicyCard({
           className={`space-y-1.5 ${BOX}`}
           aria-busy={loading || busy !== null}
         >
-          <p className={MUTED}>
-            {t('eligibility.lenderPolicy.intro', {
-              days: info?.retention_days ?? DEFAULT_RETENTION_DAYS,
-            })}
-          </p>
+          <p className={MUTED}>{t('eligibility.lenderPolicy.intro')}</p>
           {loadError != null ? (
             <div
               role="alert"

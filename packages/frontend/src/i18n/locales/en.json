@@ -1638,7 +1638,7 @@
       "lists": {
         "toggle": "Your lists (CSV)",
         "summary": "{{uploaded}} of {{count}} uploaded",
-        "intro": "Upload your own lists to use them instead of the public and sample data. A new file replaces the previous list of its kind; lists are deleted after {{days}} days.",
+        "intro": "Upload your own lists to use them instead of the public and sample data. A new file replaces the previous list of its kind. Pincode, branch and grid lists are deleted after {{days}} days; the company list holds no client data, so it is kept until you upload a new one.",
         "loading": "Loading your lists…",
         "loadFailed": "Could not load your lists: {{message}}",
         "kinds": {
@@ -1664,6 +1664,7 @@
         "rows_one": "{{count}} row",
         "rows_other": "{{count}} rows",
         "deletedOn": "deleted on {{date}}",
+        "keptUntilReplaced": "kept until you upload a new list",
         "notUploaded": "Not uploaded: the public and sample data are used.",
         "upload": "Upload CSV",
         "replace": "Replace",
@@ -1778,7 +1779,7 @@
       "toggle": "Lender policy (Excel)",
       "summary": "{{file}} · re-upload needed by {{date}}",
       "summaryNone": "not uploaded",
-      "intro": "Your banks' rules from your policy workbook (.xlsx). Every project uses them for these banks instead of the sample policy. The file is deleted after {{days}} days: upload it again by then.",
+      "intro": "Your banks' rules from your policy workbook (.xlsx). Every project uses them for these banks instead of the sample policy. The sheet holds no client data, so it is kept until you upload a new one or remove it.",
       "loading": "Loading the lender policy…",
       "loadFailed": "Could not load the lender policy: {{message}}",
       "adminOnly": "Only admins can see or change the lender policy.",
