@@ -294,6 +294,9 @@ export class AgentStack extends Stack {
       agentStorageBucket,
       websocketMessageQueue,
       codeInterpreterIdentifier: idpCodeInterpreter.codeInterpreterId,
+      // Chat on the Bedrock Flex tier: half the Standard price for the same model (GLM-5 in
+      // Mumbai: $0.60 instead of $1.20 per 1M input tokens). '' = Standard.
+      extraEnvironment: { CHAT_SERVICE_TIER: 'flex' },
     });
 
     idpCodeInterpreter.grantUse(idpAgent.runtime.role);
