@@ -479,6 +479,23 @@ def test_says_when_an_uploaded_list_is_not_applied(monkeypatch):
     assert res['best_lender'] == 'ICICI Bank'
 
 
+def test_a_company_list_kept_until_replaced_is_noted_too(monkeypatch):
+    """The backend stores a company list without a TTL (company names, not client data: kept until a
+    new upload replaces it); a serviceability list still needs its TTL to be live."""
+
+    def header(kind):
+        return {'PK': 'PROJ#p1', 'SK': f'REFDATA#{kind}', 'upload_id': 'u1'}
+
+    items = [saved(RAHUL_PAN, example_inputs())]
+    res = run(KeyTable(items + [header('company_categories')]), monkeypatch, applicant=RAHUL_PAN)
+    assert res['notes'][-1] == (
+        'Your uploaded company categories list is not applied in this answer: the Eligibility page '
+        'applies it, so its figures can differ'
+    )
+    res = run(KeyTable(items + [header('pincode_serviceability')]), monkeypatch, applicant=RAHUL_PAN)
+    assert not any('not applied in this answer' in n for n in res['notes'])
+
+
 def test_inputs_saved_under_the_pan_are_found_by_name(monkeypatch):
     table = KeyTable([saved(RAHUL_PAN, example_inputs())])
 

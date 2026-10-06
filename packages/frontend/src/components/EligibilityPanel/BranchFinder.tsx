@@ -116,7 +116,7 @@ export interface ReferenceList {
   filename: string | null;
   rows: number;
   lenders: string[];
-  /** When the list is deleted (ISO). */
+  /** When the list is deleted (ISO); null for a company list, kept until a new upload replaces it. */
   expires_at: string | null;
   /** Upload answer only. */
   duplicates: number | null;
@@ -1250,6 +1250,8 @@ function ListRow({
   const columns = list?.columns.join(', ');
   const optional = list?.optional_columns.join(', ');
   const until = expiresOn(list?.expires_at ?? null);
+  // A company list holds no client data: stored without an expiry, kept until a new upload replaces it.
+  const kept = kind === 'company_categories' && !list?.expires_at;
   return (
     <li
       className="space-y-1 rounded-lg border border-white/50 bg-white/30 px-2 py-1.5 dark:border-white/[0.08] dark:bg-white/[0.03]"
@@ -1346,8 +1348,9 @@ function ListRow({
           ? [
               list.filename,
               t('eligibility.branches.lists.rows', { count: list.rows }),
-              until &&
-                t('eligibility.branches.lists.deletedOn', { date: until }),
+              until
+                ? t('eligibility.branches.lists.deletedOn', { date: until })
+                : kept && t('eligibility.branches.lists.keptUntilReplaced'),
             ]
               .filter(Boolean)
               .join(' · ')

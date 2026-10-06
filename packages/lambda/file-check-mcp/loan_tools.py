@@ -49,6 +49,9 @@ REFERENCE_LISTS = {
     'pincode_serviceability': 'pincode serviceability',
     'company_categories': 'company categories',
 }
+# Stored without a TTL, kept until a new upload replaces it (company names, not client data);
+# the other lists expire (reference_data.KEPT_KINDS).
+KEPT_LISTS = frozenset({'company_categories'})
 REFERENCE_SK_PREFIX = 'REFDATA#'
 # The app's lender policy workbook (app/lender_policy.py): its header carries the parsed policy, gzipped.
 POLICY_KEY = {'PK': 'APP#LENDERPOLICY', 'SK': 'CURRENT'}
@@ -392,9 +395,10 @@ def _live(item, now: int) -> bool:
     return isinstance(expires_at, int) and expires_at > now
 
 
-def _policy_live(item, now: int) -> bool:
-    """The policy header is kept until replaced (no TTL: lender terms, not client data); an older
-    header with a TTL in the past is not used, as the backend does."""
+def _kept_live(item, now: int) -> bool:
+    """An item kept until replaced (no TTL: the policy sheet's header, a company list's; lender
+    terms and company names, not client data) is live; an older one with a TTL in the past is
+    not used, as the backend does."""
     if not item:
         return False
     expires_at = item.get(TTL_ATTRIBUTE)
@@ -579,7 +583,8 @@ def uploaded_lists_note(table, project_id: str, now: int):
     names = []
     for kind, name in REFERENCE_LISTS.items():
         key = {'PK': f'PROJ#{project_id}', 'SK': f'{REFERENCE_SK_PREFIX}{kind}'}
-        if _live(plain(table.get_item(Key=key).get('Item')), now):
+        item = plain(table.get_item(Key=key).get('Item'))
+        if _kept_live(item, now) if kind in KEPT_LISTS else _live(item, now):
             names.append(name)
     if not names:
         return None
@@ -594,7 +599,7 @@ def stored_policy_book(table, now: int):
     """(the book with the app's policy workbook's banks, a note) as the backend calculates; (None,
     None) without a live policy; (None, a note) when it cannot be applied here."""
     item = table.get_item(Key=POLICY_KEY, ConsistentRead=True).get('Item')
-    if not _policy_live(plain(item), now):
+    if not _kept_live(plain(item), now):
         return None, None
     packed = item.get(POLICY_ATTRIBUTE)
     packed = getattr(packed, 'value', packed)  # boto3 Binary

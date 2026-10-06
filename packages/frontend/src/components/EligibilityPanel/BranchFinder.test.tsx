@@ -830,7 +830,7 @@ describe('ReferenceListsPanel', () => {
   it('shows each kind: its columns, its upload and what to do', () => {
     const html = listsPanel();
     expect(plain(html)).toContain(
-      'A new file replaces the previous list of its kind; lists are deleted after 7 days.',
+      'A new file replaces the previous list of its kind. Pincode, branch and grid lists are deleted after 7 days; the company list holds no client data, so it is kept until you upload a new one.',
     );
     const branches = listItem(html, 'lender_branches');
     expect(branches).toContain('data-uploaded="true"');
@@ -859,6 +859,34 @@ describe('ReferenceListsPanel', () => {
     expect(plain(listItem(html, 'company_categories'))).toContain(
       'Columns: lender, company, category',
     );
+  });
+
+  it('a company list has no deletion date: kept until a new one is uploaded', () => {
+    // No client data in it, so the API stores it without an expiry (expires_at null).
+    const lists = {
+      ...LISTS,
+      lists: LISTS.lists.map((l) =>
+        l.kind === 'company_categories'
+          ? {
+              ...l,
+              uploaded: true,
+              filename: 'companies.csv',
+              rows: 3,
+              lenders: ['HDFC Bank'],
+              uploaded_at: '2026-10-02T10:00:00+00:00',
+              expires_at: null,
+            }
+          : l,
+      ),
+    };
+    const html = listsPanel({ data: parseReferenceLists(lists) });
+    const item = plain(listItem(html, 'company_categories'));
+    expect(item).toContain(
+      'companies.csv · 3 rows · kept until you upload a new list',
+    );
+    expect(item).not.toContain('deleted on');
+    // The other lists still show their deletion date.
+    expect(plain(listItem(html, 'lender_branches'))).toContain('deleted on');
   });
 
   it('reports a saved upload with its notes', () => {

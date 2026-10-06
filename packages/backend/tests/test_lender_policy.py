@@ -277,10 +277,18 @@ def test_the_app_wide_company_list_takes_the_sheets_banks_and_categories(store, 
         headers={"content-type": "text/csv"},
     )
     assert response.status_code == 200, response.text
-    assert response.json()["rows"] == 2
-    assert ("APP#REFDATA", "REFDATA#company_categories") in store[0].items
+    assert (response.json()["rows"], response.json()["expires_at"]) == (2, None)
+    header = store[0].items[("APP#REFDATA", "REFDATA#company_categories")]
+    assert "expires_at" not in header  # no TTL: company names, not client data, kept until replaced
     status = client.get("/eligibility/lender-policy").json()
     assert status["company_list"]["filename"] == "companies.csv"
+    assert status["company_list"]["expires_at"] is None
+    # Still there, and applied, long after the retention period.
+    store[2]["now"] = NOW + dt.timedelta(days=60)
+    later = client.get("/eligibility/lender-policy").json()["company_list"]
+    assert (later["uploaded"], later["filename"], later["expires_at"]) == (True, "companies.csv", None)
+    lists = reference_data.calculation_lists("proj_x", NOW + dt.timedelta(days=60))
+    assert lists.companies.company_category("bandhan_bank", "Sahyadri Synthetics Pvt Ltd") == "CAT B"
     # Without the sheet, Bandhan Bank is not a lender of the app.
     client.delete("/eligibility/lender-policy")
     refused = client.post("/eligibility/lender-policy/company-list", content=data, headers={"content-type": "text/csv"})
