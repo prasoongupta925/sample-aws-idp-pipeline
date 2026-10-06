@@ -1279,3 +1279,15 @@ class TestAprAndTotalCost:
         # The fee is capped at the 20,58,000 offer, which leaves the borrower nothing.
         assert (row["processing_fee"], row["apr"]) == (2058000.0, None)
         assert row["total_cost"] == el.money(el.emi(2058000, 11, 72) * 72)
+
+
+def test_one_bank_credit_does_not_lower_the_salary_the_slips_agree_on():
+    # Live case 6 Oct: 3 slips with net 95,353 and one bank credit of 7,678 misread as salary.
+    from app.routers.eligibility import verified_income
+
+    one_month = {"income": {"slip_net": 95353, "bank_salary_credit": 7678, "bank_salary_credit_verified": None}}
+    assert verified_income(one_month) == {"amount": 95353, "source": "salary slips, median net pay"}
+    repeated = {"income": {"slip_net": 95353, "bank_salary_credit": 90000, "bank_salary_credit_verified": 90000}}
+    assert verified_income(repeated) == {"amount": 90000, "source": "bank salary credits, median"}  # still the lower
+    older = {"income": {"slip_net": 95353, "bank_salary_credit": 90000}}  # a result without the new key
+    assert verified_income(older)["amount"] == 90000

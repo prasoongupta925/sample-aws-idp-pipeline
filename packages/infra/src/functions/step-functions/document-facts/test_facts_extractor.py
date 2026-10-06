@@ -563,3 +563,10 @@ def test_salary_slip_gross_is_the_earned_column_not_the_master_column():
     # A real slip had gross Master 53,600 vs earned 51,870 and the reading took the Master column.
     text = str(TOOL_SCHEMA)
     assert 'ACTUALLY EARNED' in text and 'never the Master' in text
+
+
+def test_salary_credits_include_the_employers_monthly_neft_credit():
+    # A real statement's salary came as 'NEFT CR-...-<employer>' without the word SAL.
+    text = str(TOOL_SCHEMA)
+    assert "employer\\'s monthly NEFT / RTGS / IMPS credit" in text or "employer's monthly NEFT / RTGS / IMPS credit" in text
+    assert 'Never a UPI transfer from a person' in text
