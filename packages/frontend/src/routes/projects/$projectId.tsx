@@ -41,6 +41,15 @@ import VoiceModelSettingsModal, {
 // Custom hooks
 import { useProjectData } from '../../hooks/useProjectData';
 import { usePanelLayout } from '../../hooks/usePanelLayout';
+import { useChatLayout } from '../../hooks/useChatLayout';
+import { cn } from '../../lib/utils';
+import {
+  MessageSquare,
+  Minimize2,
+  PanelRightOpen,
+  Sparkles,
+  X,
+} from 'lucide-react';
 import { useSystemPrompts } from '../../hooks/useSystemPrompts';
 import { useChatSession } from '../../hooks/useChatSession';
 import { useModelCatalog } from '../../hooks/useModelCatalog';
@@ -69,6 +78,7 @@ function ProjectDetailPage() {
   // 1. Independent hooks
   const projectData = useProjectData({ fetchApi, projectId });
   const panelLayout = usePanelLayout();
+  const chatLayout = useChatLayout();
   const { systemPromptTabs } = useSystemPrompts({ fetchApi });
 
   // Chat model catalog (SSM-backed, runtime-loaded so models can be added
@@ -377,15 +387,31 @@ function ProjectDetailPage() {
   );
 
   // --- Sidebar sessions sync ---
+  // The left sidebar's chat history and New chat open the chat drawer in the compact layout.
+  const handleSessionSelectFromSidebar = useCallback(
+    (sessionId: string) => {
+      handleSessionSelect(sessionId);
+      chatLayout.reveal();
+    },
+    [handleSessionSelect, chatLayout],
+  );
+  const handleNewSessionFromSidebar = useCallback(
+    (persistModelId?: string) => {
+      handleNewSession(persistModelId);
+      chatLayout.reveal();
+    },
+    [handleNewSession, chatLayout],
+  );
+
   useSetSidebarSessions(
     useMemo(
       () => ({
         sessions: chatSession.sessions,
         currentSessionId: chatSession.currentSessionId,
-        onSessionSelect: handleSessionSelect,
+        onSessionSelect: handleSessionSelectFromSidebar,
         onSessionRename: chatSession.handleSessionRename,
         onSessionDelete: handleSessionDelete,
-        onNewSession: handleNewSession,
+        onNewSession: handleNewSessionFromSidebar,
         hasMoreSessions: !!chatSession.sessionsNextCursor,
         loadingMoreSessions: chatSession.loadingMoreSessions,
         onLoadMoreSessions: chatSession.loadMoreSessions,
@@ -393,10 +419,10 @@ function ProjectDetailPage() {
       [
         chatSession.sessions,
         chatSession.currentSessionId,
-        handleSessionSelect,
+        handleSessionSelectFromSidebar,
         chatSession.handleSessionRename,
         handleSessionDelete,
-        handleNewSession,
+        handleNewSessionFromSidebar,
         chatSession.sessionsNextCursor,
         chatSession.loadingMoreSessions,
         chatSession.loadMoreSessions,
@@ -432,6 +458,134 @@ function ProjectDetailPage() {
     );
   }
 
+  // One chat element, shown in the drawer (compact) or beside the documents (docked).
+  const chatPanelElement = (
+    <ChatPanel
+      projectName={projectData.project?.name}
+      projectDescription={projectData.project?.description}
+      projectColor={projectData.project?.color ?? 0}
+      messages={chatSession.messages}
+      inputMessage={chatSession.inputMessage}
+      sending={chatSession.sending}
+      streamingBlocks={chatSession.streamingBlocks}
+      loadingHistory={chatSession.loadingHistory}
+      agents={agentsHook.agents}
+      selectedAgent={agentsHook.selectedAgent}
+      artifacts={artifactsHook.artifacts}
+      documents={documentsHook.documents}
+      onInputChange={chatSession.setInputMessage}
+      onSendMessage={handleSendMessage}
+      onStop={chatSession.stopStreaming}
+      models={models}
+      modelId={chatSession.modelId}
+      reasonings={chatSession.reasonings}
+      onModelChange={handleModelChange}
+      onReasoningChange={chatSession.setReasonings}
+      onAgentSelect={agentsHook.handleAgentSelect}
+      onAgentClick={() => agentsHook.setShowAgentModal(true)}
+      onNewChat={handleNewSession}
+      onArtifactView={artifactsHook.handleArtifactSelect}
+      onSourceClick={documentsHook.handleSourceClick}
+      loadingSourceKey={documentsHook.loadingSourceKey}
+      onAnswer={handleAnswer}
+      scrollPositionRef={chatSession.chatScrollPositionRef}
+      voiceChat={{
+        available: !!bidiAgentRuntimeArn,
+        state: voiceChatManager.voiceChat.state,
+        audioLevel: {
+          input: voiceChatManager.voiceChat.inputAudioLevel,
+          output: voiceChatManager.voiceChat.outputAudioLevel,
+        },
+        mode: voiceChatManager.voiceChatMode,
+        selectedModel: selectedVoiceModel,
+        onModeChange: voiceChatManager.setVoiceChatMode,
+        onConnect: voiceChatManager.handleVoiceChatConnect,
+        onDisconnect: voiceChatManager.voiceChat.disconnect,
+        onText: voiceChatManager.handleVoiceChatText,
+        onToggleMic: voiceChatManager.voiceChat.toggleMic,
+        onSettings: () => voiceChatManager.setShowVoiceModelSettings(true),
+        onModelSelect: voiceChatManager.handleVoiceModelSelect,
+      }}
+    />
+  );
+
+  // Documents & artifacts with the File check / Eligibility / pain points / artifact overlays.
+  const renderSideContent = (collapsible: boolean) => (
+    <>
+      <SidePanel
+        artifacts={artifactsHook.artifacts}
+        currentArtifactId={artifactsHook.selectedArtifact?.artifact_id}
+        onArtifactSelect={artifactsHook.handleArtifactSelect}
+        onArtifactDownload={artifactsHook.handleArtifactDownload}
+        onArtifactDelete={artifactsHook.handleArtifactDelete}
+        onRefreshArtifacts={artifactsHook.loadArtifacts}
+        onCollapse={
+          collapsible
+            ? () => panelLayout.setSidePanelCollapsed(true)
+            : undefined
+        }
+        documents={documentsHook.documents}
+        workflows={documentsHook.workflows}
+        workflowProgressMap={documentsHook.workflowProgressMap}
+        uploading={documentsHook.uploading}
+        onAddDocument={() => documentsHook.setShowUploadModal(true)}
+        onRefreshDocuments={documentsHook.loadDocuments}
+        onViewWorkflow={documentsHook.loadWorkflowDetail}
+        onDeleteDocument={documentsHook.handleDeleteDocument}
+        onOpenFileCheck={openFileCheck}
+        onOpenPainPoints={openPainPointsFromNav}
+        onRequestFromCustomer={() => setShowRequestDocs(true)}
+        onUnlockDocument={(doc) =>
+          setUnlockTarget({
+            document_id: doc.document_id,
+            name: doc.name,
+          })
+        }
+        // onViewProjectGraph={() => setShowProjectGraph(true)}
+      />
+      {/* File Check - overlays SidePanel (an open artifact stays on top) */}
+      {showFileCheck && !artifactsHook.selectedArtifact && (
+        <FileCheckPanel
+          state={fileCheck}
+          askState={fileCheckAsk}
+          onClose={closeFileCheck}
+          focus={fileCheckFocus}
+          onPainPoint={openPainPoints}
+          onOpenEligibility={openEligibility}
+        />
+      )}
+      {/* Eligibility & lenders - same overlay, opened from an applicant of the verdict */}
+      {eligibilityTarget && !artifactsHook.selectedArtifact && (
+        <EligibilityPanel
+          state={eligibility}
+          projectId={projectId}
+          applicant={eligibilityTarget.id}
+          name={eligibilityTarget.name}
+          pan={eligibilityTarget.pan}
+          onBack={backToFileCheck}
+          onClose={closeEligibility}
+        />
+      )}
+      {/* Why DSAs need this - same overlay; "Show me" opens File Check */}
+      {showPainPoints && !artifactsHook.selectedArtifact && (
+        <DsaPainPointsPanel
+          onClose={closePainPoints}
+          onShowMe={showMeInFileCheck}
+          focusId={painPointFocus}
+        />
+      )}
+      {/* Artifact Viewer - overlays SidePanel */}
+      {artifactsHook.selectedArtifact && (
+        <ArtifactViewer
+          artifact={artifactsHook.selectedArtifact}
+          onClose={artifactsHook.handleArtifactViewerClose}
+          onDownload={artifactsHook.handleArtifactDownload}
+          getDownloadUrl={getArtifactDownloadUrl}
+        />
+      )}
+    </>
+  );
+
   return (
     <div className="flex-1 flex flex-col min-h-0 relative">
       {/* Ambient background glow (dark mode) */}
@@ -448,241 +602,225 @@ function ProjectDetailPage() {
         onSettingsClick={() => projectData.setShowProjectSettings(true)}
       />
 
-      {/* Main Content - 2 Column Resizable Layout */}
-      <div className="flex-1 min-h-0 flex">
-        <ResizablePanelGroup
-          key={panelLayout.sidePanelCollapsed ? 'sl' : 'se'}
-          orientation="horizontal"
-          defaultSize={(() => {
-            const sizes = panelLayout.sidePanelSizeBeforeCollapse.current;
-            if (panelLayout.sidePanelCollapsed) {
-              return [sizes[0] + sizes[1]];
-            }
-            return sizes;
-          })()}
-          onResizeEnd={panelLayout.handlePanelResizeEnd}
-          onCollapse={(details: { panelId: string }) => {
-            if (details.panelId === 'side') {
-              panelLayout.setSidePanelCollapsed(true);
-            }
-          }}
-          panels={(() => {
-            const panels: {
-              id: string;
-              minSize: number;
-              maxSize: number;
-              collapsible?: boolean;
-            }[] = [];
-            panels.push({ id: 'chat', minSize: 40, maxSize: 100 });
-            if (!panelLayout.sidePanelCollapsed) {
-              panels.push({
-                id: 'side',
-                minSize: 15,
-                maxSize: 45,
-                collapsible: true,
-              });
-            }
-            return panels;
-          })()}
-          className="h-full flex-1 min-w-0"
-        >
-          {/* Left - Chat Panel */}
-          <ResizablePanel id="chat">
-            <div className="h-full">
-              <ChatPanel
-                projectName={projectData.project?.name}
-                projectDescription={projectData.project?.description}
-                projectColor={projectData.project?.color ?? 0}
-                messages={chatSession.messages}
-                inputMessage={chatSession.inputMessage}
-                sending={chatSession.sending}
-                streamingBlocks={chatSession.streamingBlocks}
-                loadingHistory={chatSession.loadingHistory}
-                agents={agentsHook.agents}
-                selectedAgent={agentsHook.selectedAgent}
-                artifacts={artifactsHook.artifacts}
-                documents={documentsHook.documents}
-                onInputChange={chatSession.setInputMessage}
-                onSendMessage={handleSendMessage}
-                onStop={chatSession.stopStreaming}
-                models={models}
-                modelId={chatSession.modelId}
-                reasonings={chatSession.reasonings}
-                onModelChange={handleModelChange}
-                onReasoningChange={chatSession.setReasonings}
-                onAgentSelect={agentsHook.handleAgentSelect}
-                onAgentClick={() => agentsHook.setShowAgentModal(true)}
-                onNewChat={handleNewSession}
-                onArtifactView={artifactsHook.handleArtifactSelect}
-                onSourceClick={documentsHook.handleSourceClick}
-                loadingSourceKey={documentsHook.loadingSourceKey}
-                onAnswer={handleAnswer}
-                scrollPositionRef={chatSession.chatScrollPositionRef}
-                voiceChat={{
-                  available: !!bidiAgentRuntimeArn,
-                  state: voiceChatManager.voiceChat.state,
-                  audioLevel: {
-                    input: voiceChatManager.voiceChat.inputAudioLevel,
-                    output: voiceChatManager.voiceChat.outputAudioLevel,
-                  },
-                  mode: voiceChatManager.voiceChatMode,
-                  selectedModel: selectedVoiceModel,
-                  onModeChange: voiceChatManager.setVoiceChatMode,
-                  onConnect: voiceChatManager.handleVoiceChatConnect,
-                  onDisconnect: voiceChatManager.voiceChat.disconnect,
-                  onText: voiceChatManager.handleVoiceChatText,
-                  onToggleMic: voiceChatManager.voiceChat.toggleMic,
-                  onSettings: () =>
-                    voiceChatManager.setShowVoiceModelSettings(true),
-                  onModelSelect: voiceChatManager.handleVoiceModelSelect,
-                }}
-              />
-            </div>
-          </ResizablePanel>
-
-          {!panelLayout.sidePanelCollapsed && (
-            <>
-              <ResizableHandle id="chat:side" />
-
-              {/* Right - Documents & Artifacts */}
-              <ResizablePanel id="side">
-                <div className="h-full relative">
-                  <SidePanel
-                    artifacts={artifactsHook.artifacts}
-                    currentArtifactId={
-                      artifactsHook.selectedArtifact?.artifact_id
-                    }
-                    onArtifactSelect={artifactsHook.handleArtifactSelect}
-                    onArtifactDownload={artifactsHook.handleArtifactDownload}
-                    onArtifactDelete={artifactsHook.handleArtifactDelete}
-                    onRefreshArtifacts={artifactsHook.loadArtifacts}
-                    onCollapse={() => panelLayout.setSidePanelCollapsed(true)}
-                    documents={documentsHook.documents}
-                    workflows={documentsHook.workflows}
-                    workflowProgressMap={documentsHook.workflowProgressMap}
-                    uploading={documentsHook.uploading}
-                    onAddDocument={() => documentsHook.setShowUploadModal(true)}
-                    onRefreshDocuments={documentsHook.loadDocuments}
-                    onViewWorkflow={documentsHook.loadWorkflowDetail}
-                    onDeleteDocument={documentsHook.handleDeleteDocument}
-                    onOpenFileCheck={openFileCheck}
-                    onOpenPainPoints={openPainPointsFromNav}
-                    onRequestFromCustomer={() => setShowRequestDocs(true)}
-                    onUnlockDocument={(doc) =>
-                      setUnlockTarget({
-                        document_id: doc.document_id,
-                        name: doc.name,
-                      })
-                    }
-                    // onViewProjectGraph={() => setShowProjectGraph(true)}
-                  />
-                  {/* File Check - overlays SidePanel (an open artifact stays on top) */}
-                  {showFileCheck && !artifactsHook.selectedArtifact && (
-                    <FileCheckPanel
-                      state={fileCheck}
-                      askState={fileCheckAsk}
-                      onClose={closeFileCheck}
-                      focus={fileCheckFocus}
-                      onPainPoint={openPainPoints}
-                      onOpenEligibility={openEligibility}
-                    />
-                  )}
-                  {/* Eligibility & lenders - same overlay, opened from an applicant of the verdict */}
-                  {eligibilityTarget && !artifactsHook.selectedArtifact && (
-                    <EligibilityPanel
-                      state={eligibility}
-                      projectId={projectId}
-                      applicant={eligibilityTarget.id}
-                      name={eligibilityTarget.name}
-                      pan={eligibilityTarget.pan}
-                      onBack={backToFileCheck}
-                      onClose={closeEligibility}
-                    />
-                  )}
-                  {/* Why DSAs need this - same overlay; "Show me" opens File Check */}
-                  {showPainPoints && !artifactsHook.selectedArtifact && (
-                    <DsaPainPointsPanel
-                      onClose={closePainPoints}
-                      onShowMe={showMeInFileCheck}
-                      focusId={painPointFocus}
-                    />
-                  )}
-                  {/* Artifact Viewer - overlays SidePanel */}
-                  {artifactsHook.selectedArtifact && (
-                    <ArtifactViewer
-                      artifact={artifactsHook.selectedArtifact}
-                      onClose={artifactsHook.handleArtifactViewerClose}
-                      onDownload={artifactsHook.handleArtifactDownload}
-                      getDownloadUrl={getArtifactDownloadUrl}
-                    />
-                  )}
-                </div>
-              </ResizablePanel>
-            </>
-          )}
-        </ResizablePanelGroup>
-
-        {/* Collapsed Side Bar */}
-        {panelLayout.sidePanelCollapsed && (
-          <div
-            className="side-collapsed-bar"
-            onClick={panelLayout.expandSidePanel}
-            title={t('nav.expand')}
-          >
-            <div className="docs-collapsed-badge">
-              <svg
-                className="w-4 h-4"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                <polyline points="14 2 14 8 20 8" />
-              </svg>
-              <span>{documentsHook.documents.length}</span>
-            </div>
-            <span className="docs-collapsed-label">
-              {t('documents.title', 'Documents')}
-            </span>
-            <div className="docs-collapsed-badge mt-2">
-              <svg
-                className="w-4 h-4"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z" />
-                <path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65" />
-                <path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65" />
-              </svg>
-              <span>{artifactsHook.artifacts.length}</span>
-            </div>
-            <span className="docs-collapsed-label">
-              {t('chat.artifacts', 'Artifacts')}
-            </span>
-            <div className="docs-collapsed-expand">
-              <svg
-                className="w-3.5 h-3.5"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M11 17l-5-5 5-5" />
-                <path d="M18 17l-5-5 5-5" />
-              </svg>
-            </div>
+      {/* Main Content */}
+      {chatLayout.compact ? (
+        /* Compact: documents, file check and eligibility take the full width; the chat is a drawer. */
+        <div className="flex-1 min-h-0 flex">
+          <div className="h-full flex-1 min-w-0 relative mx-auto w-full max-w-[1600px]">
+            {renderSideContent(false)}
           </div>
-        )}
-      </div>
+        </div>
+      ) : (
+        <div className="flex-1 min-h-0 flex">
+          <ResizablePanelGroup
+            key={panelLayout.sidePanelCollapsed ? 'sl' : 'se'}
+            orientation="horizontal"
+            defaultSize={(() => {
+              const sizes = panelLayout.sidePanelSizeBeforeCollapse.current;
+              if (panelLayout.sidePanelCollapsed) {
+                return [sizes[0] + sizes[1]];
+              }
+              return sizes;
+            })()}
+            onResizeEnd={panelLayout.handlePanelResizeEnd}
+            onCollapse={(details: { panelId: string }) => {
+              if (details.panelId === 'side') {
+                panelLayout.setSidePanelCollapsed(true);
+              }
+            }}
+            panels={(() => {
+              const panels: {
+                id: string;
+                minSize: number;
+                maxSize: number;
+                collapsible?: boolean;
+              }[] = [];
+              panels.push({ id: 'chat', minSize: 40, maxSize: 100 });
+              if (!panelLayout.sidePanelCollapsed) {
+                panels.push({
+                  id: 'side',
+                  minSize: 15,
+                  maxSize: 45,
+                  collapsible: true,
+                });
+              }
+              return panels;
+            })()}
+            className="h-full flex-1 min-w-0"
+          >
+            {/* Left - Chat Panel */}
+            <ResizablePanel id="chat">
+              <div className="h-full relative">
+                <button
+                  type="button"
+                  onClick={() => chatLayout.setMode('compact')}
+                  title={t(
+                    'chat.compact.undock',
+                    'Make the chat a small button',
+                  )}
+                  aria-label={t(
+                    'chat.compact.undock',
+                    'Make the chat a small button',
+                  )}
+                  className="absolute right-3 top-3 z-20 rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+                >
+                  <Minimize2 className="h-4 w-4" />
+                </button>
+                {chatPanelElement}
+              </div>
+            </ResizablePanel>
+
+            {!panelLayout.sidePanelCollapsed && (
+              <>
+                <ResizableHandle id="chat:side" />
+
+                {/* Right - Documents & Artifacts */}
+                <ResizablePanel id="side">
+                  <div className="h-full relative">
+                    {renderSideContent(true)}
+                  </div>
+                </ResizablePanel>
+              </>
+            )}
+          </ResizablePanelGroup>
+
+          {/* Collapsed Side Bar */}
+          {panelLayout.sidePanelCollapsed && (
+            <div
+              className="side-collapsed-bar"
+              onClick={panelLayout.expandSidePanel}
+              title={t('nav.expand')}
+            >
+              <div className="docs-collapsed-badge">
+                <svg
+                  className="w-4 h-4"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                </svg>
+                <span>{documentsHook.documents.length}</span>
+              </div>
+              <span className="docs-collapsed-label">
+                {t('documents.title', 'Documents')}
+              </span>
+              <div className="docs-collapsed-badge mt-2">
+                <svg
+                  className="w-4 h-4"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z" />
+                  <path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65" />
+                  <path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65" />
+                </svg>
+                <span>{artifactsHook.artifacts.length}</span>
+              </div>
+              <span className="docs-collapsed-label">
+                {t('chat.artifacts', 'Artifacts')}
+              </span>
+              <div className="docs-collapsed-expand">
+                <svg
+                  className="w-3.5 h-3.5"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M11 17l-5-5 5-5" />
+                  <path d="M18 17l-5-5 5-5" />
+                </svg>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Compact layout: the chat drawer (kept mounted so a running answer is never lost) and its button */}
+      {chatLayout.compact && (
+        <>
+          <div
+            role="dialog"
+            aria-label={t('chat.compact.title', 'Ask AI')}
+            aria-hidden={!chatLayout.open}
+            inert={!chatLayout.open}
+            className={cn(
+              'fixed inset-y-0 right-0 z-40 flex w-full flex-col border-l border-slate-200 bg-white shadow-2xl transition-transform duration-300 ease-out sm:w-[460px] dark:border-slate-700 dark:bg-slate-900',
+              chatLayout.open ? 'translate-x-0' : 'translate-x-full',
+            )}
+          >
+            <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-4 py-2.5 dark:border-slate-700">
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 text-sm font-semibold text-slate-800 dark:text-slate-100">
+                  <Sparkles className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                  {t('chat.compact.title', 'Ask AI')}
+                </div>
+                <div className="truncate text-[11px] text-slate-500 dark:text-slate-400">
+                  {projectData.project?.name}
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => chatLayout.setMode('docked')}
+                  title={t(
+                    'chat.compact.dock',
+                    'Show the chat beside the documents',
+                  )}
+                  aria-label={t(
+                    'chat.compact.dock',
+                    'Show the chat beside the documents',
+                  )}
+                  className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+                >
+                  <PanelRightOpen className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => chatLayout.setOpen(false)}
+                  title={t('chat.compact.close', 'Close')}
+                  aria-label={t('chat.compact.close', 'Close')}
+                  className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+            <div className="min-h-0 flex-1">{chatPanelElement}</div>
+          </div>
+          {!chatLayout.open && (
+            <button
+              type="button"
+              onClick={() => chatLayout.setOpen(true)}
+              aria-label={t('chat.compact.open', 'Ask AI about this file')}
+              className="fixed bottom-6 right-6 z-30 inline-flex items-center gap-2 rounded-full bg-blue-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-blue-600/30 transition hover:-translate-y-0.5 hover:bg-blue-700 focus:outline-none focus-visible:ring-4 focus-visible:ring-blue-300 dark:shadow-blue-900/40"
+            >
+              <MessageSquare className="h-4 w-4" />
+              <span>{t('chat.compact.button', 'Ask AI')}</span>
+              {chatSession.sending && (
+                <span
+                  className="relative flex h-2 w-2"
+                  aria-label={t('chat.compact.busy', 'AI is answering')}
+                >
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-white opacity-75" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-white" />
+                </span>
+              )}
+            </button>
+          )}
+        </>
+      )}
 
       {/* Workflow Detail Modal */}
       {documentsHook.selectedWorkflow && (
