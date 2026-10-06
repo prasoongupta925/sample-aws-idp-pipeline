@@ -746,7 +746,9 @@ export default function SidePanel({
         {/* Documents Panel (top) */}
         <div
           className="glow-through glass-panel flex flex-col min-h-0 overflow-hidden bg-[#e8ecf4]/90 dark:bg-slate-900 rounded-lg border border-white/50 dark:border-slate-700/60"
-          style={{ height: `${topRatio}%` }}
+          style={{
+            height: `${artifacts.length === 0 ? Math.max(topRatio, 88) : topRatio}%`,
+          }}
         >
           {/* Documents Header */}
           <SectionHeader
@@ -939,7 +941,7 @@ export default function SidePanel({
           )}
 
           {/* Documents List */}
-          <div className="flex-1 overflow-y-auto min-h-0">
+          <div className="@container flex-1 overflow-y-auto min-h-0">
             {uploading && (
               <div className="px-3 py-2 flex items-center gap-2">
                 <Loader2 className="h-3.5 w-3.5 text-blue-500 animate-spin" />
@@ -963,7 +965,7 @@ export default function SidePanel({
                 </p>
               </div>
             ) : (
-              <div className="p-2 pt-3 space-y-1">
+              <div className="p-2 pt-3 grid grid-cols-1 gap-1 @3xl:grid-cols-2 @6xl:grid-cols-3">
                 {filteredDocuments.map((doc) => {
                   const workflow = workflows.find(
                     (wf) => wf.document_id === doc.document_id,

@@ -23,11 +23,11 @@ export default function WelcomeScreen({
     CARD_COLORS[projectColor % CARD_COLORS.length] || CARD_COLORS[0];
 
   return (
-    <div className="flex flex-col items-center h-full p-6 max-w-3xl mx-auto w-full">
-      <div className="flex-[3]" />
+    <div className="@container flex flex-col items-center h-full p-6 max-w-3xl mx-auto w-full">
+      <div className="flex-[1] @lg:flex-[3]" />
 
       {/* 3D Cube */}
-      <div className="relative mb-6 animate-[fadeInUp_0.6s_ease-out_both]">
+      <div className="relative mb-6 hidden @lg:block animate-[fadeInUp_0.6s_ease-out_both]">
         <div
           className="absolute -inset-6 rounded-full blur-3xl opacity-15"
           style={{ background: color.border }}
@@ -95,7 +95,7 @@ export default function WelcomeScreen({
 
       {/* Project name */}
       <h1
-        className="text-4xl font-bold tracking-tight text-center
+        className="hidden @lg:block text-4xl font-bold tracking-tight text-center
                    bg-clip-text text-transparent
                    animate-[fadeInUp_0.6s_ease-out_0.1s_both]"
         style={{

@@ -1,4 +1,5 @@
 import json
+import os
 import time
 from contextlib import ExitStack, contextmanager
 
@@ -143,6 +144,13 @@ def _model_catalog() -> dict[str, bool]:
     return result
 
 
+def _service_tier_kwargs() -> dict:
+    """BedrockModel service_tier from CHAT_SERVICE_TIER: "flex" halves the price of the same model
+    (Flex calls wait behind Standard ones when AWS is busy); empty or unknown = Standard."""
+    tier = os.environ.get("CHAT_SERVICE_TIER", "").strip().lower()
+    return {"service_tier": tier} if tier in ("flex", "priority") else {}
+
+
 def _resolve_model(requested: str | None, default: str) -> tuple[str, bool]:
     """Validate a client-requested model_id against the catalog.
 
@@ -257,6 +265,7 @@ def get_agent(
     if supports_reasoning and reasoning in REASONING_TO_EFFORT:
         effort = REASONING_TO_EFFORT[reasoning]
         model_kwargs["additional_request_fields"] = {"output_config": {"effort": effort}}
+    model_kwargs.update(_service_tier_kwargs())
     bedrock_model = BedrockModel(**model_kwargs)
 
     hooks: list[HookProvider] = [
