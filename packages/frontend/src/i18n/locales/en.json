@@ -464,6 +464,15 @@
     "hint": "Custom instructions to guide document analysis."
   },
   "chat": {
+    "compact": {
+      "button": "Ask AI",
+      "title": "Ask AI",
+      "open": "Ask AI about this file",
+      "close": "Close",
+      "dock": "Show the chat beside the documents",
+      "undock": "Make the chat a small button",
+      "busy": "AI is answering"
+    },
     "title": "Chat",
     "askQuestions": "Ask questions about your documents",
     "placeholder": "Type your message...",
