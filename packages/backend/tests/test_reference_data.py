@@ -332,6 +332,21 @@ BRANCH_LIST = csv_bytes(
 )
 
 
+def _header_item(kind: str, upload_id: str, filename: str | None) -> dict:
+    """A list's header item as the app writes it, without expires_at."""
+    return {
+        "PK": PK,
+        "SK": f"REFDATA#{kind}",
+        "kind": kind,
+        "upload_id": upload_id,
+        "filename": filename,
+        "row_count": 1,
+        "chunks": 1,
+        "lenders": ["Axis Bank"],
+        "uploaded_at": "2026-09-25T10:00:00+00:00",
+    }
+
+
 class TestStorage:
     def test_save_writes_chunks_then_a_header_that_expires_in_seven_days(self, table):
         parsed = parse_csv("pincode_serviceability", SERVICEABILITY)
@@ -426,6 +441,71 @@ class TestStorage:
         assert reference_data.load(PROJECT_ID, "pincode_serviceability", later) is None
         assert reference_data.status(PROJECT_ID, later)["pincode_serviceability"] is None
         assert reference_data.serviceable(PROJECT_ID, "HDFC Bank", "401202", later) is None
+
+    def test_a_company_list_is_kept_until_a_new_one_replaces_it(self, table):
+        # Company names and categories are business data, not client data: no TTL, as the policy sheet.
+        category = next(iter(eligibility.load_policy_book().lender("axis_bank").company_categories))
+        data = csv_bytes("lender,company,category", f"Axis Bank,Example Tech Private Limited,{category}")
+        stored = reference_data.save(PROJECT_ID, parse_csv("company_categories", data), "companies.csv", NOW)
+
+        assert stored.expires_at is None and stored.expires_on() is None
+        header = table.items[(PK, "REFDATA#company_categories")]
+        assert "expires_at" not in header and header["row_count"] == 1
+        chunks = table.of(f"REFDATA#company_categories#{stored.upload_id}#")
+        assert len(chunks) == 1 and "expires_at" not in chunks[0]
+        assert stored.source()["licence"] == "Your own data (no client data): kept until you upload a new list"
+
+        later = NOW + dt.timedelta(days=60)
+        reference_data.reset_cache()
+        assert reference_data.load(PROJECT_ID, "company_categories", later).upload_id == stored.upload_id
+        assert reference_data.status(PROJECT_ID, later)["company_categories"]["filename"] == "companies.csv"
+        assert reference_data.company_category(PROJECT_ID, "axis_bank", "Example Tech Pvt Ltd", later) == category
+        assert reference_data.calculation_lists(PROJECT_ID, later).companies.upload_id == stored.upload_id
+
+        replacement = csv_bytes("lender,company,category", f"Axis Bank,Other Example Co,{category}")
+        second = reference_data.save(PROJECT_ID, parse_csv("company_categories", replacement), None, later)
+        assert table.of(f"REFDATA#company_categories#{stored.upload_id}#") == []
+        assert table.items[(PK, "REFDATA#company_categories")]["upload_id"] == second.upload_id
+        assert reference_data.company_category(PROJECT_ID, "axis_bank", "Example Tech Pvt Ltd", later) is None
+        assert reference_data.company_category(PROJECT_ID, "axis_bank", "Other Example Co", later) == category
+        assert reference_data.delete(PROJECT_ID, "company_categories", later + dt.timedelta(days=365)) is True
+        assert table.of("REFDATA#") == []
+
+    def test_an_older_company_list_with_a_ttl_keeps_expiring(self, table):
+        # Written by the earlier app with expires_at (upload + 7 days): used until then, not after.
+        category = next(iter(eligibility.load_policy_book().lender("axis_bank").company_categories))
+        rows = [["axis_bank", "Example Tech Private Limited", category]]
+        header = {
+            **_header_item("company_categories", "old", "old.csv"),
+            "expires_at": int(NOW.timestamp()) + 86400,
+        }
+        table.put_item(Item=header)
+        table.put_item(
+            Item={"PK": PK, "SK": "REFDATA#company_categories#old#0000", "rows": json.dumps(rows), "expires_at": 1}
+        )
+        loaded = reference_data.load(PROJECT_ID, "company_categories", NOW)
+        assert loaded.expires_at == int(NOW.timestamp()) + 86400
+        assert loaded.source()["licence"] == f"Your own data, deleted on {(NOW + dt.timedelta(days=1)):%d %b %Y}"
+        assert reference_data.company_category(PROJECT_ID, "axis_bank", "Example Tech Pvt Ltd", NOW) == category
+
+        reference_data.reset_cache()
+        past = NOW + dt.timedelta(days=1)
+        assert reference_data.load(PROJECT_ID, "company_categories", past) is None
+        assert reference_data.status(PROJECT_ID, past)["company_categories"] is None
+        assert reference_data.company_category(PROJECT_ID, "axis_bank", "Example Tech Pvt Ltd", past) is None
+        assert reference_data.calculation_lists(PROJECT_ID, past) is None
+        assert reference_data.delete(PROJECT_ID, "company_categories", past) is False
+        assert table.of("REFDATA#") == []
+
+    @pytest.mark.parametrize("kind", ["pincode_serviceability", "lender_branches", "lender_grid"])
+    def test_the_other_kinds_still_expire_and_are_not_used_without_a_ttl(self, kind):
+        # Unchanged: these lists are written with a TTL; a header without one is not used.
+        item = _header_item(kind, "u1", None)
+        assert reference_data._live(kind, item, NOW) is False
+        assert reference_data._live(kind, {**item, "expires_at": int(NOW.timestamp()) + 1}, NOW) is True
+        assert reference_data._live(kind, {**item, "expires_at": int(NOW.timestamp())}, NOW) is False
+        assert reference_data._live("company_categories", item, NOW) is True
+        assert reference_data._live("company_categories", None, NOW) is False
 
     def test_delete_removes_the_header_and_the_rows(self, table):
         reference_data.save(PROJECT_ID, parse_csv("lender_branches", BRANCH_LIST), None, NOW)

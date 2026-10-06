@@ -28,12 +28,16 @@ refused with its problems (the first MAX_ERRORS), so a list is never half applie
 duplicate rows are dropped. An accepted list comes with notes on what to check: pincodes the
 India Post directory does not know, and lenders the app does not know.
 
-Storage (DynamoDB, deleted by TTL on expires_at, and with the project): one list per kind,
-PK = PROJ#{project_id}, with
+Storage (DynamoDB, deleted with the project, and by TTL on expires_at where there is one): one
+list per kind, PK = PROJ#{project_id}, with
 - SK = REFDATA#{kind}: upload_id, filename, row and chunk counts, lenders, uploaded_at and
-  expires_at = upload time + the retention period (default 7 days);
+  expires_at = upload time + the retention period (default 7 days). A company_categories list
+  (KEPT_KINDS) has no expires_at: company names and their categories are business data, not
+  client data, so it is kept until a new upload replaces it or it is removed, as the lender
+  policy workbook is (app/lender_policy.py); an older company list that still carries a TTL
+  keeps expiring as before. The other kinds expire as before;
 - SK = REFDATA#{kind}#{upload_id}#{n:04d}: the parsed rows as compact JSON, at most
-  CHUNK_BYTES each (a DynamoDB item holds 400 KB), same expires_at.
+  CHUNK_BYTES each (a DynamoDB item holds 400 KB), same expires_at (none for a kept kind).
 A new upload writes its chunks, then points the header at them, then deletes the previous
 upload's chunks, so a reader never sees half a list. The lists hold lender, branch, pincode
 and company names only: no applicant data.
@@ -78,6 +82,9 @@ KIND_DESCRIPTIONS = {
     "multipliers and FOIR by net-salary slab and company category; a lender listed here is calculated with this grid "
     "instead of the sample policy.",
 }
+# Kinds stored without a TTL (business data with no personal data): kept until a new upload
+# replaces the list or it is removed. The other kinds expire after the retention period.
+KEPT_KINDS: tuple[Kind, ...] = ("company_categories",)
 COLUMNS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "pincode_serviceability": (("lender", "pincode"), ("serviceable",)),
     "lender_branches": (("lender", "branch", "pincode"), ("address", "city", "district", "state", "ifsc")),
@@ -633,14 +640,18 @@ class StoredList:
     upload_id: str
     filename: str | None
     uploaded_at: str
-    expires_at: int
+    expires_at: int | None  # None: kept until a new upload replaces it (KEPT_KINDS)
     rows: list[list] = field(repr=False)
     lenders: list[str]
     _index: Any = field(default=None, repr=False)
 
+    def expires_on(self) -> str | None:
+        if self.expires_at is None:
+            return None
+        return dt.datetime.fromtimestamp(self.expires_at, dt.UTC).strftime("%d %b %Y")
+
     def source(self) -> dict[str, Any]:
         """The `sources` entry of an answer that used this list."""
-        expires = dt.datetime.fromtimestamp(self.expires_at, dt.UTC).strftime("%d %b %Y")
         try:
             uploaded = dt.datetime.fromisoformat(self.uploaded_at).strftime("%d %b %Y")
         except ValueError:
@@ -649,7 +660,11 @@ class StoredList:
         detail = f"{self.filename}, uploaded {uploaded}" if self.filename else f"uploaded {uploaded}"
         return {
             "name": f"{name} ({detail})",
-            "licence": f"Your own data, deleted on {expires}",
+            "licence": (
+                "Your own data (no client data): kept until you upload a new list"
+                if self.expires_at is None
+                else f"Your own data, deleted on {self.expires_on()}"
+            ),
             "url": None,
         }
 
@@ -745,12 +760,21 @@ def _chunks(rows: list[list]) -> list[str]:
     return out
 
 
+def _live(kind: str, item: dict[str, Any] | None, now: dt.datetime) -> bool:
+    """Whether a header item is still used: not past its expires_at; without one, only a kind of
+    KEPT_KINDS (kept until a new upload replaces it), as the lender policy's header is."""
+    if not item:
+        return False
+    ttl = item.get(TTL_ATTRIBUTE)
+    if ttl is None:
+        return kind in KEPT_KINDS
+    return int(ttl) > int(now.timestamp())
+
+
 def _header(project_id: str, kind: str, now: dt.datetime) -> dict[str, Any] | None:
     """The kind's live header item, or None (also when past expires_at but not yet removed by TTL)."""
     item = get_table().get_item(Key=_header_key_of(project_id, kind), ConsistentRead=True).get("Item")
-    if not item or int(item.get(TTL_ATTRIBUTE) or 0) <= int(now.timestamp()):
-        return None
-    return item
+    return item if _live(kind, item, now) else None
 
 
 def _delete_chunks(project_id: str, kind: str, upload_id: str) -> None:
@@ -773,7 +797,9 @@ def save(project_id: str, parsed: ParsedList, filename: str | None, now: dt.date
     table = get_table()
     previous = _header(project_id, parsed.kind, now)
     upload_id = uuid.uuid4().hex
-    expires_at = int(now.timestamp()) + get_config().retention_days * 86400
+    # A kept kind has no TTL at all (the attribute absent, so DynamoDB never removes the items).
+    expires_at = None if parsed.kind in KEPT_KINDS else int(now.timestamp()) + get_config().retention_days * 86400
+    ttl = {} if expires_at is None else {TTL_ATTRIBUTE: expires_at}
     chunks = _chunks(parsed.rows)
     for n, chunk in enumerate(chunks):
         table.put_item(
@@ -781,7 +807,7 @@ def save(project_id: str, parsed: ParsedList, filename: str | None, now: dt.date
                 "PK": _pk(project_id),
                 "SK": f"{_chunk_prefix(parsed.kind, upload_id)}{n:04d}",
                 "rows": chunk,
-                TTL_ATTRIBUTE: expires_at,
+                **ttl,
             }
         )
     stored = StoredList(
@@ -803,7 +829,7 @@ def save(project_id: str, parsed: ParsedList, filename: str | None, now: dt.date
             "chunks": len(chunks),
             "lenders": parsed.lenders[:MAX_LISTED_LENDERS],
             "uploaded_at": stored.uploaded_at,
-            TTL_ATTRIBUTE: expires_at,
+            **ttl,
         }
     )
     if previous and previous.get("upload_id"):
@@ -845,7 +871,7 @@ def load(project_id: str, kind: Kind, now: dt.datetime) -> StoredList | None:
         upload_id=upload_id,
         filename=header.get("filename"),
         uploaded_at=str(header.get("uploaded_at") or ""),
-        expires_at=int(header[TTL_ATTRIBUTE]),
+        expires_at=None if header.get(TTL_ATTRIBUTE) is None else int(header[TTL_ATTRIBUTE]),
         rows=rows,
         lenders=[str(x) for x in header.get("lenders") or []],
     )
@@ -864,7 +890,7 @@ def delete(project_id: str, kind: Kind, now: dt.datetime) -> bool:
     get_table().delete_item(Key=_header_key_of(project_id, kind))
     if item.get("upload_id"):
         _delete_chunks(project_id, kind, str(item["upload_id"]))
-    return int(item.get(TTL_ATTRIBUTE) or 0) > int(now.timestamp())
+    return _live(kind, item, now)
 
 
 def status(project_id: str, now: dt.datetime) -> dict[Kind, dict[str, Any] | None]:

@@ -21,9 +21,11 @@ grid). With ?preview=true the file is checked and shown (a grid as its lender po
 saved, so the UI shows a preview before Save. The body is the CSV file itself (Content-Type text/csv, or what a browser
 sends for a .csv file: application/vnd.ms-excel, application/octet-stream) with ?kind= and
 ?filename=, or multipart/form-data with a `file` part (and a `kind` part). A list replaces the
-previous list of its kind and is deleted after the retention period (default 7 days, DynamoDB
-TTL), or with the project. Lists hold lender, branch, pincode and company names, no applicant
-data, and nothing about the applicant is logged here.
+previous list of its kind. A pincode, branch or grid list is deleted after the retention period
+(default 7 days, DynamoDB TTL), or with the project; a company list holds no client data, so it
+is kept until a new upload replaces it or it is removed (expires_at null in the answers). Lists
+hold lender, branch, pincode and company names, no applicant data, and nothing about the
+applicant is logged here.
 """
 
 import datetime as dt
@@ -145,7 +147,11 @@ class ReferenceListOut(BaseModel):
     rows: int = 0
     lenders: list[str] = []
     uploaded_at: str | None = None
-    expires_at: str | None = Field(default=None, description="When the list is deleted (DynamoDB TTL)")
+    expires_at: str | None = Field(
+        default=None,
+        description="When the list is deleted (DynamoDB TTL); null for a company list, kept until a new upload "
+        "replaces it (company names, not client data)",
+    )
     duplicates: int | None = Field(default=None, description="Identical duplicate rows dropped (upload answer only)")
     notes: list[str] = Field(
         default=[], description="What to check in the accepted list, e.g. unknown pincodes (upload answer only)"
@@ -361,7 +367,8 @@ def list_reference_data(project_id: ProjectId, user_id: UserId) -> ReferenceData
         413: {"model": ErrorResponse, "description": "The file is too large"},
         415: {"model": ErrorResponse, "description": "Not a CSV file"},
     },
-    summary="Upload one of your lists as CSV: replaces that kind's list, deleted after the retention period",
+    summary="Upload one of your lists as CSV: replaces that kind's list, deleted after the retention period "
+    "(a company list is kept until a new one replaces it)",
     openapi_extra={
         "requestBody": {
             "required": True,

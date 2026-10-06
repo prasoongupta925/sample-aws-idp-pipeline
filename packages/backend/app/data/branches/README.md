@@ -84,8 +84,9 @@ towns are real, so that distances can be shown. Replace them with your own branc
 names are understood too (Bank, Pin Code, Branch Name, Company Name ...). UTF-8 (as Excel's
 "CSV UTF-8" saves it) or Windows-1252, separated by commas, semicolons or tabs, at most 4 MB.
 A file with any bad row is refused with its problems listed, so a list is never half used.
-A new upload replaces that kind's previous list; a list is deleted after 7 days (the app's
-retention period) or with the project.
+A new upload replaces that kind's previous list; a pincode, branch or grid list is deleted after
+7 days (the app's retention period) or with the project. A company list holds no client data, so
+it is kept until a new upload replaces it or it is removed.
 
 `pincode_serviceability`: where each lender lends. A lender listed here is serviceable at
 exactly the pincodes marked serviceable (yes, y, true, 1 or blank); a pincode marked no, or

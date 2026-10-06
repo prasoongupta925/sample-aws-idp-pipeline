@@ -11,11 +11,12 @@ DELETE /eligibility/lender-policy/company-list          remove it
 
 The workbook is read by app/policy_workbook.py: .xlsx only (a macro workbook, .xlsm, is refused),
 at most lender_policy.MAX_UPLOAD_BYTES, no formula is ever executed. It is stored by
-app/lender_policy.py (S3 + DynamoDB, deleted after the retention period) and used by every
-project's eligibility calculation for its banks. The body is the file itself (Content-Type of an
-.xlsx, or application/octet-stream) with ?filename=, or multipart/form-data with a `file` part.
-The workbook and the company list hold lender terms and company names only: no applicant data,
-and nothing of their content is logged.
+app/lender_policy.py (S3 + DynamoDB, no TTL: kept until a new upload replaces it or an admin
+removes it) and used by every project's eligibility calculation for its banks. The body is the
+file itself (Content-Type of an .xlsx, or application/octet-stream) with ?filename=, or
+multipart/form-data with a `file` part. The workbook and the company list hold lender terms and
+company names only: no applicant data (so the company list is kept until replaced too,
+reference_data.KEPT_KINDS), and nothing of their content is logged.
 """
 
 import datetime as dt

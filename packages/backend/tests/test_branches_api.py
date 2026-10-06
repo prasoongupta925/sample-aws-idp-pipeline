@@ -178,6 +178,27 @@ class TestUpload:
             "template": None,
         }
 
+    def test_a_company_list_is_kept_until_a_new_one_replaces_it(self, tables, monkeypatch):
+        # Company names, no client data: no expires_at, still listed 60 days on (the other kinds expire).
+        category = next(iter(eligibility.load_policy_book().lender("axis_bank").company_categories))
+        data = csv_bytes("lender,company,category", f"Axis Bank,Example Tech Private Limited,{category}")
+        response = upload("company_categories", data, "companies.csv")
+        assert response.status_code == 200, response.text
+        assert (response.json()["uploaded"], response.json()["rows"], response.json()["expires_at"]) == (True, 1, None)
+        assert "expires_at" not in tables[1].items[(f"PROJ#{PROJECT_ID}", "REFDATA#company_categories")]
+        upload("lender_branches", BRANCH_LIST, "branches.csv")
+
+        monkeypatch.setattr(branches_router, "_now", lambda: NOW + dt.timedelta(days=60))
+        body = client.get(f"{BASE}/reference-data", headers=HEADERS).json()
+        lists = {item["kind"]: item for item in body["lists"]}
+        companies = lists["company_categories"]
+        assert (companies["uploaded"], companies["filename"], companies["expires_at"]) == (True, "companies.csv", None)
+        assert lists["lender_branches"]["uploaded"] is False
+        assert client.delete(f"{BASE}/reference-data/company_categories", headers=HEADERS).json() == {
+            "kind": "company_categories",
+            "deleted": True,
+        }
+
     def test_the_web_apps_octet_stream_upload(self, tables):
         response = upload("lender_branches", BRANCH_LIST, content_type="application/octet-stream")
         assert response.status_code == 200
