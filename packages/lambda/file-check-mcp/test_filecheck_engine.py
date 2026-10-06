@@ -1908,3 +1908,16 @@ def test_credit_reports_and_other_eligibility_documents_are_known_types(pl):
         {'id': 'credit_report', 'label': 'Credit report', 'doc_types': ['credit_report'],
          'required': False, 'rule': {'kind': 'present'}})
     assert engine.validate_catalog(cat) == []
+
+
+def test_bank_salary_needs_two_months_to_count(pl):
+    a = _applicant(rahul(), pl)
+    income = a['income']
+    assert income['bank_salary_months'] >= 2
+    assert income['bank_salary_credit_verified'] == income['bank_salary_credit']
+
+
+def test_one_bank_credit_does_not_lower_the_slip_salary():
+    import loan_tools
+    one = {'income': {'slip_net': 95353, 'bank_salary_credit': 7678, 'bank_salary_credit_verified': None}}
+    assert loan_tools.verified_income(one) == {'amount': 95353, 'source': 'salary slips, median net pay'}

@@ -526,7 +526,7 @@ def verified_income(applicant):
         (value, source)
         for value, source in (
             (income.get('slip_net'), 'salary slips, median net pay'),
-            (income.get('bank_salary_credit'), 'bank salary credits, median'),
+            (income.get('bank_salary_credit_verified', income.get('bank_salary_credit')), 'bank salary credits, median'),
         )
         if _positive(value)
     ]

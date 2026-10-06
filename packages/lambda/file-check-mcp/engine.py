@@ -1673,7 +1673,7 @@ def _foir(obligations, income, checklist, octx=None):
         (v, label)
         for v, label in (
             (income.get('slip_net'), 'salary slips, median net pay'),
-            (income.get('bank_salary_credit'), 'bank salary credits, median'),
+            (income.get('bank_salary_credit_verified', income.get('bank_salary_credit')), 'bank salary credits, median'),
         )
         if v
     ]
@@ -1969,6 +1969,10 @@ def _consistency(docs, checklist, tol, f16_tol, emi_tol):
     net_med = median(v for _, v in slip_net) if slip_net else None
     gross_med = median(v for _, v in slip_gross) if slip_gross else None
     bank_med = median(c['amount'] for _, c in credits) if credits else None
+    # Bank credits corroborate the salary only when they repeat: one credit (often a misread
+    # refund, interest or transfer) must not lower a salary the slips agree on.
+    bank_months = len({str(c.get('date') or '')[:7] for _, c in credits if c.get('date')}) or len(credits)
+    bank_verified = bank_med if bank_med and bank_months >= 2 else None
     f16 = [
         (d['document_name'], d['fields']['gross_salary'])
         for d in by_type.get('form16_itr', [])
@@ -1979,6 +1983,8 @@ def _consistency(docs, checklist, tol, f16_tol, emi_tol):
         'slip_net': net_med,
         'slip_gross': gross_med,
         'bank_salary_credit': bank_med,
+        'bank_salary_months': bank_months,
+        'bank_salary_credit_verified': bank_verified,
         'form16_gross': f16[0][1] if f16 else None,
         'slip_gross_x12': gross_med * 12 if gross_med else None,
         'bank_credits': [

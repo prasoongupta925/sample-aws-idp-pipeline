@@ -88,7 +88,10 @@ TOOL_SCHEMA = {
         'statement_to': {**_STR, 'description': 'Bank statement period end as YYYY-MM-DD'},
         'salary_credits': {
             'type': 'array',
-            'description': 'Bank statement: EVERY salary credit row (narration contains SAL / SALARY), one per month',
+            'description': ('Bank statement: EVERY salary credit row, one per month: a credit whose narration contains SAL / SALARY, '
+                            'OR the employer\'s monthly NEFT / RTGS / IMPS credit (the same company on about the same date '
+                            'each month, with a similar amount). Never a UPI transfer from a person, a refund, a reversal, '
+                            'interest, a cash deposit or a one-off credit'),
             'items': {
                 'type': 'object',
                 'properties': {
