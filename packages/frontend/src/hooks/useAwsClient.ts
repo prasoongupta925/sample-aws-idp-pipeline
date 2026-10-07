@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useLayoutEffect, useRef } from 'react';
 import { useAuth } from 'react-oidc-context';
 import { fromCognitoIdentityPool } from '@aws-sdk/credential-provider-cognito-identity';
 import { AwsClient } from 'aws4fetch';
@@ -162,46 +162,71 @@ export function useAwsClient() {
   const { apis, cognitoProps, agentRuntimeArn, bidiAgentRuntimeArn } =
     useRuntimeConfig();
   const { user } = useAuth();
-  const credentialsRef = useRef<Credentials | null>(null);
-  const pendingRef = useRef<Promise<Credentials> | null>(null);
+  // The functions below read these through a ref, so they keep their identity
+  // when a silent token renewal (about hourly) brings a new `user`: callers key
+  // effects on them (a new identity reloaded the whole project page). Each
+  // call reads the current id_token.
+  const latest = useRef({ apis, cognitoProps, agentRuntimeArn, user });
+  useLayoutEffect(() => {
+    latest.current = { apis, cognitoProps, agentRuntimeArn, user };
+  }, [apis, cognitoProps, agentRuntimeArn, user]);
+  // Credentials are kept per id_token: a renewed token gets new ones.
+  const credentialsRef = useRef<{
+    idToken: string;
+    credentials: Credentials;
+  } | null>(null);
+  const pendingRef = useRef<{
+    idToken: string;
+    promise: Promise<Credentials>;
+  } | null>(null);
 
-  /** Get AWS credentials from the Cognito Identity Pool */
+  /** Get AWS credentials from the Cognito Identity Pool (current id_token) */
   const getCredentials = useCallback(async (): Promise<Credentials> => {
-    if (!cognitoProps || !user?.id_token) {
+    const { cognitoProps, user } = latest.current;
+    const idToken = user?.id_token;
+    if (!cognitoProps || !idToken) {
       throw new Error('Cognito props or user token not available');
     }
 
     const cached = credentialsRef.current;
     const isValid =
-      cached?.expiration &&
-      cached.expiration.getTime() - Date.now() > CREDENTIAL_REFRESH_BUFFER_MS;
+      cached?.idToken === idToken &&
+      cached.credentials.expiration &&
+      cached.credentials.expiration.getTime() - Date.now() >
+        CREDENTIAL_REFRESH_BUFFER_MS;
 
-    if (isValid) return cached;
+    if (isValid) return cached.credentials;
 
-    if (pendingRef.current) return pendingRef.current;
+    const pending = pendingRef.current;
+    if (pending?.idToken === idToken) return pending.promise;
 
-    pendingRef.current = fromCognitoIdentityPool({
+    const promise = fromCognitoIdentityPool({
       clientConfig: { region: cognitoProps.region },
       identityPoolId: cognitoProps.identityPoolId,
       logins: {
         [`cognito-idp.${cognitoProps.region}.amazonaws.com/${cognitoProps.userPoolId}`]:
-          user.id_token,
+          idToken,
       },
     })()
       .then((credentials) => {
-        credentialsRef.current = credentials;
+        // Not kept when a newer token's request replaced this one meanwhile.
+        if (pendingRef.current?.promise === promise) {
+          credentialsRef.current = { idToken, credentials };
+        }
         return credentials;
       })
       .finally(() => {
-        pendingRef.current = null;
+        if (pendingRef.current?.promise === promise) pendingRef.current = null;
       });
+    pendingRef.current = { idToken, promise };
 
-    return pendingRef.current;
-  }, [cognitoProps, user]);
+    return promise;
+  }, []);
 
   /** Create a SigV4-signed AWS client */
   const createAwsClient = useCallback(
     async (service: string, region?: string) => {
+      const { cognitoProps } = latest.current;
       if (!cognitoProps) throw new Error('Cognito props not available');
 
       const credentials = await getCredentials();
@@ -213,12 +238,13 @@ export function useAwsClient() {
         service,
       });
     },
-    [cognitoProps, getCredentials],
+    [getCredentials],
   );
 
   /** Call the backend API */
   const fetchApi = useCallback(
     async <T>(path: string, options?: RequestInit): Promise<T> => {
+      const { apis, user } = latest.current;
       if (!apis?.Backend) throw new Error('Backend API URL not available');
       if (!user?.id_token) throw new Error('User token not available');
 
@@ -242,12 +268,13 @@ export function useAwsClient() {
       const text = await response.text();
       return text ? (JSON.parse(text) as T) : (undefined as T);
     },
-    [apis, createAwsClient, user],
+    [createAwsClient],
   );
 
   /** Call the backend API (Blob response: images and other binaries) */
   const fetchApiBlob = useCallback(
     async (path: string, options?: RequestInit): Promise<Blob> => {
+      const { apis, user } = latest.current;
       if (!apis?.Backend) throw new Error('Backend API URL not available');
       if (!user?.id_token) throw new Error('User token not available');
 
@@ -266,7 +293,7 @@ export function useAwsClient() {
 
       return response.blob();
     },
-    [apis, createAwsClient, user],
+    [createAwsClient],
   );
 
   /** Invoke the Bedrock agent (streaming) */
@@ -282,6 +309,7 @@ export function useAwsClient() {
       modelId?: string,
       reasoning?: string,
     ): Promise<string> => {
+      const { agentRuntimeArn, user } = latest.current;
       const targetArn = runtimeArn || agentRuntimeArn;
       if (!targetArn) throw new Error('Agent runtime ARN not available');
       if (!user?.id_token) throw new Error('User token not available');
@@ -327,7 +355,7 @@ export function useAwsClient() {
 
       return JSON.stringify(await response.json());
     },
-    [agentRuntimeArn, createAwsClient, user],
+    [createAwsClient],
   );
 
   // S3 access: the Cognito identity has no S3 permissions. The backend checks

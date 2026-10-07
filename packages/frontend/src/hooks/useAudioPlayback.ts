@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { calculateAudioLevel } from '../lib/audioUtils';
 
 function base64ToInt16Array(base64: string): Int16Array {
@@ -137,5 +137,9 @@ export function useAudioPlayback(): UseAudioPlaybackReturn {
     };
   }, [releaseResources]);
 
-  return { isPlaying, enqueueAudio, stop, audioLevel };
+  // Same object until a field changes: useVoiceChat lists it whole in hook deps.
+  return useMemo(
+    () => ({ isPlaying, enqueueAudio, stop, audioLevel }),
+    [isPlaying, enqueueAudio, stop, audioLevel],
+  );
 }

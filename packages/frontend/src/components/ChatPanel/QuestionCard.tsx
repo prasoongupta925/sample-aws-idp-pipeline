@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '../../lib/utils';
 
@@ -96,12 +96,8 @@ function QuestionPrompt({
   const customEnabled = question.allowCustom ?? false;
   const isLast = questionIndex >= totalQuestions;
 
-  // Reset local state whenever the active question changes.
-  useEffect(() => {
-    setSelectedIds([]);
-    setCustomText('');
-    setTextValue('');
-  }, [question]);
+  // Starts empty for each new question: QuestionCard keys this prompt on the
+  // question's content (a reset effect on the object fired on every re-render).
 
   const canSubmit = useMemo(() => {
     if (question.kind === 'text') return textValue.trim().length > 0;
@@ -318,6 +314,11 @@ export function QuestionCard({
 
   if (!question) return null;
 
+  // A new question gets a fresh prompt. Keyed on the content, not the object:
+  // parseAskSpec re-creates it on every parent render (a streaming reply, typing),
+  // and that must not wipe what the user typed or picked.
+  const promptKey = `${clampedIndex}-${JSON.stringify(question)}`;
+
   return (
     <div className="overflow-hidden rounded-[10px] border border-blue-200 dark:border-blue-900/50 bg-blue-50/60 dark:bg-blue-900/10">
       <div className="flex h-7 items-center justify-between border-b border-blue-100 dark:border-blue-900/40 px-3 text-xs">
@@ -338,7 +339,7 @@ export function QuestionCard({
         </div>
       ) : (
         <QuestionPrompt
-          key={`${clampedIndex}-${question.title}`}
+          key={promptKey}
           question={question}
           questionIndex={clampedIndex}
           totalQuestions={totalQuestions}

@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type PropsWithChildren,
@@ -313,11 +314,12 @@ export function WebSocketProvider({ children }: PropsWithChildren) {
     };
   }, [status, connect]);
 
-  const value: WebSocketContextValue = {
-    status,
-    subscribe,
-    sendMessage,
-  };
+  // Same value until the status changes (subscribe and sendMessage never do), so
+  // a provider re-render does not re-render every useWebSocket caller.
+  const value = useMemo<WebSocketContextValue>(
+    () => ({ status, subscribe, sendMessage }),
+    [status, subscribe, sendMessage],
+  );
 
   return (
     <WebSocketContext.Provider value={value}>
