@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 /** Where the project page shows the chat (per browser).
  * - "compact" (default): documents, file check and eligibility get the full width; the chat opens
@@ -72,5 +72,9 @@ export function useChatLayout() {
     if (compact) setOpen(true);
   }, [compact]);
 
-  return { mode, compact, open, setOpen, setMode, reveal };
+  // Same object until the layout changes: callers list it in hook dependencies.
+  return useMemo(
+    () => ({ mode, compact, open, setOpen, setMode, reveal }),
+    [mode, compact, open, setMode, reveal],
+  );
 }
