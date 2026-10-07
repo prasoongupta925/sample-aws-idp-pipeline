@@ -1,5 +1,12 @@
 import { createFileRoute, Link } from '@tanstack/react-router';
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import { nanoid } from 'nanoid';
 import { useAwsClient } from '../../hooks/useAwsClient';
@@ -253,30 +260,38 @@ function ProjectDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
-  // --- Initial data load ---
+  // --- Initial data load: once per project ---
+  // Keyed on projectId alone, the loaders read through a ref: a loader with a
+  // new identity (each token renewal made one) must not load again, since
+  // `loading` swaps the page for the loader and unmounts the chat, the panels
+  // and any open dialog. Later refetches never show the loader.
+  const loadAll = () =>
+    Promise.all([
+      projectData.loadProject(),
+      documentsHook.loadDocuments(),
+      documentsHook.loadWorkflows(),
+      chatSession.loadSessions(),
+      agentsHook.loadAgents(),
+      artifactsHook.loadArtifacts(),
+    ]);
+  const loadAllRef = useRef(loadAll);
+  useLayoutEffect(() => {
+    loadAllRef.current = loadAll;
+  });
+  const { setLoading } = projectData;
   useEffect(() => {
+    let cancelled = false;
     const load = async () => {
-      projectData.setLoading(true);
-      await Promise.all([
-        projectData.loadProject(),
-        documentsHook.loadDocuments(),
-        documentsHook.loadWorkflows(),
-        chatSession.loadSessions(),
-        agentsHook.loadAgents(),
-        artifactsHook.loadArtifacts(),
-      ]);
-      projectData.setLoading(false);
+      setLoading(true);
+      await loadAllRef.current();
+      // After a project switch the newer load ends the loading.
+      if (!cancelled) setLoading(false);
     };
     load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    projectData.loadProject,
-    documentsHook.loadDocuments,
-    documentsHook.loadWorkflows,
-    chatSession.loadSessions,
-    agentsHook.loadAgents,
-    artifactsHook.loadArtifacts,
-  ]);
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, setLoading]);
 
   // Fetch real step progress for in-progress workflows on page load (once)
   useEffect(() => {
@@ -318,25 +333,28 @@ function ProjectDetailPage() {
   const [pendingModelChange, setPendingModelChange] = useState<string | null>(
     null,
   );
+  // Only the fields used: chatSession is a new object on every render.
+  const { modelId, setModelId, sending } = chatSession;
+  const hasMessages = chatSession.messages.length > 0;
   const handleModelChange = useCallback(
     (modelValue: string) => {
-      if (modelValue === chatSession.modelId) return;
-      if (chatSession.messages.length > 0 || chatSession.sending) {
+      if (modelValue === modelId) return;
+      if (hasMessages || sending) {
         setPendingModelChange(modelValue);
       } else {
-        chatSession.setModelId(modelValue);
+        setModelId(modelValue);
       }
     },
-    [chatSession],
+    [modelId, hasMessages, sending, setModelId],
   );
   const confirmModelChange = useCallback(() => {
     if (pendingModelChange) {
-      chatSession.setModelId(pendingModelChange);
+      setModelId(pendingModelChange);
       // Start a fresh chat and remember the model for the new session id.
       handleNewSession(pendingModelChange);
     }
     setPendingModelChange(null);
-  }, [pendingModelChange, chatSession, handleNewSession]);
+  }, [pendingModelChange, setModelId, handleNewSession]);
 
   // handleSessionSelect with agent/voice context
   const handleSessionSelect = useCallback(

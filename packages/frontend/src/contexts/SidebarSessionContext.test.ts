@@ -1,7 +1,7 @@
 // @vitest-environment node
-// (The workspace's jsdom install cannot start.) The sidebar publishes fixed callback
-// wrappers so a page whose handlers change on every render cannot loop; the wrappers
-// are plain functions, tested here.
+// The sidebar publishes fixed callback wrappers so a page whose handlers change on
+// every render cannot loop. The wrappers are plain functions, tested here without a
+// DOM; SidebarSessionContext.render.test.tsx renders the provider and pages.
 import { delegatingSidebarCallbacks } from './SidebarSessionContext';
 
 function handlers(tag: string, calls: string[]) {
@@ -48,10 +48,11 @@ describe('sidebar session callbacks', () => {
     ]);
   });
 
-  it('do nothing once the page is gone', async () => {
+  it('tolerate a missing publisher', async () => {
     const callbacks = delegatingSidebarCallbacks(() => null);
     expect(() => callbacks.onSessionSelect('s1')).not.toThrow();
     expect(() => callbacks.onNewSession()).not.toThrow();
+    expect(() => callbacks.onLoadMoreSessions()).not.toThrow();
     await expect(callbacks.onSessionRename('s1', 'x')).resolves.toBeUndefined();
     await expect(callbacks.onSessionDelete('s1')).resolves.toBeUndefined();
   });

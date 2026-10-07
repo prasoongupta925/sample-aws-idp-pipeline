@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type PropsWithChildren,
@@ -39,6 +40,20 @@ interface WebSocketContextValue {
 
 const WebSocketContext = createContext<WebSocketContextValue | null>(null);
 
+/**
+ * Close a socket we no longer use and detach its handlers first: its late events (a close
+ * that lands after its replacement opened) must not touch the current socket's ref,
+ * status or heartbeat.
+ */
+function retireSocket(ws: WebSocket | null) {
+  if (!ws) return;
+  ws.onopen = null;
+  ws.onmessage = null;
+  ws.onerror = null;
+  ws.onclose = null;
+  ws.close(1000, 'Manual disconnect');
+}
+
 export function WebSocketProvider({ children }: PropsWithChildren) {
   const { cognitoProps, websocketUrl } = useRuntimeConfig();
   const { user } = useAuth();
@@ -58,6 +73,8 @@ export function WebSocketProvider({ children }: PropsWithChildren) {
   // newer connect or a teardown, and bails before creating a socket.
   const connectionGenRef = useRef(0);
   const subscribersRef = useRef<Map<string, Set<MessageCallback>>>(new Map());
+  // Reconnect timers call the latest connect(), never one built with an older id_token.
+  const connectRef = useRef<() => Promise<void>>(async () => undefined);
 
   /** Get AWS credentials from the Cognito Identity Pool */
   const getCredentials = useCallback(async (): Promise<Credentials> => {
@@ -111,10 +128,8 @@ export function WebSocketProvider({ children }: PropsWithChildren) {
       heartbeatIntervalRef.current = null;
     }
 
-    if (wsRef.current) {
-      wsRef.current.close(1000, 'Manual disconnect');
-      wsRef.current = null;
-    }
+    retireSocket(wsRef.current);
+    wsRef.current = null;
 
     setStatus('disconnected');
     reconnectAttemptsRef.current = 0;
@@ -134,9 +149,9 @@ export function WebSocketProvider({ children }: PropsWithChildren) {
       return;
     }
 
-    if (wsRef.current) {
-      wsRef.current.close();
-    }
+    // A socket that is still connecting or closing is replaced.
+    retireSocket(wsRef.current);
+    wsRef.current = null;
 
     isConnectingRef.current = true;
     isManualDisconnectRef.current = false;
@@ -175,6 +190,10 @@ export function WebSocketProvider({ children }: PropsWithChildren) {
     wsRef.current = ws;
 
     ws.onopen = () => {
+      if (wsRef.current !== ws) {
+        ws.close(1000, 'Superseded');
+        return;
+      }
       isConnectingRef.current = false;
       setStatus('connected');
       reconnectAttemptsRef.current = 0;
@@ -201,6 +220,12 @@ export function WebSocketProvider({ children }: PropsWithChildren) {
     };
 
     ws.onclose = (event) => {
+      // A replaced socket's close must leave the current socket alone.
+      if (wsRef.current !== ws) return;
+      if (heartbeatIntervalRef.current) {
+        clearInterval(heartbeatIntervalRef.current);
+        heartbeatIntervalRef.current = null;
+      }
       isConnectingRef.current = false;
       setStatus('disconnected');
       wsRef.current = null;
@@ -218,11 +243,15 @@ export function WebSocketProvider({ children }: PropsWithChildren) {
 
         reconnectTimeoutRef.current = setTimeout(() => {
           reconnectAttemptsRef.current += 1;
-          connect();
+          void connectRef.current();
         }, delay);
       }
     };
   }, [websocketUrl, cognitoProps, getCredentials]);
+
+  useEffect(() => {
+    connectRef.current = connect;
+  }, [connect]);
 
   /** Subscribe to messages */
   const subscribe = useCallback(
@@ -285,11 +314,12 @@ export function WebSocketProvider({ children }: PropsWithChildren) {
     };
   }, [status, connect]);
 
-  const value: WebSocketContextValue = {
-    status,
-    subscribe,
-    sendMessage,
-  };
+  // Same value until the status changes (subscribe and sendMessage never do), so
+  // a provider re-render does not re-render every useWebSocket caller.
+  const value = useMemo<WebSocketContextValue>(
+    () => ({ status, subscribe, sendMessage }),
+    [status, subscribe, sendMessage],
+  );
 
   return (
     <WebSocketContext.Provider value={value}>

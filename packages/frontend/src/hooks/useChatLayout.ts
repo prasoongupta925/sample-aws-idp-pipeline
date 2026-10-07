@@ -43,6 +43,26 @@ export function saveChatLayoutMode(
   }
 }
 
+/** Layers that own Esc while open, most closing themselves from their own document
+ * or window listener without marking the key handled: modal dialogs, full-screen
+ * overlays (the modals, the Mermaid viewer) and the artifact viewer. The File Check,
+ * Eligibility and DSA panels share the viewer's class but are regions, and leave a
+ * handled Esc alone. */
+const ESCAPE_LAYERS = [
+  '[aria-modal="true"]',
+  '[role="alertdialog"]',
+  '.fixed.inset-0',
+  '.artifact-viewer-container:not([role="region"])',
+].join(', ');
+
+/** True while such a layer is open; useModal also locks the page scroll. */
+function escapeLayerOpen(): boolean {
+  return (
+    document.body.style.overflow === 'hidden' ||
+    document.querySelector(ESCAPE_LAYERS) !== null
+  );
+}
+
 export function useChatLayout() {
   const [mode, setModeState] = useState<ChatLayoutMode>(() =>
     readChatLayoutMode(),
@@ -57,14 +77,31 @@ export function useChatLayout() {
 
   const compact = mode === 'compact';
 
-  // Esc closes the drawer.
+  // Esc closes the drawer unless it is meant for something else: a dialog that
+  // handled it (preventDefault) or a layer open when it was pressed, looked up
+  // first (window, capture) before that layer can react and close. The decision
+  // runs on <html>: after React's handlers, before the document and window
+  // listeners of the modals, viewers and panels.
   useEffect(() => {
     if (!compact || !open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false);
+    const root = document.documentElement;
+    let layerOpen = false;
+    const look = (event: KeyboardEvent) => {
+      layerOpen = event.key === 'Escape' && escapeLayerOpen();
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing) return;
+      if (event.defaultPrevented || layerOpen) return;
+      // Handled: the File Check, Eligibility and DSA panels stay open.
+      event.preventDefault();
+      setOpen(false);
+    };
+    window.addEventListener('keydown', look, true);
+    root.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', look, true);
+      root.removeEventListener('keydown', onKey);
+    };
   }, [compact, open]);
 
   /** Opens the drawer when the chat is compact (a no-op when docked: the chat is already visible). */

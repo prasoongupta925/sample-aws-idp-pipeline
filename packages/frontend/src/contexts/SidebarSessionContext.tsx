@@ -7,7 +7,7 @@ import {
   useMemo,
   useRef,
 } from 'react';
-import type { ReactNode } from 'react';
+import type { Dispatch, ReactNode, SetStateAction } from 'react';
 import { ChatSession } from '../types/project';
 
 export interface SidebarSessionContextValue {
@@ -39,7 +39,9 @@ const noop = () => {};
 const SidebarSessionValueContext =
   createContext<SidebarSessionContextValue | null>(null);
 const SidebarSessionSetterContext =
-  createContext<(v: SidebarSessionContextValue | null) => void>(noop);
+  createContext<Dispatch<SetStateAction<SidebarSessionContextValue | null>>>(
+    noop,
+  );
 
 export function SidebarSessionProvider({ children }: { children: ReactNode }) {
   const [value, setValue] = useState<SidebarSessionContextValue | null>(null);
@@ -85,10 +87,12 @@ export function useSetSidebarSessions(
   useLayoutEffect(() => {
     latest.current = v;
   });
-  const callbacks = useMemo(
-    () => delegatingSidebarCallbacks(() => latest.current),
-    [],
+  // useState, not useMemo: the fixed identity is guaranteed, not a hint.
+  const [callbacks] = useState(() =>
+    delegatingSidebarCallbacks(() => latest.current),
   );
+  // The value this hook published last; unmounting clears only that one.
+  const publishedRef = useRef<SidebarSessionContextValue | null>(null);
 
   const published = v !== null;
   const sessions = v?.sessions;
@@ -117,7 +121,16 @@ export function useSetSidebarSessions(
   );
 
   useEffect(() => {
+    publishedRef.current = value;
     setValue(value);
   }, [value, setValue]);
-  useEffect(() => () => setValue(null), [setValue]);
+  // On unmount the sidebar stops calling this page, and a value another page
+  // published meanwhile stays.
+  useEffect(
+    () => () => {
+      latest.current = null;
+      setValue((cur) => (cur === publishedRef.current ? null : cur));
+    },
+    [setValue],
+  );
 }

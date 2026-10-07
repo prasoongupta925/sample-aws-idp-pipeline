@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { calculateAudioLevel } from '../lib/audioUtils';
 
 const SAMPLE_RATE = 16000;
@@ -194,5 +194,9 @@ export function useAudioCapture({
     };
   }, [releaseResources]);
 
-  return { isCapturing, startCapture, stopCapture, audioLevel };
+  // Same object until a field changes: useVoiceChat lists it whole in hook deps.
+  return useMemo(
+    () => ({ isCapturing, startCapture, stopCapture, audioLevel }),
+    [isCapturing, startCapture, stopCapture, audioLevel],
+  );
 }
