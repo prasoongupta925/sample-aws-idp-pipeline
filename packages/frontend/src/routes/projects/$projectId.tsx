@@ -388,19 +388,21 @@ function ProjectDetailPage() {
 
   // --- Sidebar sessions sync ---
   // The left sidebar's chat history and New chat open the chat drawer in the compact layout.
+  // Depend on the stable reveal function, never on the whole chatLayout object.
+  const revealChat = chatLayout.reveal;
   const handleSessionSelectFromSidebar = useCallback(
     (sessionId: string) => {
       handleSessionSelect(sessionId);
-      chatLayout.reveal();
+      revealChat();
     },
-    [handleSessionSelect, chatLayout],
+    [handleSessionSelect, revealChat],
   );
   const handleNewSessionFromSidebar = useCallback(
     (persistModelId?: string) => {
       handleNewSession(persistModelId);
-      chatLayout.reveal();
+      revealChat();
     },
-    [handleNewSession, chatLayout],
+    [handleNewSession, revealChat],
   );
 
   useSetSidebarSessions(
