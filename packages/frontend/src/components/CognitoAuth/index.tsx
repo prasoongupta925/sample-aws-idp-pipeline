@@ -63,28 +63,64 @@ function signinState(): { returnTo: string } | undefined {
   return returnTo ? { returnTo } : undefined;
 }
 
+// The effects depend on the auth fields they read, never on the whole `auth` object:
+// it is new after every dispatch, and removeUser()/signinRedirect() dispatch, so effects
+// keyed on it re-ran on their own and spun (hundreds of passes a second, the login page
+// never committed) whenever a token refresh failed.
 const CognitoAuthInternal: React.FC<PropsWithChildren> = ({ children }) => {
   const auth = useAuth();
+  const {
+    isAuthenticated,
+    isLoading,
+    activeNavigator,
+    error,
+    removeUser,
+    signinRedirect,
+  } = auth;
+  // A failed redirect (offline, Cognito unreachable) is shown, not retried in a loop.
+  const redirectFailed = error?.source === 'signinRedirect';
 
+  // Once per auth error (e.g. token refresh failure): drop the stale user. The error
+  // object keeps its identity through the dispatches removeUser() causes.
   useEffect(() => {
-    if (!auth.isAuthenticated && !auth.isLoading) {
-      auth.signinRedirect({ state: signinState() });
-    }
-  }, [auth]);
+    if (!error || redirectFailed) return;
+    console.error('Auth error:', error);
+    void removeUser();
+  }, [error, redirectFailed, removeUser]);
 
-  // Handle authentication errors (e.g., token refresh failure)
+  // Signed out and idle: start one sign-in redirect.
   useEffect(() => {
-    if (auth.error) {
-      console.error('Auth error:', auth.error);
-      // Clear any stale auth state and redirect to login
-      auth.removeUser().then(() => {
-        auth.signinRedirect({ state: signinState() });
-      });
-    }
-  }, [auth, auth.error]);
+    if (isAuthenticated || isLoading || activeNavigator || redirectFailed) return;
+    void signinRedirect({ state: signinState() });
+  }, [isAuthenticated, isLoading, activeNavigator, redirectFailed, signinRedirect]);
 
-  if (auth.isAuthenticated) {
+  // After a failed redirect, try once more when the network comes back.
+  useEffect(() => {
+    if (!redirectFailed) return;
+    const retry = () => void signinRedirect({ state: signinState() });
+    window.addEventListener('online', retry, { once: true });
+    return () => window.removeEventListener('online', retry);
+  }, [redirectFailed, signinRedirect]);
+
+  if (isAuthenticated) {
     return children;
+  }
+
+  if (redirectFailed) {
+    return (
+      <div className="fixed inset-0 flex items-center justify-center bg-slate-50 p-6 dark:bg-slate-900">
+        <Alert type="error" header="Could not reach the sign-in page">
+          <p>Check the internet connection, then try again.</p>
+          <button
+            type="button"
+            className="mt-3 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+            onClick={() => void signinRedirect({ state: signinState() })}
+          >
+            Try again
+          </button>
+        </Alert>
+      </div>
+    );
   }
 
   // Show loader while redirecting (including error redirect)
