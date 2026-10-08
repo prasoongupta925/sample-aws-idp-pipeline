@@ -5,7 +5,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type FocusEvent,
   type KeyboardEvent,
 } from 'react';
 import { flushSync } from 'react-dom';
@@ -32,6 +31,7 @@ import {
   type EligibilityDraft,
   type EligibilityState,
 } from '../../hooks/useEligibility';
+import { useEditHold } from '../../hooks/useEditHold';
 import { usePrecheck } from '../../hooks/usePrecheck';
 import { useTypingHold } from '../../hooks/useTypingHold';
 import {
@@ -41,6 +41,7 @@ import {
   lenderTone,
   precheckBlock,
   precheckKey,
+  precheckKeyInputs,
   precheckKeyOf,
   precheckSummary,
   precheckTabCounts,
@@ -140,6 +141,8 @@ export default function EligibilityPanel({
     lendersLoading,
     lendersError,
     loadLenders,
+    policy,
+    policyChanged,
   } = state;
   const draft: EligibilityDraft = drafts[applicant] ?? newDraft(applicant);
   const { inputs } = draft;
@@ -171,15 +174,14 @@ export default function EligibilityPanel({
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [onBack]);
 
-  // Moves on when a list the calculation reads changes (the policy sheet,
-  // the company or pincode list) and on Reload: the same inputs are checked
-  // again then. resultPolicy: its value when Check eligibility answered.
-  const [policyVersion, setPolicyVersion] = useState(0);
-  const [resultPolicy, setResultPolicy] = useState(0);
+  // A list the calculation reads changed (the policy sheet, the company or
+  // pincode list): the policy number moves on, so the same inputs are checked
+  // again. The number is the page's (useEligibility), each result keeps the
+  // one it was calculated with: closing the panel forgets neither.
   const onPolicyChanged = useCallback(() => {
-    setPolicyVersion((v) => v + 1);
+    policyChanged();
     loadLenders();
-  }, [loadLenders]);
+  }, [policyChanged, loadLenders]);
 
   const key = useMemo(() => inputsKey(inputs), [inputs]);
   const dirty = draft.loaded && key !== draft.savedKey;
@@ -203,13 +205,13 @@ export default function EligibilityPanel({
   );
   const block = useMemo(() => precheckBlock(inputs), [inputs]);
   const checkKey = useMemo(
-    () => precheckKey(applicant, inputs, policyVersion),
-    [applicant, inputs, policyVersion],
+    () => precheckKey(applicant, inputs, policy),
+    [applicant, inputs, policy],
   );
   // Check eligibility's result answers the same question for its inputs.
   const resultCheckKey = useMemo(
-    () => precheckKeyOf(applicant, draft.resultKey, resultPolicy),
-    [applicant, draft.resultKey, resultPolicy],
+    () => precheckKeyOf(applicant, draft.resultKey, draft.resultPolicy),
+    [applicant, draft.resultKey, draft.resultPolicy],
   );
   const resultFresh = !!draft.result && resultCheckKey === checkKey;
   const canPrecheck =
@@ -236,6 +238,15 @@ export default function EligibilityPanel({
   const shownResult =
     resultFresh || (!preFresh && resultLatest) ? draft.result : pre.result;
   const precheckOutdated = shownResult !== null && !resultFresh && !preFresh;
+  // The inputs that answer saw: a field still empty that no bank asked for
+  // then (a net income the file check verified) is not needed.
+  const shownKey =
+    shownResult === null
+      ? null
+      : shownResult === draft.result
+        ? resultCheckKey
+        : pre.key;
+  const answered = useMemo(() => precheckKeyInputs(shownKey), [shownKey]);
   // The fields' ids, so the box can move to one on its tab.
   const fieldPrefix = `${baseId}-field`;
   // No alarm while typing: half a company name is not "unlisted" yet. What
@@ -249,28 +260,18 @@ export default function EligibilityPanel({
     () =>
       precheckSummary(shownResult, neededAll, {
         inputs,
+        answered,
         held: typingCompany ? 'company' : null,
       }),
-    [shownResult, neededAll, inputs, typingCompany],
+    [shownResult, neededAll, inputs, answered, typingCompany],
   );
   const tabCounts = useMemo(() => precheckTabCounts(summary), [summary]);
   const refusals = useMemo(() => refusalsByField(summary.refusals), [summary]);
-  // A field of the tab is being edited: the box keeps its height meanwhile.
-  const [editing, setEditing] = useState(false);
-  const onPanelFocus = (e: FocusEvent<HTMLDivElement>) => {
-    const target = e.target;
-    setEditing(
-      target instanceof HTMLInputElement ||
-        target instanceof HTMLSelectElement ||
-        target instanceof HTMLTextAreaElement,
-    );
-  };
-  const onPanelBlur = (e: FocusEvent<HTMLDivElement>) => {
-    const next = e.relatedTarget;
-    if (!(next instanceof Node) || !e.currentTarget.contains(next)) {
-      setEditing(false);
-    }
-  };
+  // A field of the tab typed in a moment ago: the box keeps its height until
+  // 2 s after the last change, wherever focus goes meanwhile (a mouse press
+  // moves it to the button first), so a click right after typing lands on
+  // what was under the pointer.
+  const { held: editing, onChange: onFieldChange } = useEditHold();
 
   const onEdit = useCallback(
     (update: (i: EligibilityInputs) => EligibilityInputs) =>
@@ -284,12 +285,8 @@ export default function EligibilityPanel({
 
   const handleCalculate = async () => {
     if (draft.calculating || invalidNumbers > 0) return;
-    const policy = policyVersion;
     const result = await calculate(applicant, inputs);
-    if (result) {
-      setResultPolicy(policy);
-      setTab('lenders');
-    }
+    if (result) setTab('lenders');
   };
 
   // A login is recomputed from the SAVED inputs: save what is on screen first.
@@ -434,7 +431,7 @@ export default function EligibilityPanel({
               return;
             }
             // The banks are checked again too (a list may have changed).
-            setPolicyVersion((v) => v + 1);
+            policyChanged();
             load(applicant, true);
           }}
           disabled={draft.loading || draft.saving}
@@ -564,8 +561,7 @@ export default function EligibilityPanel({
         aria-labelledby={`${baseId}-tab-${tab}`}
         tabIndex={0}
         className="@container min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3 focus:outline-none"
-        onFocus={onPanelFocus}
-        onBlur={onPanelBlur}
+        onChange={onFieldChange}
       >
         {draft.loadError != null && !draft.loading ? (
           <div

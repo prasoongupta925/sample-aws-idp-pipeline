@@ -1,4 +1,4 @@
-import { useId, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import {
@@ -53,8 +53,9 @@ export interface BeforeYouCheckProps {
   /** Checks the same inputs again (after a failure). */
   onRetry?: () => void;
   /**
-   * A field below is being edited: the box keeps the height it has, so the
-   * field does not move while what the box says changes.
+   * A field below was typed in a moment ago: the box keeps the height it had
+   * before, so the field (and a button pressed right after) does not move
+   * while what the box says changes.
    */
   holdHeight?: boolean;
   /** The tab shown: fields of the other tabs are named with their tab. */
@@ -76,19 +77,16 @@ function namesText(t: TFunction, names: readonly string[]): string {
 
 /**
  * What an empty field blocks: "all 7 banks need it. ICICI Bank and Bajaj
- * Finance need only this."; null without an answer for it.
+ * Finance need only this."; null without an answer that names it (one for
+ * other inputs; a field a fresh answer does not ask for is not listed).
  */
 function blocks(
   t: TFunction,
   item: NeededField,
   total: number | null,
-  fresh: boolean,
 ): string | null {
   const { banks, only } = item;
-  if (banks === null || total === null) return null;
-  if (banks.length === 0) {
-    return fresh ? t('eligibility.precheck.neededByNone') : null;
-  }
+  if (banks === null || total === null || banks.length === 0) return null;
   const all = banks.length === total;
   if (only.length === banks.length) {
     return all
@@ -139,6 +137,49 @@ function nextStepText(t: TFunction, summary: PrecheckSummary): string | null {
   return `${enter}: ${who}`;
 }
 
+/**
+ * True while a pointer button is pressed, until the click it makes has
+ * landed: the box changes no height meanwhile, so what is under the pointer
+ * stays there. The effect depends on nothing.
+ */
+function usePointerPressed(): boolean {
+  const [pressed, setPressed] = useState(false);
+  useEffect(() => {
+    let down = false;
+    let release: ReturnType<typeof setTimeout> | undefined;
+    const press = () => {
+      clearTimeout(release);
+      down = true;
+      setPressed(true);
+    };
+    // The click follows the release in the same task: it lands first.
+    const lift = () => {
+      if (!down) return;
+      down = false;
+      clearTimeout(release);
+      release = setTimeout(() => setPressed(false), 0);
+    };
+    // A release no pointerup told of (a scrollbar dragged): the next move does.
+    const move = (e: PointerEvent) => {
+      if (down && e.buttons === 0) lift();
+    };
+    document.addEventListener('pointerdown', press, true);
+    document.addEventListener('pointerup', lift, true);
+    document.addEventListener('pointercancel', lift, true);
+    document.addEventListener('pointermove', move, true);
+    window.addEventListener('blur', lift);
+    return () => {
+      clearTimeout(release);
+      document.removeEventListener('pointerdown', press, true);
+      document.removeEventListener('pointerup', lift, true);
+      document.removeEventListener('pointercancel', lift, true);
+      document.removeEventListener('pointermove', move, true);
+      window.removeEventListener('blur', lift);
+    };
+  }, []);
+  return pressed;
+}
+
 /** Why the background check failed: a 422 names the field refused. */
 function failureText(t: TFunction, error: unknown): string {
   const invalid = invalidInput(error);
@@ -155,8 +196,9 @@ function failureText(t: TFunction, error: unknown): string {
  * tab, what would stop a bank before Check eligibility is clicked, in the
  * order to act on it: the fields still empty (each with the banks it blocks),
  * the file's open issues (documents to upload), the banks that will say no on
- * what is entered (one line per cause) and, collapsed, what to check by hand.
- * One line when nothing is in the way.
+ * what is entered (one line per cause), the likely refusals (an overdue, a
+ * written-off loan) and, collapsed, what to check by hand. One line when
+ * nothing is in the way.
  */
 export default function BeforeYouCheck({
   summary,
@@ -179,20 +221,42 @@ export default function BeforeYouCheck({
   const [allRefusals, setAllRefusals] = useState(false);
   const [byHand, setByHand] = useState(false);
   const root = useRef<HTMLElement>(null);
+  // The box at its last commit while nothing held it: its height, its words.
+  const natural = useRef({ height: 0, text: '' });
   const [height, setHeight] = useState<number | null>(null);
+  const pressed = usePointerPressed();
+  const hold = holdHeight || pressed;
 
-  // While a field below is edited the box keeps the height it had: what it
-  // says changes inside it (it scrolls), so the field never jumps.
+  // Measured after each commit while nothing holds the box (no state set).
   useLayoutEffect(() => {
-    const measured = holdHeight
-      ? (root.current?.getBoundingClientRect().height ?? 0)
-      : 0;
+    const box = root.current;
+    if (box && !hold && height === null) {
+      natural.current = {
+        height: box.getBoundingClientRect().height,
+        text: box.textContent ?? '',
+      };
+    }
+  });
+  // Held (a field below typed in, a pointer button down): the box keeps the
+  // height it has, or had before its words changed with the hold (the first
+  // keystroke); the new words scroll inside it, so nothing below moves.
+  useLayoutEffect(() => {
+    const box = root.current;
+    if (!hold || !box) {
+      setHeight(null);
+      return;
+    }
+    const measured =
+      box.textContent === natural.current.text
+        ? box.getBoundingClientRect().height
+        : natural.current.height;
     setHeight(measured > 0 ? measured : null);
-  }, [holdHeight]);
+  }, [hold]);
   const held =
     height === null ? undefined : { height, overflowY: 'auto' as const };
 
-  const { needed, refusals, fileIssues, warnings, eligible, total } = summary;
+  const { needed, refusals, fileIssues, declines, warnings, eligible, total } =
+    summary;
   const hasResult = eligible !== null && total !== null;
   // While the next check runs the last answer stays (no flicker on each edit);
   // an answer no check will replace (a value in red, a failure) is not "clear".
@@ -285,13 +349,13 @@ export default function BeforeYouCheck({
     );
   }
 
-  const groups =
-    needed.length + refusals.length + fileIssues.length + warnings.length > 0;
+  const groups = [needed, refusals, fileIssues, declines, warnings].some(
+    (list) => list.length > 0,
+  );
   // What the banks said for other inputs, no check on its way (a value in
   // red, a failure): shown faded. The still-needed fields are always the
   // inputs on screen; what each blocks is the answer's.
   const dimmed = outdated && !checking ? 'opacity-60' : undefined;
-  const fresh = hasResult && !outdated;
   const go = (item: NeededField) => onGo(item.tab, item.field);
   const shownRefusals = allRefusals
     ? refusals
@@ -363,7 +427,7 @@ export default function BeforeYouCheck({
               </p>
               <ul className="space-y-0.5 pl-4">
                 {needed.map((item) => {
-                  const what = blocks(t, item, total, fresh);
+                  const what = blocks(t, item, total);
                   return (
                     <li
                       key={item.field}
@@ -499,7 +563,27 @@ export default function BeforeYouCheck({
             </div>
           )}
 
-          {/* 4. To check by hand: collapsed until asked for */}
+          {/* 4. What lenders usually decline (an overdue, a written-off loan): shown */}
+          {declines.length > 0 && (
+            <div data-testid="precheck-declines" className={dimmed}>
+              <p className="font-semibold text-red-800 dark:text-red-300">
+                {t('eligibility.precheck.declines')}
+              </p>
+              <ul className="space-y-0.5">
+                {declines.map((note) => (
+                  <li key={note} className="flex items-start gap-1">
+                    <TriangleAlert
+                      className="mt-0.5 h-3 w-3 flex-shrink-0 text-amber-600 dark:text-amber-400"
+                      aria-hidden="true"
+                    />
+                    <span className="min-w-0 break-words">{note}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* 5. To check by hand (bank EMIs that match no loan, the sheet's conditions): collapsed until asked for */}
           {toCheck > 0 && (
             <div data-testid="precheck-confirm" className={dimmed}>
               <button
