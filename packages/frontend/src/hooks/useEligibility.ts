@@ -390,6 +390,30 @@ export function useEligibility({ fetchApi, projectId }: UseEligibilityOptions) {
   );
 
   /**
+   * POST .../calculate with the inputs on screen for the panel's "Before you
+   * check" box: the same request as Check eligibility (the backend calculates
+   * the inputs sent and saves nothing), but the draft is left as it is (its
+   * result, calculating flag and errors are Check eligibility's). Throws on a
+   * failure, an AbortError once `signal` aborts.
+   */
+  const precheck = useCallback(
+    async (
+      applicant: string,
+      inputs: EligibilityInputs,
+      signal?: AbortSignal,
+    ): Promise<EligibilityResult> => {
+      const raw = await fetchApi<unknown>(`${base}/calculate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(calculateRequestBody(applicant, inputs)),
+        signal,
+      });
+      return parseCalculateResponse(raw, applicant);
+    },
+    [fetchApi, base],
+  );
+
+  /**
    * POST .../login {applicant, lender}. The backend recomputes from the SAVED
    * inputs, so `unsavedInputs` (the inputs on screen when they are not saved)
    * are saved first. `lender` is the lender id (or name). The backend refuses
@@ -507,6 +531,7 @@ export function useEligibility({ fetchApi, projectId }: UseEligibilityOptions) {
     edit,
     save,
     calculate,
+    precheck,
     login,
     checkPincode,
     checkCompany,

@@ -7,6 +7,7 @@ import {
   useState,
   type KeyboardEvent,
 } from 'react';
+import { flushSync } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import {
   ArrowLeft,
@@ -30,10 +31,18 @@ import {
   type EligibilityDraft,
   type EligibilityState,
 } from '../../hooks/useEligibility';
+import { usePrecheck } from '../../hooks/usePrecheck';
 import {
   countInvalidNumbers,
+  fieldElementId,
   inputsKey,
   lenderTone,
+  precheckBlock,
+  precheckKey,
+  precheckKeyOf,
+  precheckSummary,
+  precheckTabCounts,
+  refusalsByField,
   stillNeeded,
 } from '../../lib/eligibility';
 import { maskPan } from '../../lib/fileCheck';
@@ -44,7 +53,8 @@ import EmiCalculator, { emiStartOf } from './EmiCalculator';
 import BranchFinder from './BranchFinder';
 import BureauFetch from './BureauFetch';
 import { describeEligibilityError } from './errors';
-import { BUTTON_CLASS, PRIMARY_CLASS } from './fields';
+import { BUTTON_CLASS, PRIMARY_CLASS, goToField } from './fields';
+import BeforeYouCheck from './BeforeYouCheck';
 import { companyCheckRows, pincodeCheckRows, type PolicyCheck } from './checks';
 
 export type EligibilityTab = 'profile' | 'cibil' | 'lenders';
@@ -120,6 +130,7 @@ export default function EligibilityPanel({
     edit,
     save,
     calculate,
+    precheck,
     login,
     checkPincode,
     checkCompany,
@@ -168,6 +179,59 @@ export default function EligibilityPanel({
     () => branchLendersOf(draft.result, lenders?.lenders),
     [draft.result, lenders],
   );
+
+  // "Before you check": the inputs on screen checked in the background (the
+  // same calculation as Check eligibility, nothing saved) about a second
+  // after they stop changing, so what would stop a bank shows while typing.
+  // Check eligibility's own result is used while it is for these inputs.
+  const prefillFields = draft.prefillValues.fields;
+  const neededAll = useMemo(
+    () => stillNeeded(inputs, prefillFields),
+    [inputs, prefillFields],
+  );
+  const block = useMemo(() => precheckBlock(inputs), [inputs]);
+  const checkKey = useMemo(
+    () => precheckKey(applicant, inputs),
+    [applicant, inputs],
+  );
+  // Check eligibility's result answers the same question for its inputs.
+  const resultCheckKey = useMemo(
+    () => precheckKeyOf(applicant, draft.resultKey),
+    [applicant, draft.resultKey],
+  );
+  const resultFresh = !!draft.result && resultCheckKey === checkKey;
+  const canPrecheck =
+    draft.loaded &&
+    !draft.loading &&
+    draft.loadError == null &&
+    !draft.calculating &&
+    !resultFresh &&
+    block === null;
+  const runPrecheck = useCallback(
+    (signal: AbortSignal) => precheck(applicant, inputs, signal),
+    [precheck, applicant, inputs],
+  );
+  const pre = usePrecheck({
+    scope: applicant,
+    requestKey: canPrecheck ? checkKey : null,
+    run: runPrecheck,
+  });
+  // For these inputs: Check eligibility's result, else the background one;
+  // else the latest of the two while the next check runs.
+  const preFresh = pre.result !== null && pre.key === checkKey;
+  const resultLatest =
+    !!draft.result && (draft.calculatedAt?.getTime() ?? 0) >= (pre.at ?? 0);
+  const shownResult =
+    resultFresh || (!preFresh && resultLatest) ? draft.result : pre.result;
+  const precheckOutdated = shownResult !== null && !resultFresh && !preFresh;
+  const summary = useMemo(
+    () => precheckSummary(shownResult, neededAll),
+    [shownResult, neededAll],
+  );
+  const tabCounts = useMemo(() => precheckTabCounts(summary), [summary]);
+  const refusals = useMemo(() => refusalsByField(summary.refusals), [summary]);
+  // The fields' ids, so the box can move to one on its tab.
+  const fieldPrefix = `${baseId}-field`;
 
   const onEdit = useCallback(
     (update: (i: EligibilityInputs) => EligibilityInputs) =>
@@ -239,6 +303,12 @@ export default function EligibilityPanel({
   const selectTab = (next: EligibilityTab, focus = false) => {
     setTab(next);
     if (focus) tabRefs.current[next]?.focus();
+  };
+
+  // A field named in "Before you check": its tab, then the field itself.
+  const goToPrecheckField = (target: 'profile' | 'cibil', field: string) => {
+    flushSync(() => setTab(target));
+    goToField(fieldElementId(fieldPrefix, field));
   };
 
   const onTabKeyDown = (e: KeyboardEvent<HTMLButtonElement>) => {
@@ -399,6 +469,19 @@ export default function EligibilityPanel({
                 {i + 1}
               </span>
               {t(`eligibility.tabs.${id}`)}
+              {!busy && draft.loadError == null && tabCounts[id] > 0 && (
+                <span
+                  className="rounded-full bg-amber-500 px-1 text-[9px] font-bold leading-[14px] text-white dark:bg-amber-600"
+                  data-testid={`tab-count-${id}`}
+                >
+                  <span aria-hidden="true">{tabCounts[id]}</span>
+                  <span className="sr-only">
+                    {t('eligibility.precheck.tabCount', {
+                      count: tabCounts[id],
+                    })}
+                  </span>
+                </span>
+              )}
               {id === 'lenders' && stale && (
                 <span
                   className="h-1.5 w-1.5 rounded-full bg-amber-500"
@@ -409,6 +492,19 @@ export default function EligibilityPanel({
           );
         })}
       </div>
+
+      {/* What would stop a bank, on every tab (the background check) */}
+      {!busy && draft.loadError == null && (
+        <BeforeYouCheck
+          summary={summary}
+          checking={pre.checking || draft.calculating}
+          outdated={precheckOutdated}
+          waiting={block}
+          tab={tab}
+          onGo={goToPrecheckField}
+          onOpenFileCheck={onBack}
+        />
+      )}
 
       {/* Tab content */}
       <div
@@ -473,6 +569,9 @@ export default function EligibilityPanel({
                 companyCheck={companyCheck}
                 onCheckPincode={handleCheckPincode}
                 onCheckCompany={handleCheckCompany}
+                idPrefix={fieldPrefix}
+                refusals={refusals}
+                requiredAbove
               />
             ) : tab === 'cibil' ? (
               <>
@@ -485,7 +584,13 @@ export default function EligibilityPanel({
                     onEdit={onEdit}
                   />
                 )}
-                <CibilSection cibil={inputs.cibil} onEdit={onEdit} />
+                <CibilSection
+                  cibil={inputs.cibil}
+                  onEdit={onEdit}
+                  idPrefix={fieldPrefix}
+                  refusals={refusals}
+                  requiredAbove
+                />
               </>
             ) : (
               <LendersSection
@@ -500,7 +605,6 @@ export default function EligibilityPanel({
                 lenders={lenders?.lenders ?? []}
                 logins={draft.logins}
                 onLogin={handleLogin}
-                stillNeeded={stillNeeded(inputs, draft.prefillValues.fields)}
               />
             )}
             {tab === 'lenders' && projectId && (draft.result || lenders) && (

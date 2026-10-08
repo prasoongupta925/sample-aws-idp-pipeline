@@ -1106,6 +1106,119 @@ export function inputsKey(inputs: EligibilityInputs): string {
   return JSON.stringify(inputsBody(inputs));
 }
 
+/**
+ * What a background check's answer depends on: the applicant and the request
+ * body without the fields app/eligibility.py never reads (name, mobile, date
+ * of birth, addresses, house ownership, the credit report's source and date),
+ * so typing them does not check the banks again.
+ */
+export function precheckKey(
+  applicant: string,
+  inputs: EligibilityInputs,
+): string {
+  const { profile: p, cibil: c, loan } = inputsBody(inputs);
+  return JSON.stringify({
+    applicant,
+    // A full PAN finds the applicant's file check (verified salary, bank EMIs).
+    pan: p.pan,
+    pincode: p.pincode,
+    company: p.company,
+    employment_type: p.employment_type,
+    net_income: p.net_income,
+    other_income: p.other_income,
+    has_running_home_loan: p.has_running_home_loan,
+    score: c.score,
+    enquiries: c.enquiries,
+    tradelines: c.tradelines,
+    loan,
+  });
+}
+
+/**
+ * The precheckKey of the inputs a result was calculated with, from its
+ * inputsKey (the request body as JSON); null without one.
+ */
+export function precheckKeyOf(
+  applicant: string,
+  resultKey: string | null,
+): string | null {
+  if (!resultKey) return null;
+  try {
+    return precheckKey(applicant, JSON.parse(resultKey) as EligibilityInputs);
+  } catch {
+    return null;
+  }
+}
+
+const MAX_ENQUIRIES = 999;
+const MAX_INSTALMENTS = 600;
+const MAX_TENURE_MONTHS = 480;
+
+/** A date input's value the API takes: YYYY-MM-DD from 1900 to today. */
+function pastDateLooksValid(value: string, now: Date): boolean {
+  return (
+    /^\d{4}-\d{2}-\d{2}$/.test(value) &&
+    !Number.isNaN(Date.parse(value)) &&
+    value >= '1900-01-01' &&
+    !isFutureDate(value, now)
+  );
+}
+
+function wholeIn(value: number | null | undefined, min: number, max: number) {
+  return (
+    value === null ||
+    value === undefined ||
+    (Number.isInteger(value) && value >= min && value <= max)
+  );
+}
+
+/**
+ * Why the inputs on screen cannot be checked in the background: 'invalid' (a
+ * value the API refuses with 422, which the form marks in red), 'empty'
+ * (nothing a bank checks is filled yet), else null.
+ */
+export function precheckBlock(
+  inputs: EligibilityInputs,
+  now: Date = new Date(),
+): 'invalid' | 'empty' | null {
+  const p = inputs.profile;
+  const c = inputs.cibil;
+  const invalid =
+    countInvalidNumbers(inputs) > 0 ||
+    (!!p.pan?.trim() && !panLooksValid(p.pan) && !isMaskedPan(p.pan)) ||
+    (!!p.mobile?.trim() && !mobileLooksValid(p.mobile)) ||
+    (!!p.pincode?.trim() && !pincodeLooksValid(p.pincode)) ||
+    (!!p.dob && !pastDateLooksValid(p.dob, now)) ||
+    (c.score !== null && !scoreLooksValid(c.score)) ||
+    enquiriesOutOfOrder(c.enquiries) !== null ||
+    !Object.values(c.enquiries).every((n) => wholeIn(n, 0, MAX_ENQUIRIES)) ||
+    !wholeIn(inputs.loan.tenure_months, 1, MAX_TENURE_MONTHS) ||
+    (!!c.report_date && !pastDateLooksValid(c.report_date, now)) ||
+    c.tradelines.some(
+      (row) =>
+        (!!row.account_number?.trim() &&
+          !accountNumberLooksValid(row.account_number)) ||
+        (!!row.open_date && !pastDateLooksValid(row.open_date, now)) ||
+        (!!row.last_payment_date &&
+          !pastDateLooksValid(row.last_payment_date, now)) ||
+        (!!row.open_date &&
+          !!row.last_payment_date &&
+          row.last_payment_date < row.open_date) ||
+        !wholeIn(row.emis_paid, 0, MAX_INSTALMENTS) ||
+        !wholeIn(row.emis_pending, 0, MAX_INSTALMENTS),
+    );
+  if (invalid) return 'invalid';
+  const checked = [
+    p.pincode,
+    p.company,
+    p.employment_type,
+    p.net_income,
+    c.score,
+    ...Object.values(c.enquiries),
+  ];
+  return checked.some(present) ? null : 'empty';
+}
+
 // ------------------------------------------------------------------ edits
 
 export function setProfile(
@@ -1734,4 +1847,347 @@ export function parseCompanyCheck(raw: unknown, name: string): CompanyCheck {
     suggestions: strings(o.suggestions),
     sample: o.sample !== false,
   };
+}
+
+// ------------------------------------------------------------------ before you check
+// The panel checks the inputs on screen in the background (POST .../calculate
+// with the inputs: calculated, never saved) and says what would stop a bank
+// before Check eligibility is clicked. The reasons are app/eligibility.py's
+// sentences; these helpers only sort them.
+
+/** A form field a bank's refusal comes from. */
+export type PrecheckField =
+  | 'pincode'
+  | 'company'
+  | 'employment_type'
+  | 'net_income'
+  | 'score'
+  | 'enquiries'
+  | 'tradelines';
+
+/** The tab each field is on. */
+export const PRECHECK_FIELD_TAB: Record<PrecheckField, StillNeeded['tab']> = {
+  pincode: 'profile',
+  company: 'profile',
+  employment_type: 'profile',
+  net_income: 'profile',
+  score: 'cibil',
+  enquiries: 'cibil',
+  tradelines: 'cibil',
+};
+
+// app/eligibility.py's refusals, by the field they come from. Matched on the
+// fixed words of each sentence, never on a bank's name.
+const REFUSAL_FIELDS: readonly (readonly [RegExp, PrecheckField])[] = [
+  // _lender_result: "Pincode 401202 is not serviceable by Axis Bank"
+  [/^Pincode \S+ is not serviceable by /, 'pincode'],
+  // "Employment type Partnership/Proprietorship is not accepted by HDFC Bank"
+  [/^Employment type .+ is not accepted by /, 'employment_type'],
+  // not_offered_reason: "HDFC Bank does not lend to CAT U (unlisted) companies (...)"
+  [/ does not lend to .+ companies\b/, 'company'],
+  // "'X' is not in HDFC Bank's company list and HDFC Bank does not accept unlisted companies"
+  [
+    / is not in .+ company list and .+ does not accept unlisted companies/,
+    'company',
+  ],
+  // _sheet_terms: "HDFC Bank's policy sheet has no category for a company not in its list"
+  [/'s policy sheet has no category for a company not in its list/, 'company'],
+  // _grid_foir: "HDFC Bank's FOIR grid has no FOIR for CAT C (it covers ...)"
+  [/'s FOIR grid has no FOIR for /, 'company'],
+  // _sheet_terms: "Not eligible: income ₹20,000 is below HDFC Bank's minimum ₹25,000 (...)"
+  [/^(?:Not eligible: )?income .+ is below .+'s minimum /i, 'net_income'],
+  // _grid_foir: "Net monthly salary ₹20,000 is below X's minimum income of ₹25,000 (...)"
+  [/^Net monthly salary .+ is below .+'s minimum income of /, 'net_income'],
+  // _cibil_check: "HDFC Bank needs CIBIL >= 710: the score is 690 (...)"
+  [/ needs CIBIL >= -?\d+: the score is /, 'score'],
+  // "CIBIL score 690 is below Bajaj Finance's minimum 700"
+  [/^CIBIL score -?\d+ is below /, 'score'],
+  // "CIBIL -1: no credit history, and Tata Capital needs CIBIL >= 725"
+  [/^CIBIL -?\d+: no credit history\b/, 'score'],
+  // _sheet_enquiries and the sample limit: "6 enquiries in the last 60 days: more than HDFC Bank's limit of 5 (...)"
+  [
+    /^\d+ enquir(?:y|ies) in the last \d+ days(?: already)?: more than /,
+    'enquiries',
+  ],
+  // "Existing obligations ₹59,000 leave no room within FOIR 60% of ₹60,000 (₹36,000)"
+  [/^Existing obligations .+ leave no room within FOIR /, 'tradelines'],
+  // _bt_limits: "1 credit card marked BT: HDFC Bank does not take over credit cards (...)"
+  [/ marked BT: .+ (?:does not take over|takes over at most) /, 'tradelines'],
+  // "Eligible amount ₹X does not cover the balance transfer of ₹Y"
+  [/^Eligible amount .+ does not cover the balance transfer of /, 'tradelines'],
+  // _lender_obligations: "Outstanding not entered for Tradeline 2 (Gold Co, Gold Loan): HDFC Bank counts 1% of ..."
+  [
+    /^Outstanding not entered for .+ counts .+ of a gold loan's outstanding/,
+    'tradelines',
+  ],
+];
+
+/** The field a bank's refusal comes from; null when no field is its cause. */
+export function reasonField(reason: string): PrecheckField | null {
+  return REFUSAL_FIELDS.find(([pattern]) => pattern.test(reason))?.[1] ?? null;
+}
+
+// The refusals that only say a field is empty: "Still needed" lists those.
+const MISSING_REASONS: readonly (readonly [RegExp, PrecheckField])[] = [
+  [/^Pincode not entered\b/, 'pincode'],
+  [/^Employment type not entered$/, 'employment_type'],
+  [/^Company not entered\b/, 'company'],
+  [/^CIBIL score not entered$/, 'score'],
+  [/^Enquiries in the last \d+ days not entered$/, 'enquiries'],
+  [/^Net monthly income not entered$/, 'net_income'],
+  [/^EMI not entered for Tradeline \d+\b.* marked Obligate\b/, 'tradelines'],
+  [/^Outstanding not entered for Tradeline \d+\b.* marked BT\b/, 'tradelines'],
+];
+
+/**
+ * A refusal that only says a field is empty ("CIBIL score not entered"): the
+ * still-needed field it is, e.g. "score", "enquiries", "tradelines.2.emi"
+ * (a field's prefix where the sentence names no window); else null.
+ */
+export function missingReasonField(reason: string): string | null {
+  const field = MISSING_REASONS.find(([pattern]) => pattern.test(reason))?.[1];
+  if (!field) return null;
+  if (field !== 'tradelines') return field;
+  const loan = /^(EMI|Outstanding) not entered for Tradeline (\d+)\b/.exec(
+    reason,
+  );
+  return loan
+    ? `tradelines.${loan[2]}.${loan[1] === 'EMI' ? 'emi' : 'outstanding'}`
+    : field;
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** A trailing "(...)" of a sentence (nested parentheses kept together), else null. */
+function trailingParenthesis(text: string): number | null {
+  if (!text.endsWith(')')) return null;
+  let depth = 0;
+  for (let i = text.length - 1; i >= 0; i -= 1) {
+    if (text[i] === ')') depth += 1;
+    else if (text[i] === '(') {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return null;
+}
+
+/**
+ * "(Sheet2, HDFC Bank, Cibil Score "710", cell B2)", "(From Policy (your sheet))".
+ * Not "(Sample: not in your policy sheet)": that says the rule is the sample
+ * policy's, not the sheet's, and stays.
+ */
+function isPolicyReference(inner: string, banks: readonly string[]): boolean {
+  return (
+    /\bcell [A-Z]{1,3}\d+\b/.test(inner) ||
+    /\bis NA\b/.test(inner) ||
+    /^From Policy\b/.test(inner) ||
+    banks.some((bank) => inner.toLowerCase().includes(bank.toLowerCase()))
+  );
+}
+
+/**
+ * A refusal as one line of a bank list ("HDFC Bank, Bandhan Bank: ..."):
+ * the backend's sentence without its policy-sheet reference (Details on the
+ * Lenders tab keeps it) and without the bank's own name, so that the banks
+ * refusing for the same reason share one line. "HDFC Bank needs CIBIL >= 710:
+ * the score is 690 (Sheet2, ...)" -> "Needs CIBIL >= 710: the score is 690".
+ * A sample rule keeps its "(Sample: not in your policy sheet)", so it never
+ * reads as the sheet's nor shares a line with a bank that has no such mark.
+ */
+export function reasonWithoutBank(
+  reason: string,
+  banks: readonly (string | null | undefined)[],
+): string {
+  const names = [
+    ...new Set(
+      banks.filter((b): b is string => !!b?.trim()).map((b) => b.trim()),
+    ),
+  ].sort((a, b) => b.length - a.length);
+  let text = reason.trim().replace(/^Not eligible: /, '');
+  for (;;) {
+    const open = trailingParenthesis(text);
+    if (open === null || !isPolicyReference(text.slice(open + 1, -1), names)) {
+      break;
+    }
+    text = text.slice(0, open).trimEnd();
+  }
+  for (const bank of names) {
+    const name = escapeRegExp(bank);
+    const end = '(?![\\w])';
+    text = text
+      .replace(new RegExp(`^${name}'s `, 'i'), "the bank's ")
+      .replace(new RegExp(`^${name}${end}\\s*`, 'i'), '')
+      .replace(new RegExp(` by ${name}${end}`, 'gi'), '')
+      .replace(new RegExp(`${name}'s${end}`, 'gi'), "the bank's")
+      .replace(new RegExp(`${name}${end}`, 'gi'), 'the bank');
+  }
+  text = text.trim();
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** One line of "Banks that will refuse": a reason and the banks that give it. */
+export interface BankRefusal {
+  /** The reason without the banks' names (reasonWithoutBank). */
+  text: string;
+  /** The banks, in the result's order. */
+  lenders: string[];
+  /** The backend's sentences, one per bank (shown on hover). */
+  sentences: string[];
+  /** The field it comes from; null: the Lenders tab's (no single field). */
+  field: PrecheckField | null;
+}
+
+function neededCovers(needed: readonly StillNeeded[], field: string): boolean {
+  return needed.some(
+    (item) => item.field === field || item.field.startsWith(`${field}.`),
+  );
+}
+
+/**
+ * "Banks that will refuse": the reasons of every bank that is not eligible or
+ * does not serve the pincode, the same reason of several banks on one line.
+ * A reason that only says a field is empty is left to "Still needed" when it
+ * lists that field.
+ */
+export function bankRefusals(
+  result: EligibilityResult | null,
+  needed: readonly StillNeeded[],
+): BankRefusal[] {
+  const groups = new Map<string, BankRefusal>();
+  for (const row of result?.per_lender ?? []) {
+    const tone = lenderTone(row.status);
+    if (tone !== 'notEligible' && tone !== 'notServiceable') continue;
+    for (const reason of row.reasons) {
+      const missing = missingReasonField(reason);
+      if (missing && neededCovers(needed, missing)) continue;
+      const text = reasonWithoutBank(reason, [
+        row.lender,
+        row.policy_sheet?.bank,
+      ]);
+      const group = groups.get(text) ?? {
+        text,
+        lenders: [],
+        sentences: [],
+        field:
+          reasonField(reason) ??
+          ((missing?.split('.')[0] as PrecheckField | undefined) || null),
+      };
+      if (!group.lenders.includes(row.lender)) group.lenders.push(row.lender);
+      if (!group.sentences.includes(reason)) group.sentences.push(reason);
+      groups.set(text, group);
+    }
+  }
+  return [...groups.values()];
+}
+
+/** The refusals by the field they come from (the hints under the fields). */
+export function refusalsByField(
+  refusals: readonly BankRefusal[],
+): Partial<Record<PrecheckField, BankRefusal[]>> {
+  const out: Partial<Record<PrecheckField, BankRefusal[]>> = {};
+  for (const refusal of refusals) {
+    if (refusal.field) (out[refusal.field] ??= []).push(refusal);
+  }
+  return out;
+}
+
+// Notes of the calculation a lender would stop at: an overdue or a written-off
+// loan, and a bank-statement EMI that matches no loan of the form.
+const WARNING_NOTES = [/lenders usually decline/, /matches no tradeline/];
+
+/** What the "Before you check" box shows. */
+export interface PrecheckSummary {
+  /** The required fields still empty, on every tab. */
+  needed: StillNeeded[];
+  /** "Banks that will refuse". */
+  refusals: BankRefusal[];
+  /** The file check's open issues when it finds the file NOT READY. */
+  fileIssues: string[];
+  /** Notes a lender would stop at (overdues, bank EMIs that match no loan). */
+  warnings: string[];
+  /** The policy sheet's "Conditions to confirm" of the banks that can lend. */
+  conditions: number;
+  /** The banks those conditions are from. */
+  conditionBanks: string[];
+  /** Banks that can lend, of all banks; null without a result. */
+  eligible: number | null;
+  total: number | null;
+}
+
+/** The "Before you check" box of the inputs on screen and their latest result. */
+export function precheckSummary(
+  result: EligibilityResult | null,
+  needed: readonly StillNeeded[],
+): PrecheckSummary {
+  const check = result?.file_check;
+  const lending = (result?.per_lender ?? []).filter(
+    (row) => lenderTone(row.status) === 'eligible',
+  );
+  const withConditions = lending.filter(
+    (row) => (row.policy_sheet?.conditions.length ?? 0) > 0,
+  );
+  return {
+    needed: needed.filter((item) => item.required),
+    refusals: bankRefusals(result, needed),
+    fileIssues: check?.used && check.ready === false ? check.issues : [],
+    warnings: [
+      ...new Set(
+        (result?.notes ?? []).filter((note) =>
+          WARNING_NOTES.some((pattern) => pattern.test(note)),
+        ),
+      ),
+    ],
+    conditions: withConditions.reduce(
+      (n, row) => n + (row.policy_sheet?.conditions.length ?? 0),
+      0,
+    ),
+    conditionBanks: withConditions.map((row) => row.lender),
+    eligible: result ? lending.length : null,
+    total: result ? result.per_lender.length : null,
+  };
+}
+
+/** Nothing in the box stops a bank: no field needed, no refusal, no open issue or warning. */
+export function precheckClear(summary: PrecheckSummary): boolean {
+  return (
+    summary.needed.length === 0 &&
+    summary.refusals.length === 0 &&
+    summary.fileIssues.length === 0 &&
+    summary.warnings.length === 0
+  );
+}
+
+/**
+ * The open items of each tab (its badge): the fields still needed there and
+ * the refusals its fields cause (the warnings are about the loans, on the
+ * CIBIL tab); a refusal no field causes counts on the Lenders tab.
+ */
+export function precheckTabCounts(
+  summary: PrecheckSummary,
+): Record<StillNeeded['tab'] | 'lenders', number> {
+  const counts = { profile: 0, cibil: 0, lenders: 0 };
+  for (const item of summary.needed) counts[item.tab] += 1;
+  for (const refusal of summary.refusals) {
+    counts[refusal.field ? PRECHECK_FIELD_TAB[refusal.field] : 'lenders'] += 1;
+  }
+  counts.cibil += summary.warnings.length;
+  return counts;
+}
+
+/**
+ * The id of a field's control (ProfileSection and CibilSection build theirs
+ * from the same prefix): "pincode", "score", "enquiries.d90",
+ * "tradelines.2.emi"; "enquiries" is its first window and "tradelines" the
+ * loans' section.
+ */
+export function fieldElementId(prefix: string, field: string): string {
+  const [head, n, key] = field.split('.');
+  if (head === 'enquiries') return `${prefix}-enquiries-${n ?? 'd30'}`;
+  if (head === 'tradelines') {
+    return n && key ? `${prefix}-loan-${n}-${key}` : `${prefix}-tradelines`;
+  }
+  return `${prefix}-${head}`;
 }
