@@ -52,6 +52,8 @@ import {
   sourceOf,
   stillNeeded,
   updateOtherIncome,
+  type BankRefusal,
+  type PrecheckField,
 } from '../../lib/eligibility';
 import type { PolicyCheck } from './checks';
 import {
@@ -69,6 +71,7 @@ import {
   SourceLegend,
   SourceNote,
   StillNeededList,
+  withRefusals,
 } from './fields';
 
 type Edit = (update: (inputs: EligibilityInputs) => EligibilityInputs) => void;
@@ -269,6 +272,15 @@ interface ProfileSectionProps {
   onCheckPincode?: () => void;
   /** Checks the company typed, or the name given (a suggestion). */
   onCheckCompany?: (name?: string) => void;
+  /**
+   * The prefix of the controls' ids (lib/eligibility fieldElementId), so the
+   * panel can move to a field; default: a generated one.
+   */
+  idPrefix?: string;
+  /** The banks that will say no, by the field causing it (shown under it). */
+  refusals?: Partial<Record<PrecheckField, BankRefusal[]>>;
+  /** The panel lists the required fields above: only the optional ones here. */
+  requiredAbove?: boolean;
 }
 
 /** Sheet 1 of the client's page: personal, employment, income and loan details. */
@@ -282,9 +294,13 @@ export default function ProfileSection({
   companyCheck,
   onCheckPincode,
   onCheckCompany,
+  idPrefix,
+  refusals,
+  requiredAbove = false,
 }: ProfileSectionProps) {
   const { t } = useTranslation();
-  const baseId = useId();
+  const generatedId = useId();
+  const baseId = idPrefix ?? generatedId;
   const p = inputs.profile;
   const sources = prefill.fields ?? {};
   const patch = (next: Partial<EligibilityProfile>) =>
@@ -334,6 +350,7 @@ export default function ProfileSection({
         fillable={fillableFields(inputs, sources).length}
         onFill={() => onEdit((i) => fillFromDocuments(i, sources))}
         disabled={disabled}
+        showRequired={!requiredAbove}
       />
 
       <section
@@ -516,7 +533,7 @@ export default function ProfileSection({
               </>
             }
             error={pincodeError}
-            note={note('pincode')}
+            note={withRefusals(note('pincode'), refusals?.pincode)}
           >
             {({ id, describedBy }) => (
               <div className="flex gap-1.5">
@@ -650,7 +667,7 @@ export default function ProfileSection({
                 {label(t('eligibility.profile.company'), 'company')}
               </>
             }
-            note={note('company')}
+            note={withRefusals(note('company'), refusals?.company)}
           >
             {({ id, describedBy }) => (
               <div className="flex gap-1.5">
@@ -687,7 +704,10 @@ export default function ProfileSection({
               t('eligibility.profile.employmentType'),
               'employment_type',
             )}
-            note={note('employment_type')}
+            note={withRefusals(
+              note('employment_type'),
+              refusals?.employment_type,
+            )}
           >
             {({ id, describedBy }) => (
               <select
@@ -742,7 +762,7 @@ export default function ProfileSection({
               : t('eligibility.profile.netIncomeHint')
           }
           // The hint gives how the income was verified; the note its files.
-          note={note('net_income', false)}
+          note={withRefusals(note('net_income', false), refusals?.net_income)}
           className="@md:w-1/2 @md:pr-1"
         >
           {({ id, describedBy }) => (

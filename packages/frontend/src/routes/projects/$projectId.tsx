@@ -529,6 +529,10 @@ function ProjectDetailPage() {
     />
   );
 
+  // A full-width panel (File check, Eligibility, pain points) is open over the documents.
+  const overPanel =
+    showFileCheck || eligibilityTarget !== null || showPainPoints;
+
   // Documents & artifacts with the File check / Eligibility / pain points / artifact overlays.
   const renderSideContent = (collapsible: boolean) => (
     <>
@@ -824,10 +828,17 @@ function ProjectDetailPage() {
               type="button"
               onClick={() => chatLayout.setOpen(true)}
               aria-label={t('chat.compact.open', 'Ask AI about this file')}
-              className="fixed bottom-6 right-6 z-30 inline-flex items-center gap-2 rounded-full bg-blue-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-blue-600/30 transition hover:-translate-y-0.5 hover:bg-blue-700 focus:outline-none focus-visible:ring-4 focus-visible:ring-blue-300 dark:shadow-blue-900/40"
+              className={cn(
+                'fixed right-6 z-30 inline-flex items-center gap-2 rounded-full bg-blue-600 text-sm font-semibold text-white shadow-lg shadow-blue-600/30 transition hover:-translate-y-0.5 hover:bg-blue-700 focus:outline-none focus-visible:ring-4 focus-visible:ring-blue-300 dark:shadow-blue-900/40',
+                // Over a full-width panel the pill sits above its footer as an icon, so it
+                // never covers the panel's own buttons (Save, Check eligibility).
+                overPanel ? 'bottom-24 p-3' : 'bottom-6 px-5 py-3',
+              )}
             >
               <MessageSquare className="h-4 w-4" />
-              <span>{t('chat.compact.button', 'Ask AI')}</span>
+              <span className={cn(overPanel && 'sr-only')}>
+                {t('chat.compact.button', 'Ask AI')}
+              </span>
               {chatSession.sending && (
                 <span
                   className="relative flex h-2 w-2"

@@ -12,6 +12,7 @@ import type {
   PrefillField,
 } from '../types/eligibility';
 import { apiErrorStatus } from '../lib/fileCheck';
+import type { FetchApiOptions } from './useAwsClient';
 import {
   calculateRequestBody,
   emptyInputs,
@@ -28,7 +29,11 @@ import {
 } from '../lib/eligibility';
 
 interface UseEligibilityOptions {
-  fetchApi: <T>(url: string, init?: RequestInit) => Promise<T>;
+  fetchApi: <T>(
+    url: string,
+    init?: RequestInit,
+    options?: FetchApiOptions,
+  ) => Promise<T>;
   projectId: string;
 }
 
@@ -390,6 +395,36 @@ export function useEligibility({ fetchApi, projectId }: UseEligibilityOptions) {
   );
 
   /**
+   * POST .../calculate with the inputs on screen for the panel's "Before you
+   * check" box: the same request as Check eligibility (the backend calculates
+   * the inputs sent and saves nothing), but the draft is left as it is (its
+   * result, calculating flag and errors are Check eligibility's). Sent once:
+   * no retries on a 5xx or 429 (the box offers Try again, and the next edit
+   * checks again), so a failure never multiplies the calculation and the file
+   * check it runs. Throws on a failure, an AbortError once `signal` aborts.
+   */
+  const precheck = useCallback(
+    async (
+      applicant: string,
+      inputs: EligibilityInputs,
+      signal?: AbortSignal,
+    ): Promise<EligibilityResult> => {
+      const raw = await fetchApi<unknown>(
+        `${base}/calculate`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(calculateRequestBody(applicant, inputs)),
+          signal,
+        },
+        { retries: 0 },
+      );
+      return parseCalculateResponse(raw, applicant);
+    },
+    [fetchApi, base],
+  );
+
+  /**
    * POST .../login {applicant, lender}. The backend recomputes from the SAVED
    * inputs, so `unsavedInputs` (the inputs on screen when they are not saved)
    * are saved first. `lender` is the lender id (or name). The backend refuses
@@ -507,6 +542,7 @@ export function useEligibility({ fetchApi, projectId }: UseEligibilityOptions) {
     edit,
     save,
     calculate,
+    precheck,
     login,
     checkPincode,
     checkCompany,

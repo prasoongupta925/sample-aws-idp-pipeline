@@ -877,6 +877,9 @@ describe('EligibilityPanel', () => {
     edit: noop,
     save: async () => true,
     calculate: async () => null,
+    precheck: async () => {
+      throw new Error('not used');
+    },
     login: async () => ({ kind: 'ignored' }),
     checkPincode: async () => {
       throw new Error('not used');
@@ -963,6 +966,9 @@ describe('Lenders tab: nearest branches and what is still needed', () => {
     edit: noop,
     save: async () => true,
     calculate: async () => null,
+    precheck: async () => {
+      throw new Error('not used');
+    },
     login: async () => ({ kind: 'ignored' }),
     checkPincode: async () => {
       throw new Error('not used');
@@ -1079,18 +1085,36 @@ describe('Lenders tab: nearest branches and what is still needed', () => {
       ...draft.inputs,
       cibil: { ...draft.inputs.cibil, score: null },
     };
-    const html = render(
-      <EligibilityPanel
-        state={state({ CKRPK7314M: draft })}
-        applicant="CKRPK7314M"
-        name={SNEHA}
-        pan="CKRPK7314M"
-        onBack={noop}
-        onClose={noop}
-        initialTab="lenders"
-      />,
+    const panel = (initialTab: 'profile' | 'cibil' | 'lenders') =>
+      render(
+        <EligibilityPanel
+          state={state({ CKRPK7314M: draft })}
+          applicant="CKRPK7314M"
+          name={SNEHA}
+          pan="CKRPK7314M"
+          onBack={noop}
+          onClose={noop}
+          initialTab={initialTab}
+        />,
+      );
+    // On every tab, in "Before you check" above the tab (it moves to the field).
+    for (const tab of ['profile', 'cibil', 'lenders'] as const) {
+      const html = panel(tab);
+      const box = html.slice(
+        html.indexOf('data-testid="before-you-check"'),
+        html.indexOf('role="tabpanel"'),
+      );
+      expect(plain(`<${box}`)).toContain(
+        'Before you check Fill 1 more detail to see which banks can lend.',
+      );
+      expect(box).toContain('data-field="score"');
+      // The tab's own list keeps the optional fields only.
+      expect(html).not.toContain('data-testid="still-needed"');
+    }
+    expect(plain(panel('lenders'))).toContain(
+      'Still needed: CIBIL score (CIBIL)',
     );
-    expect(html).toContain('data-testid="still-needed"');
-    expect(plain(html)).toContain('Still needed before Check eligibility');
+    // The CIBIL tab counts it.
+    expect(panel('profile')).toContain('data-testid="tab-count-cibil"');
   });
 });

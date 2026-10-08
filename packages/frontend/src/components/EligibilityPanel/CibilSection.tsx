@@ -22,6 +22,7 @@ import {
   cibilInputs,
   documentRowsMissing,
   enquiriesOutOfOrder,
+  fieldElementId,
   fillFromDocuments,
   fillableFields,
   formatRupees,
@@ -38,6 +39,8 @@ import {
   sourceFor,
   stillNeeded,
   updateTradeline,
+  type BankRefusal,
+  type PrecheckField,
 } from '../../lib/eligibility';
 import {
   BUTTON_CLASS,
@@ -52,8 +55,10 @@ import {
   Segmented,
   SourceLegend,
   goToField,
+  RefusalHints,
   SourceNote,
   StillNeededList,
+  withRefusals,
 } from './fields';
 import CreditReportHelpLink from '../CreditReportGuide/HelpLink';
 
@@ -539,6 +544,15 @@ interface CibilSectionProps {
   disabled?: boolean;
   /** Tradelines shown expanded at first (by index; tests render statically). */
   initialExpanded?: number[];
+  /**
+   * The prefix of the controls' ids (lib/eligibility fieldElementId), so the
+   * panel can move to a field; default: a generated one.
+   */
+  idPrefix?: string;
+  /** The banks that will say no, by the field causing it (shown under it). */
+  refusals?: Partial<Record<PrecheckField, BankRefusal[]>>;
+  /** The panel lists the required fields above: only the optional ones here. */
+  requiredAbove?: boolean;
 }
 
 /** Sheet 2 of the client's page: score, enquiries and tradelines with BT / Obligate / Close. */
@@ -547,9 +561,13 @@ export default function CibilSection({
   onEdit,
   disabled,
   initialExpanded = [],
+  idPrefix,
+  refusals,
+  requiredAbove = false,
 }: CibilSectionProps) {
   const { t } = useTranslation();
-  const groupName = useId();
+  const generatedId = useId();
+  const groupName = idPrefix ?? generatedId;
   const enquiriesErrorId = useId();
   const sources = cibilFieldSources(cibil);
   const score = cibil.score;
@@ -582,16 +600,8 @@ export default function CibilSection({
   const needed = stillNeeded(asInputs, sources, 'cibil');
   // Saved inputs typed otherwise: the documents' loans they do not hold.
   const missing = documentRowsMissing(rows, cibil.sources?.tradelines);
-  const goTo = (item: StillNeeded) => {
-    const [head, n, key] = item.field.split('.');
-    goToField(
-      head === 'score'
-        ? `${groupName}-score`
-        : head === 'enquiries'
-          ? `${groupName}-enquiries-${n}`
-          : `${groupName}-loan-${n}-${key}`,
-    );
-  };
+  const goTo = (item: StillNeeded) =>
+    goToField(fieldElementId(groupName, item.field));
 
   return (
     <div className="space-y-3">
@@ -603,6 +613,7 @@ export default function CibilSection({
         fillable={fillableFields(asInputs, sources).length}
         onFill={() => onEdit((i) => fillFromDocuments(i, sources))}
         disabled={disabled}
+        showRequired={!requiredAbove}
       />
       <ReportNote cibil={cibil} />
       <CreditReportHelpLink />
@@ -623,7 +634,7 @@ export default function CibilSection({
             }
             hint={t('eligibility.cibil.scoreHint')}
             error={scoreError}
-            note={
+            note={withRefusals(
               scoreSource ? (
                 <SourceNote source={scoreSource} />
               ) : scoreOther ? (
@@ -635,8 +646,9 @@ export default function CibilSection({
                   }
                   disabled={disabled}
                 />
-              ) : undefined
-            }
+              ) : undefined,
+              refusals?.score,
+            )}
           >
             {({ id, describedBy }) => (
               <NumberInput
@@ -717,12 +729,15 @@ export default function CibilSection({
                 />
               )
             )}
+            <RefusalHints refusals={refusals?.enquiries} />
           </fieldset>
         </div>
       </section>
 
       <section
-        className={SECTION_CLASS}
+        id={fieldElementId(groupName, 'tradelines')}
+        tabIndex={-1}
+        className={`${SECTION_CLASS} focus:outline-none`}
         aria-label={t('eligibility.cibil.tradelines', { count: rows.length })}
       >
         <div className="flex items-center gap-2">
@@ -739,6 +754,7 @@ export default function CibilSection({
             {t('eligibility.cibil.addTradeline')}
           </button>
         </div>
+        <RefusalHints refusals={refusals?.tradelines} />
         {rows.length === 0 ? (
           <p className="text-[11px] text-slate-500 dark:text-slate-400">
             {t('eligibility.cibil.tradelinesEmpty')}

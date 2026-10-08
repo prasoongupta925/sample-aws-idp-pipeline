@@ -1,8 +1,9 @@
-import { useEffect, useId, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useId, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import {
   CircleCheck,
+  CircleX,
   FilePlus2,
   FileText,
   FlaskConical,
@@ -25,6 +26,7 @@ import {
   parseAmount,
   parseCount,
   parseScore,
+  type BankRefusal,
 } from '../../lib/eligibility';
 
 // Form controls of the Eligibility & lenders panel (the File Check panel's look).
@@ -354,7 +356,9 @@ export function stillNeededLabel(t: TFunction, item: StillNeeded): string {
     const name =
       item.loan.lender ||
       (item.loan.loanType
-        ? t(`eligibility.cibil.loanTypes.${item.loan.loanType}`)
+        ? t(`eligibility.cibil.loanTypes.${item.loan.loanType}`, {
+            defaultValue: '',
+          })
         : null);
     const kind = item.field.endsWith('.outstanding') ? 'Outstanding' : 'Emi';
     return name
@@ -364,7 +368,31 @@ export function stillNeededLabel(t: TFunction, item: StillNeeded): string {
         })
       : t(`eligibility.needed.loan${kind}`, { number: item.loan.number });
   }
-  return t(`eligibility.needed.fields.${item.field.replace('.', '_')}`);
+  return fieldLabel(t, item.field) ?? item.field;
+}
+
+/**
+ * A form field's name from its id: "pincode", "enquiries.d30", "enquiries",
+ * "tradelines.2.emi", "tradelines.2", "other_income.1", "report_date";
+ * null for an id it does not know.
+ */
+export function fieldLabel(t: TFunction, field: string): string | null {
+  const [head, n, key] = field.split('.');
+  if (head === 'tradelines' && n) {
+    return key === 'emi' || key === 'outstanding'
+      ? t(`eligibility.needed.loan${key === 'emi' ? 'Emi' : 'Outstanding'}`, {
+          number: n,
+        })
+      : t('eligibility.cibil.tradeline', { number: n });
+  }
+  if (head === 'other_income') return t('eligibility.profile.otherIncome');
+  if (head === 'report_date') return t('eligibility.cibil.report');
+  if (field === 'enquiries') return t('eligibility.precheck.fields.enquiries');
+  return (
+    t(`eligibility.needed.fields.${field.replace('.', '_')}`, {
+      defaultValue: '',
+    }) || null
+  );
 }
 
 interface StillNeededListProps {
@@ -377,6 +405,11 @@ interface StillNeededListProps {
   fillable?: number;
   onFill?: () => void;
   disabled?: boolean;
+  /**
+   * false: the required fields are listed above (the panel's "Before you
+   * check" box), so only the optional ones and the fill button show here.
+   */
+  showRequired?: boolean;
 }
 
 /**
@@ -390,6 +423,7 @@ export function StillNeededList({
   fillable = 0,
   onFill,
   disabled,
+  showRequired = true,
 }: StillNeededListProps) {
   const { t } = useTranslation();
   const required = items.filter((i) => i.required);
@@ -434,6 +468,46 @@ export function StillNeededList({
     );
   };
 
+  const fillButton = onFill && fillable > 0 && (
+    <button
+      type="button"
+      onClick={onFill}
+      disabled={disabled}
+      className={`${BUTTON_CLASS} ml-auto border-blue-200 bg-white/70 text-blue-700 dark:border-blue-800/60 dark:bg-transparent dark:text-blue-300`}
+      data-testid="fill-from-documents"
+    >
+      <Wand2 className="h-3 w-3" aria-hidden="true" />
+      {t('eligibility.needed.fill', { count: fillable })}
+    </button>
+  );
+
+  if (!showRequired) {
+    // The required fields are in the "Before you check" box above.
+    if (optional.length === 0 && !fillButton) return null;
+    return (
+      <section
+        className="space-y-1 rounded-lg border border-slate-200 bg-white/40 px-2.5 py-1.5 text-[11px] leading-snug text-slate-700 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-300"
+        aria-label={t('eligibility.needed.optionalTitle')}
+        data-testid="still-needed-optional"
+        data-count={optional.length}
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <h4 className="flex items-center gap-1 text-[11px] font-semibold">
+            <ListChecks className="h-3 w-3" aria-hidden="true" />
+            {t('eligibility.needed.optionalTitle')}
+            {optional.length > 0 && ` (${optional.length})`}
+          </h4>
+          {fillButton}
+        </div>
+        {optional.length > 0 && (
+          <ul className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+            {optional.map(entry)}
+          </ul>
+        )}
+      </section>
+    );
+  }
+
   if (items.length === 0) {
     return (
       <p
@@ -458,18 +532,7 @@ export function StillNeededList({
           <ListChecks className="h-3 w-3" aria-hidden="true" />
           {t('eligibility.needed.title')} ({items.length})
         </h4>
-        {onFill && fillable > 0 && (
-          <button
-            type="button"
-            onClick={onFill}
-            disabled={disabled}
-            className={`${BUTTON_CLASS} ml-auto border-blue-200 bg-white/70 text-blue-700 dark:border-blue-800/60 dark:bg-transparent dark:text-blue-300`}
-            data-testid="fill-from-documents"
-          >
-            <Wand2 className="h-3 w-3" aria-hidden="true" />
-            {t('eligibility.needed.fill', { count: fillable })}
-          </button>
-        )}
+        {fillButton}
       </div>
       {required.length > 0 && (
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
@@ -488,6 +551,81 @@ export function StillNeededList({
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * A cause and its banks, each with its own number: "CIBIL 690 is below the
+ * minimum at Axis Bank (750), Tata Capital (725)"; the backend's sentences on
+ * hover.
+ */
+export function RefusalLine({ refusal }: { refusal: BankRefusal }) {
+  return (
+    <span className="min-w-0 break-words" title={refusal.sentences.join('\n')}>
+      {refusal.before}
+      {refusal.banks.map((bank, i) => (
+        <Fragment key={bank.name}>
+          {i > 0 && ', '}
+          <span className="font-semibold">{bank.name}</span>
+          {bank.value !== null && ` (${bank.value})`}
+        </Fragment>
+      ))}
+      {refusal.after}
+    </span>
+  );
+}
+
+/** Refusals under a field before "+N more in Before you check". */
+const SHOWN_HINTS = 3;
+
+/**
+ * Under a field: the banks that will say no because of its value (the
+ * panel's background check), as the "Before you check" box lists them.
+ */
+export function RefusalHints({
+  refusals,
+}: {
+  refusals?: readonly BankRefusal[];
+}) {
+  const { t } = useTranslation();
+  if (!refusals || refusals.length === 0) return null;
+  return (
+    <ul
+      className="space-y-0.5 text-[10px] leading-snug text-red-700 dark:text-red-400"
+      aria-label={t('eligibility.precheck.hints')}
+      data-testid="refusal-hints"
+    >
+      {refusals.slice(0, SHOWN_HINTS).map((refusal) => (
+        <li key={refusal.text} className="flex items-start gap-1">
+          <CircleX
+            className="mt-px h-2.5 w-2.5 flex-shrink-0"
+            aria-hidden="true"
+          />
+          <RefusalLine refusal={refusal} />
+        </li>
+      ))}
+      {refusals.length > SHOWN_HINTS && (
+        <li className="pl-3.5 text-slate-500 dark:text-slate-400">
+          {t('eligibility.precheck.moreHints', {
+            count: refusals.length - SHOWN_HINTS,
+          })}
+        </li>
+      )}
+    </ul>
+  );
+}
+
+/** A field's note with the refusals it causes under it (undefined: nothing to show). */
+export function withRefusals(
+  note: ReactNode,
+  refusals?: readonly BankRefusal[],
+): ReactNode {
+  if (!refusals || refusals.length === 0) return note;
+  return (
+    <>
+      {note}
+      <RefusalHints refusals={refusals} />
+    </>
   );
 }
 

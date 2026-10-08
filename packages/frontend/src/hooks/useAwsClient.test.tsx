@@ -159,6 +159,25 @@ describe('useAwsClient across a token renewal', () => {
     expect((second[1].headers as Headers).get('X-User-Id')).toBe('asha.verma');
   });
 
+  it("keeps aws4fetch's retries unless a call asks for none", async () => {
+    const { result } = renderClient();
+    const { fetchApi } = result.current;
+
+    await fetchApi('projects/p-1/eligibility/calculate', { method: 'POST' });
+    await fetchApi(
+      'projects/p-1/eligibility/calculate',
+      { method: 'POST' },
+      { retries: 0 },
+    );
+
+    // The client's default (10 tries on a 5xx or 429) for the first call only.
+    expect(signer.clients[0]).not.toHaveProperty('retries');
+    expect(signer.clients[1]).toMatchObject({
+      service: 'execute-api',
+      retries: 0,
+    });
+  });
+
   it('asks again when the credentials are about to expire', async () => {
     cognito.fetch.mockImplementationOnce(async ({ logins }: Logins) =>
       credentialsFor(logins[LOGIN], 60 * 1000),

@@ -5,6 +5,7 @@
 // what it returns.
 import { renderToStaticMarkup } from 'react-dom/server';
 import { useEligibility } from './useEligibility';
+import type { FetchApiOptions } from './useAwsClient';
 import { ApiError } from '../lib/apiError';
 import {
   inputsRequestBody,
@@ -32,13 +33,18 @@ function hookOnce<T>(useHook: () => T): T {
 interface Call {
   url: string;
   init?: RequestInit;
+  options?: FetchApiOptions;
 }
 
 /** fetchApi stub: records each call and answers with the next reply (an Error is thrown). */
 function fakeApi(...replies: unknown[]) {
   const calls: Call[] = [];
-  const fetchApi = async <T,>(url: string, init?: RequestInit): Promise<T> => {
-    calls.push({ url, init });
+  const fetchApi = async <T,>(
+    url: string,
+    init?: RequestInit,
+    options?: FetchApiOptions,
+  ): Promise<T> => {
+    calls.push(options ? { url, init, options } : { url, init });
     const reply = replies.length > 1 ? replies.shift() : replies[0];
     if (reply instanceof Error) throw reply;
     return reply as T;
@@ -109,6 +115,20 @@ describe('useEligibility', () => {
     ).toEqual(['bt', 'close']);
     expect(result?.best_lender).toBe('ICICI Bank');
     expect(result?.per_lender[0].eligible_amount).toBe(2058000);
+  });
+
+  it('sends the background check once (no retries); Check eligibility keeps them', async () => {
+    const { calls, state } = setup(WORKED_EXAMPLE_RESPONSE);
+    const controller = new AbortController();
+    const result = await state.precheck(PAN, inputs, controller.signal);
+    await state.calculate(PAN, inputs);
+    expect(result.best_lender).toBe('ICICI Bank');
+    expect(calls.map((c) => [c.url, c.init?.method, c.options])).toEqual([
+      [`${BASE}/calculate`, 'POST', { retries: 0 }],
+      [`${BASE}/calculate`, 'POST', undefined],
+    ]);
+    expect(calls[0].init?.signal).toBe(controller.signal);
+    expect(body(calls[0])).toEqual(body(calls[1]));
   });
 
   it('reports a failed calculation as null', async () => {
