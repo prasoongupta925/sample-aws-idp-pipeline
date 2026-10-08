@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useId, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import {
@@ -356,7 +356,9 @@ export function stillNeededLabel(t: TFunction, item: StillNeeded): string {
     const name =
       item.loan.lender ||
       (item.loan.loanType
-        ? t(`eligibility.cibil.loanTypes.${item.loan.loanType}`)
+        ? t(`eligibility.cibil.loanTypes.${item.loan.loanType}`, {
+            defaultValue: '',
+          })
         : null);
     const kind = item.field.endsWith('.outstanding') ? 'Outstanding' : 'Emi';
     return name
@@ -366,7 +368,31 @@ export function stillNeededLabel(t: TFunction, item: StillNeeded): string {
         })
       : t(`eligibility.needed.loan${kind}`, { number: item.loan.number });
   }
-  return t(`eligibility.needed.fields.${item.field.replace('.', '_')}`);
+  return fieldLabel(t, item.field) ?? item.field;
+}
+
+/**
+ * A form field's name from its id: "pincode", "enquiries.d30", "enquiries",
+ * "tradelines.2.emi", "tradelines.2", "other_income.1", "report_date";
+ * null for an id it does not know.
+ */
+export function fieldLabel(t: TFunction, field: string): string | null {
+  const [head, n, key] = field.split('.');
+  if (head === 'tradelines' && n) {
+    return key === 'emi' || key === 'outstanding'
+      ? t(`eligibility.needed.loan${key === 'emi' ? 'Emi' : 'Outstanding'}`, {
+          number: n,
+        })
+      : t('eligibility.cibil.tradeline', { number: n });
+  }
+  if (head === 'other_income') return t('eligibility.profile.otherIncome');
+  if (head === 'report_date') return t('eligibility.cibil.report');
+  if (field === 'enquiries') return t('eligibility.precheck.fields.enquiries');
+  return (
+    t(`eligibility.needed.fields.${field.replace('.', '_')}`, {
+      defaultValue: '',
+    }) || null
+  );
 }
 
 interface StillNeededListProps {
@@ -528,12 +554,23 @@ export function StillNeededList({
   );
 }
 
-/** "HDFC Bank, Bandhan Bank" and the reason; the backend's sentences on hover. */
+/**
+ * A cause and its banks, each with its own number: "CIBIL 690 is below the
+ * minimum at Axis Bank (750), Tata Capital (725)"; the backend's sentences on
+ * hover.
+ */
 export function RefusalLine({ refusal }: { refusal: BankRefusal }) {
   return (
     <span className="min-w-0 break-words" title={refusal.sentences.join('\n')}>
-      <span className="font-semibold">{refusal.lenders.join(', ')}:</span>{' '}
-      {refusal.text}
+      {refusal.before}
+      {refusal.banks.map((bank, i) => (
+        <Fragment key={bank.name}>
+          {i > 0 && ', '}
+          <span className="font-semibold">{bank.name}</span>
+          {bank.value !== null && ` (${bank.value})`}
+        </Fragment>
+      ))}
+      {refusal.after}
     </span>
   );
 }

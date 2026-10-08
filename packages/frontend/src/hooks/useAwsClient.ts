@@ -67,6 +67,16 @@ export interface ContentBlock {
   text?: string;
 }
 
+/** Options of one fetchApi call. */
+export interface FetchApiOptions {
+  /**
+   * How often a 5xx or 429 answer is tried again, with backoff (aws4fetch's
+   * default: 10). A background request that is simply sent again later (the
+   * eligibility panel's pre-check) passes 0, so one failure is one request.
+   */
+  retries?: number;
+}
+
 /** Parse the stream (JSON events) */
 async function parseStream(
   response: Response,
@@ -223,9 +233,9 @@ export function useAwsClient() {
     return promise;
   }, []);
 
-  /** Create a SigV4-signed AWS client */
+  /** Create a SigV4-signed AWS client (`retries`: aws4fetch's default unless given) */
   const createAwsClient = useCallback(
-    async (service: string, region?: string) => {
+    async (service: string, region?: string, retries?: number) => {
       const { cognitoProps } = latest.current;
       if (!cognitoProps) throw new Error('Cognito props not available');
 
@@ -236,6 +246,7 @@ export function useAwsClient() {
         sessionToken: credentials.sessionToken,
         region: region ?? cognitoProps.region,
         service,
+        ...(retries === undefined ? {} : { retries }),
       });
     },
     [getCredentials],
@@ -243,12 +254,16 @@ export function useAwsClient() {
 
   /** Call the backend API */
   const fetchApi = useCallback(
-    async <T>(path: string, options?: RequestInit): Promise<T> => {
+    async <T>(
+      path: string,
+      options?: RequestInit,
+      { retries }: FetchApiOptions = {},
+    ): Promise<T> => {
       const { apis, user } = latest.current;
       if (!apis?.Backend) throw new Error('Backend API URL not available');
       if (!user?.id_token) throw new Error('User token not available');
 
-      const client = await createAwsClient('execute-api');
+      const client = await createAwsClient('execute-api', undefined, retries);
       const headers = new Headers(options?.headers);
       headers.set('X-User-Id', user.profile?.['cognito:username'] as string);
 

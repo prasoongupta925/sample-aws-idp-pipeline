@@ -620,11 +620,27 @@ export interface ReferenceListsState {
 /** Kinds checked and previewed before they are saved. */
 export const PREVIEWED_KINDS: readonly ReferenceKind[] = ['lender_grid'];
 
-function useReferenceLists(
+/**
+ * Kinds the eligibility calculation reads (the policy sheet, the company
+ * list, the pincode list): saving or removing one changes the banks' answer.
+ */
+export const ELIGIBILITY_KINDS: readonly ReferenceKind[] = [
+  'pincode_serviceability',
+  'company_categories',
+  'lender_grid',
+];
+
+/**
+ * The DSA's lists: load, upload (a lender grid is previewed first), remove.
+ * After a list is saved or removed: `onChanged` (the branches), and
+ * `onPolicyChanged` when the calculation reads that kind.
+ */
+export function useReferenceLists(
   fetchApi: FetchApi,
   projectId: string,
   t: TFunction,
   onChanged: () => void,
+  onPolicyChanged?: () => void,
 ) {
   const [state, setState] = useState<ReferenceListsState>({
     data: null,
@@ -702,6 +718,7 @@ function useReferenceLists(
         }));
         if (preview) return;
         onChanged();
+        if (ELIGIBILITY_KINDS.includes(kind)) onPolicyChanged?.();
         await load();
       } catch (err) {
         console.error('Failed to upload the list:', err);
@@ -717,7 +734,7 @@ function useReferenceLists(
         }));
       }
     },
-    [fetchApi, projectId, t, onChanged, load, state.data],
+    [fetchApi, projectId, t, onChanged, onPolicyChanged, load, state.data],
   );
 
   /** Upload a list; a lender grid is first only checked and shown (save() keeps it). */
@@ -747,6 +764,7 @@ function useReferenceLists(
           outcome: { kind, ok: true, list: null },
         }));
         onChanged();
+        if (ELIGIBILITY_KINDS.includes(kind)) onPolicyChanged?.();
         await load();
       } catch (err) {
         console.error('Failed to remove the list:', err);
@@ -764,7 +782,7 @@ function useReferenceLists(
         }));
       }
     },
-    [fetchApi, projectId, t, onChanged, load],
+    [fetchApi, projectId, t, onChanged, onPolicyChanged, load],
   );
 
   return { state, load, upload, save, cancel, remove };
@@ -1556,7 +1574,10 @@ export interface BranchFinderProps {
   pincode: string | undefined;
   /** The lenders to show (e.g. the eligible ones), in this order. */
   lenders: string[];
-  /** After an admin saves or removes the lender policy workbook. */
+  /**
+   * After a list the calculation reads (the DSA's policy sheet, company or
+   * pincode list) is saved or removed, or an admin's lender policy workbook.
+   */
   onPolicyChanged?: () => void;
 }
 
@@ -1584,7 +1605,13 @@ export default function BranchFinder({
       : 'pincode';
   const branches = useBranches(fetchApi, path, version);
   const refresh = useCallback(() => setVersion((v) => v + 1), []);
-  const lists = useReferenceLists(fetchApi, projectId, t, refresh);
+  const lists = useReferenceLists(
+    fetchApi,
+    projectId,
+    t,
+    refresh,
+    onPolicyChanged,
+  );
   const { state: listsState, load: loadLists } = lists;
 
   // The lists load when the panel is first opened.

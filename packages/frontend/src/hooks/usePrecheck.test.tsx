@@ -1,6 +1,7 @@
 // @vitest-environment node
 // The eligibility panel's background check: debounced, never the same key
-// twice, late answers ignored, nothing without a key. The DOM comes from
+// twice (but on Try again), late answers ignored, nothing without a key, a
+// failure reported. The DOM comes from
 // ../test/jsdom (the stock jsdom environment cannot start in this
 // workspace); it must be imported before testing-library.
 import '../test/jsdom';
@@ -35,6 +36,9 @@ function controlledRun() {
 
 type Props = { scope: string; requestKey: string | null };
 
+/** No answer, no failure. */
+const IDLE = { failed: false, error: null, retry: expect.any(Function) };
+
 function setup(first: Props) {
   const { run, calls } = controlledRun();
   const hook = renderHook(
@@ -64,6 +68,7 @@ describe('usePrecheck', () => {
       key: 'k1',
       at: expect.any(Number),
       checking: false,
+      ...IDLE,
     });
 
     // Three edits in a row: one check, for the last.
@@ -115,6 +120,7 @@ describe('usePrecheck', () => {
       key: null,
       at: null,
       checking: true,
+      ...IDLE,
     });
     await act(async () => calls[1].resolve(answer('k2')));
     expect(result.current).toMatchObject({
@@ -133,6 +139,7 @@ describe('usePrecheck', () => {
       key: null,
       at: null,
       checking: false,
+      ...IDLE,
     });
     idle.unmount();
 
@@ -147,33 +154,74 @@ describe('usePrecheck', () => {
     expect(sent.calls[0].signal.aborted).toBe(true);
   });
 
-  it('skips a failed check quietly until the inputs change', async () => {
+  it('reports a failed check, keeps the last answer and waits for new inputs', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const { result, rerender, run, calls } = setup({
       scope: 'A',
       requestKey: 'k1',
     });
     await waitFor(() => expect(run).toHaveBeenCalledTimes(1));
-    await act(async () =>
-      calls[0].reject(
-        Object.assign(new Error('API error: 422'), { status: 422 }),
-      ),
-    );
-    expect(result.current).toEqual({
-      result: null,
-      key: null,
-      at: null,
-      checking: false,
-    });
-    expect(warn).toHaveBeenCalledWith(
-      'Background eligibility check skipped',
-      422,
-    );
-    rerender({ scope: 'A', requestKey: 'k1' });
-    await sleep(DELAY * 2);
-    expect(run).toHaveBeenCalledTimes(1);
+    await act(async () => calls[0].resolve(answer('k1')));
     rerender({ scope: 'A', requestKey: 'k2' });
     await waitFor(() => expect(run).toHaveBeenCalledTimes(2));
+    const refused = Object.assign(new Error('API error: 422'), {
+      status: 422,
+    });
+    await act(async () => calls[1].reject(refused));
+    expect(result.current).toEqual({
+      // The last good answer stays (for other inputs).
+      result: answer('k1'),
+      key: 'k1',
+      at: expect.any(Number),
+      checking: false,
+      failed: true,
+      error: refused,
+      retry: expect.any(Function),
+    });
+    // Only the status is logged (a 422 may quote a value typed).
+    expect(warn).toHaveBeenCalledWith(
+      'Background eligibility check failed',
+      422,
+    );
+    rerender({ scope: 'A', requestKey: 'k2' });
+    await sleep(DELAY * 2);
+    expect(run).toHaveBeenCalledTimes(2);
+    // Other inputs: checked, and the failure is no longer theirs.
+    rerender({ scope: 'A', requestKey: 'k3' });
+    expect(result.current).toMatchObject({ failed: false, error: null });
+    await waitFor(() => expect(run).toHaveBeenCalledTimes(3));
+  });
+
+  it('tries the same inputs again at once on retry, with the same function every render', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { result, rerender, run, calls } = setup({
+      scope: 'A',
+      requestKey: 'k1',
+    });
+    const retry = result.current.retry;
+    await waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+    await act(async () => calls[0].reject(new Error('API error: 503')));
+    expect(result.current).toMatchObject({ failed: true, checking: false });
+    rerender({ scope: 'A', requestKey: 'k1' });
+    expect(result.current.retry).toBe(retry);
+
+    const asked = performance.now();
+    act(() => result.current.retry());
+    expect(result.current).toMatchObject({
+      failed: false,
+      error: null,
+      checking: true,
+    });
+    await waitFor(() => expect(run).toHaveBeenCalledTimes(2));
+    // At once, not after the delay.
+    expect(performance.now() - asked).toBeLessThan(DELAY * 4);
+    await act(async () => calls[1].resolve(answer('k1')));
+    expect(result.current).toMatchObject({
+      result: answer('k1'),
+      key: 'k1',
+      failed: false,
+      checking: false,
+    });
   });
 
   it("never shows another applicant's answer", async () => {
@@ -189,6 +237,7 @@ describe('usePrecheck', () => {
       key: null,
       at: null,
       checking: true,
+      ...IDLE,
     });
     // B's first check starts at once too.
     await waitFor(() => expect(run).toHaveBeenCalledTimes(2));

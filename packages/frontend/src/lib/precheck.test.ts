@@ -1,7 +1,8 @@
 // @vitest-environment node
 // "Before you check": sorting the backend's refusals (app/eligibility.py's
-// sentences, from precheckFixtures: the engine's own answers) into fields,
-// lines and tab counts, and when a background check may run.
+// sentences, from precheckFixtures: the engine's own answers) into the fields
+// still empty (with what each blocks), one line per cause and tab counts, and
+// when a background check may run.
 import {
   ENGINE_ANSWERS,
   engineAnswer,
@@ -55,7 +56,9 @@ const NONE: StillNeeded[] = [];
 describe('reasonField: the field a refusal comes from', () => {
   it('maps every refusal of the engine to a field or "Still needed"', () => {
     const unmapped = Object.values(ENGINE_ANSWERS)
-      .flatMap((answer) => answer.per_lender.flatMap((r) => r.reasons))
+      .flatMap((answer) =>
+        answer.per_lender.flatMap((r) => r.reasons as string[]),
+      )
       .filter((r) => reasonField(r) === null && missingReasonField(r) === null);
     expect(unmapped).toEqual([]);
   });
@@ -141,10 +144,6 @@ describe('reasonField: the field a refusal comes from', () => {
       'Eligible amount ₹2,00,000 does not cover the balance transfer of ₹3,00,000',
       'tradelines',
     ],
-    [
-      'Outstanding not entered for Tradeline 2 (Gold Co, Gold Loan): HDFC Bank counts 1% of a gold loan\'s outstanding a month (Sheet2, HDFC Bank, Gold Loan "0.01", cell AA2)',
-      'tradelines',
-    ],
   ])('%s -> %s', (reason, field) => {
     expect(reasonField(reason)).toBe(field);
     expect(missingReasonField(reason)).toBeNull();
@@ -183,8 +182,14 @@ describe('missingReasonField: refusals that only say a field is empty', () => {
       'Outstanding not entered for Tradeline 3 (Sample Finance, Personal Loan) marked BT: the balance-transfer amount is unknown',
       'tradelines.3.outstanding',
     ],
+    // A gold loan its bank counts by the outstanding: an empty field too.
+    [
+      'Outstanding not entered for Tradeline 2 (Gold Co, Gold Loan): HDFC Bank counts 1% of a gold loan\'s outstanding a month (Sheet2, HDFC Bank, Gold Loan "0.01", cell AA2)',
+      'tradelines.2.outstanding',
+    ],
   ])('%s -> %s', (reason, field) => {
     expect(missingReasonField(reason)).toBe(field);
+    expect(reasonField(reason)).toBeNull();
   });
 });
 
@@ -276,12 +281,21 @@ describe('reasonWithoutBank: one line for the banks that give it', () => {
   });
 });
 
-describe('bankRefusals: "Banks that will say no"', () => {
+describe('bankRefusals: "Banks that will say no", one line per cause', () => {
+  const lines = (scenario: EngineScenario, needed = NONE) =>
+    bankRefusals(result(scenario), needed).map((r) => r.text);
+
   it('puts the banks that do not lend to the category on one line', () => {
     const refusals = bankRefusals(result('cat_u'), NONE);
     expect(refusals).toEqual([
       {
-        text: 'Does not lend to CAT U (unlisted) companies',
+        text: 'No loans to CAT U (unlisted) companies at HDFC Bank, Bandhan Bank',
+        before: 'No loans to CAT U (unlisted) companies at ',
+        after: '',
+        banks: [
+          { name: 'HDFC Bank', value: null },
+          { name: 'Bandhan Bank', value: null },
+        ],
         lenders: ['HDFC Bank', 'Bandhan Bank'],
         sentences: [
           'HDFC Bank does not lend to CAT U (unlisted) companies (Sheet1, slab 60,000, CAT_U is NA, cell I8)',
@@ -290,7 +304,10 @@ describe('bankRefusals: "Banks that will say no"', () => {
         field: 'company',
       },
       {
-        text: 'Pincode 401202 is not serviceable',
+        text: 'Pincode 401202 is not serviceable by Axis Bank',
+        before: 'Pincode 401202 is not serviceable by ',
+        after: '',
+        banks: [{ name: 'Axis Bank', value: null }],
         lenders: ['Axis Bank'],
         sentences: ['Pincode 401202 is not serviceable by Axis Bank'],
         field: 'pincode',
@@ -298,22 +315,60 @@ describe('bankRefusals: "Banks that will say no"', () => {
     ]);
   });
 
-  it('keeps each bank its own minimum', () => {
-    const lines = bankRefusals(result('cibil_enquiries'), NONE).map(
-      (r) => `${r.lenders.join(', ')}: ${r.text} [${r.field}]`,
+  it('groups by cause, each bank with its own minimum: one CIBIL line, one line per enquiry rule', () => {
+    // 11 sentences of 7 banks; the sheet's and the sample policy's minimums
+    // are the same cause (CIBIL 690 too low).
+    const refusals = bankRefusals(result('cibil_enquiries'), NONE);
+    expect(refusals.map((r) => `${r.text} [${r.field}]`)).toEqual([
+      'CIBIL 690 is below the minimum at HDFC Bank (710), ICICI Bank (720), Axis Bank (750), Bajaj Finance (700), Tata Capital (725), Bandhan Bank (700), Indusind Bank (725) [score]',
+      '6 enquiries in the last 60 days: over the limit at HDFC Bank (5) [enquiries]',
+      '5 enquiries in the last 30 days: over the limit at ICICI Bank (4) [enquiries]',
+      'Pincode 401202 is not serviceable by Axis Bank [pincode]',
+      '6 enquiries in the last 90 days: over the limit at Tata Capital (4) [enquiries]',
+    ]);
+    expect(refusals[0].sentences).toHaveLength(7);
+    // His session: one line for the three banks, none hidden.
+    expect(lines('session', stillNeeded(emptyInputs()))).toEqual([
+      'CIBIL 722 is below the minimum at Axis Bank (750), Tata Capital (725), Indusind Bank (725)',
+      'No loans to CAT U (unlisted) companies at HDFC Bank, Bandhan Bank',
+    ]);
+  });
+
+  it('puts the banks of the same enquiry rule on one line, each with its limit', () => {
+    const answer = parseCalculateResponse(
+      engineAnswer('clear', {
+        per_lender: [
+          {
+            lender: 'Bajaj Finance',
+            lender_id: 'bajaj_finance',
+            status: 'not_eligible',
+            reasons: [
+              "6 enquiries in the last 90 days: more than Bajaj Finance's limit of 5",
+            ],
+          },
+          {
+            lender: 'Tata Capital',
+            lender_id: 'tata_capital',
+            status: 'not_eligible',
+            reasons: [
+              "6 enquiries in the last 90 days: more than Tata Capital's limit of 4",
+            ],
+          },
+          {
+            lender: 'Indusind Bank',
+            lender_id: 'indusind_bank',
+            status: 'not_eligible',
+            reasons: [
+              '10 enquiries in the last 120 days already: more than Indusind Bank\'s limit of 9 in 270 days (Sheet2, Indusind Bank, Enquiries "Last 270 days 9", cell D6)',
+            ],
+          },
+        ],
+      }),
+      'Applicant',
     );
-    expect(lines).toEqual([
-      'HDFC Bank: Needs CIBIL >= 710: the score is 690 [score]',
-      "HDFC Bank: 6 enquiries in the last 60 days: more than the bank's limit of 5 [enquiries]",
-      'ICICI Bank: Needs CIBIL >= 720: the score is 690 [score]',
-      "ICICI Bank: 5 enquiries in the last 30 days: more than the bank's limit of 4 [enquiries]",
-      'Axis Bank: Pincode 401202 is not serviceable [pincode]',
-      'Axis Bank: Needs CIBIL >= 750: the score is 690 [score]',
-      "Bajaj Finance: CIBIL score 690 is below the bank's minimum 700 [score]",
-      "Tata Capital: CIBIL score 690 is below the bank's minimum 725 [score]",
-      "Tata Capital: 6 enquiries in the last 90 days: more than the bank's limit of 4 [enquiries]",
-      'Bandhan Bank: Needs CIBIL >= 700: the score is 690 [score]',
-      'Indusind Bank: Needs CIBIL >= 725: the score is 690 [score]',
+    expect(bankRefusals(answer, NONE).map((r) => r.text)).toEqual([
+      '6 enquiries in the last 90 days: over the limit at Bajaj Finance (5), Tata Capital (4)',
+      '10 enquiries in the last 120 days already: over the limit at Indusind Bank (9 in 270 days)',
     ]);
   });
 
@@ -322,78 +377,118 @@ describe('bankRefusals: "Banks that will say no"', () => {
     // 5 sheet banks refuse by the sample policy's (the sheet itself says
     // "Grade 4 employees: Funding" for Axis, Bandhan and IndusInd).
     const refusals = bankRefusals(result('grade_4'), NONE);
-    expect(
-      refusals.map((r) => `${r.lenders.join(', ')}: ${r.text} [${r.field}]`),
-    ).toEqual([
-      'HDFC Bank, ICICI Bank, Axis Bank, Bandhan Bank, Indusind Bank: Employment type Grade 4 is not accepted (Sample: not in your policy sheet) [employment_type]',
-      'Axis Bank: Pincode 401202 is not serviceable [pincode]',
-      'Bajaj Finance: Employment type Grade 4 is not accepted [employment_type]',
+    expect(refusals.map((r) => `${r.text} [${r.field}]`)).toEqual([
+      'Employment type Grade 4 is not accepted by HDFC Bank, ICICI Bank, Axis Bank, Bandhan Bank, Indusind Bank (Sample: not in your policy sheet) [employment_type]',
+      'Pincode 401202 is not serviceable by Axis Bank [pincode]',
+      'Employment type Grade 4 is not accepted by Bajaj Finance [employment_type]',
     ]);
     expect(refusals[0].sentences).toHaveLength(5);
     expect(refusals[2].sentences).toEqual([
       'Employment type Grade 4 is not accepted by Bajaj Finance',
     ]);
+    // A sheet bank's CIBIL rule from the sample policy: its own line, marked.
+    const answer = parseCalculateResponse(
+      engineAnswer('clear', {
+        per_lender: [
+          {
+            lender: 'HDFC Bank',
+            lender_id: 'hdfc_bank',
+            status: 'not_eligible',
+            reasons: [
+              "CIBIL score 690 is below HDFC Bank's minimum 750 (Sample: not in your policy sheet)",
+            ],
+          },
+          {
+            lender: 'ICICI Bank',
+            lender_id: 'icici_bank',
+            status: 'not_eligible',
+            reasons: [
+              'ICICI Bank needs CIBIL >= 720: the score is 690 (Sheet2, ICICI Bank, Cibil Score "720", cell B3)',
+            ],
+          },
+        ],
+      }),
+      'Applicant',
+    );
+    expect(bankRefusals(answer, NONE).map((r) => r.text)).toEqual([
+      'CIBIL 690 is below the minimum at HDFC Bank (750) (Sample: not in your policy sheet)',
+      'CIBIL 690 is below the minimum at ICICI Bank (720)',
+    ]);
     // The hint under Employment type: the same two lines, the mark kept.
     expect(
       refusalsByField(refusals).employment_type?.map((r) => r.text),
     ).toEqual([
-      'Employment type Grade 4 is not accepted (Sample: not in your policy sheet)',
-      'Employment type Grade 4 is not accepted',
+      'Employment type Grade 4 is not accepted by HDFC Bank, ICICI Bank, Axis Bank, Bandhan Bank, Indusind Bank (Sample: not in your policy sheet)',
+      'Employment type Grade 4 is not accepted by Bajaj Finance',
     ]);
     expect(precheckTabCounts(precheckSummary(result('grade_4'), NONE))).toEqual(
       { profile: 3, cibil: 0, lenders: 0 },
     );
   });
 
-  it('groups the same refusal of many banks', () => {
-    const noRoom = bankRefusals(result('no_room'), NONE);
-    expect(noRoom.map((r) => [r.lenders.length, r.text])).toEqual([
-      [
-        5,
-        'Existing obligations ₹59,000 leave no room within FOIR 60% of ₹60,000 (₹36,000)',
-      ],
-      [1, 'Pincode 401202 is not serviceable'],
-      [
-        1,
-        'Existing obligations ₹59,000 leave no room within FOIR 55% of ₹60,000 (₹33,000)',
-      ],
-      [
-        1,
-        'Existing obligations ₹59,000 leave no room within FOIR 50% of ₹60,000 (₹30,000)',
-      ],
+  it('groups the same cause of many banks, the line of most banks first', () => {
+    expect(lines('no_room')).toEqual([
+      'Existing obligations ₹59,000 leave no room within the FOIR at HDFC Bank (60%), ICICI Bank (60%), Axis Bank (60%), Bajaj Finance (55%), Tata Capital (50%), Bandhan Bank (60%), Indusind Bank (60%)',
+      'Pincode 401202 is not serviceable by Axis Bank',
     ]);
     const bt = bankRefusals(result('bt_limits'), NONE);
     expect(bt[0]).toMatchObject({
-      text: '1 credit card marked BT: the bank does not take over credit cards',
+      text: '1 credit card marked BT: credit cards are not taken over by HDFC Bank, ICICI Bank, Bandhan Bank, Indusind Bank',
       lenders: ['HDFC Bank', 'ICICI Bank', 'Bandhan Bank', 'Indusind Bank'],
       field: 'tradelines',
     });
     expect(bt[0].sentences).toHaveLength(4);
-    const low = bankRefusals(result('low_income'), NONE);
-    expect(low[0]).toMatchObject({
-      text: "Income ₹20,000 is below the bank's minimum ₹25,000",
-      lenders: [
-        'HDFC Bank',
-        'ICICI Bank',
-        'Axis Bank',
-        'Bandhan Bank',
-        'Indusind Bank',
-      ],
-      field: 'net_income',
-    });
+    expect(lines('low_income')[0]).toBe(
+      'Income ₹20,000 is below the minimum at HDFC Bank (₹25,000), ICICI Bank (₹25,000), Axis Bank (₹25,000), Bandhan Bank (₹25,000), Indusind Bank (₹25,000)',
+    );
+    expect(lines('sample_only')).toEqual([
+      'No credit history (CIBIL -1): below the minimum at HDFC Bank (750), ICICI Bank (725), Axis Bank (750), Bajaj Finance (700), Tata Capital (725)',
+      'Employment type Partnership/Proprietorship is not accepted by HDFC Bank, Axis Bank',
+      'Pincode 401202 is not serviceable by Axis Bank',
+    ]);
   });
 
-  it('leaves the empty fields to "Still needed" when it lists them', () => {
+  it('keeps a sentence no rule knows, one line per sentence with its banks', () => {
+    const answer = parseCalculateResponse(
+      engineAnswer('clear', {
+        per_lender: [
+          {
+            lender: 'HDFC Bank',
+            lender_id: 'hdfc_bank',
+            status: 'not_eligible',
+            reasons: ['HDFC Bank asks for a new document (cell B9)'],
+          },
+          {
+            lender: 'ICICI Bank',
+            lender_id: 'icici_bank',
+            status: 'not_eligible',
+            reasons: ['ICICI Bank asks for a new document'],
+          },
+        ],
+      }),
+      'Applicant',
+    );
+    expect(bankRefusals(answer, NONE)).toMatchObject([
+      {
+        text: 'HDFC Bank, ICICI Bank: Asks for a new document',
+        field: null,
+      },
+    ]);
+  });
+
+  it('leaves the empty fields to "Still needed", with or without its list', () => {
     const answer = result('missing');
     const needed = stillNeeded(setCibil(emptyInputs(), { score: 765 }));
     expect(bankRefusals(answer, needed)).toEqual([]);
-    // Without that list (another API's), they show, one line each.
-    const all = bankRefusals(answer, NONE);
-    expect(all[0]).toMatchObject({
-      text: 'Pincode not entered: serviceability cannot be checked',
-      field: 'pincode',
-    });
-    expect(all[0].lenders).toHaveLength(7);
+    // Without that list (another API's) they are still needed fields, not refusals.
+    expect(bankRefusals(answer, NONE)).toEqual([]);
+    expect(precheckSummary(answer, NONE).needed.map((n) => n.field)).toEqual([
+      'pincode',
+      'employment_type',
+      'company',
+      'enquiries',
+      'net_income',
+    ]);
   });
 
   it('leaves a loan without its EMI or outstanding to "Still needed"', () => {
@@ -418,9 +513,9 @@ describe('bankRefusals: "Banks that will say no"', () => {
       'tradelines.2.emi',
       'tradelines.3.outstanding',
     ]);
-    expect(
-      bankRefusals(result('incomplete_loans'), needed).map((r) => r.text),
-    ).toEqual(['Pincode 401202 is not serviceable']);
+    expect(lines('incomplete_loans', needed)).toEqual([
+      'Pincode 401202 is not serviceable by Axis Bank',
+    ]);
   });
 
   it('ignores the banks that can lend and works without a result', () => {
@@ -434,6 +529,292 @@ describe('bankRefusals: "Banks that will say no"', () => {
     const byField = refusalsByField(bankRefusals(result('cat_u'), NONE));
     expect(Object.keys(byField)).toEqual(['company', 'pincode']);
     expect(byField.company?.[0].lenders).toEqual(['HDFC Bank', 'Bandhan Bank']);
+  });
+});
+
+describe('precheckSummary: what each empty field blocks', () => {
+  it('says which banks need a field, which need only it, and the next step (his 7 Oct check)', () => {
+    // The form of his session: everything but the pincode filled.
+    const inputs = setCibil(setProfile(filled(), { pincode: null }), {
+      score: 722,
+    });
+    const summary = precheckSummary(result('session'), stillNeeded(inputs), {
+      inputs,
+    });
+    const all = [
+      'HDFC Bank',
+      'ICICI Bank',
+      'Axis Bank',
+      'Bajaj Finance',
+      'Tata Capital',
+      'Bandhan Bank',
+      'Indusind Bank',
+    ];
+    expect(summary.needed).toEqual([
+      {
+        field: 'pincode',
+        required: true,
+        tab: 'profile',
+        fromDocuments: false,
+        banks: all,
+        only: ['ICICI Bank', 'Bajaj Finance'],
+      },
+    ]);
+    // Enter the pincode: ICICI Bank and Bajaj Finance need only that.
+    expect(summary.next).toEqual({
+      fields: ['pincode'],
+      banks: ['ICICI Bank', 'Bajaj Finance'],
+    });
+    expect(summary).toMatchObject({ eligible: 0, total: 7 });
+  });
+
+  it('keeps "in the documents" for a field a document holds', () => {
+    const inputs = setProfile(filled(), { pincode: null });
+    const sources = {
+      pincode: {
+        source: 'document' as const,
+        value: '411045',
+        documents: [],
+        detail: null,
+        unverified: false,
+      },
+    };
+    const summary = precheckSummary(
+      result('session'),
+      stillNeeded(inputs, sources),
+      { inputs },
+    );
+    expect(summary.needed[0]).toMatchObject({
+      field: 'pincode',
+      fromDocuments: true,
+    });
+  });
+
+  it('picks the fewest fields that let the most banks lend', () => {
+    const answer = result('missing');
+    const inputs = setCibil(emptyInputs(), { score: 765 });
+    const summary = precheckSummary(answer, stillNeeded(inputs), { inputs });
+    // Every bank waits for the same 5 fields, and for nothing else.
+    expect(summary.next).toEqual({
+      fields: [
+        'pincode',
+        'company',
+        'employment_type',
+        'net_income',
+        'enquiries.d90',
+      ],
+      banks: [
+        'HDFC Bank',
+        'ICICI Bank',
+        'Axis Bank',
+        'Bajaj Finance',
+        'Tata Capital',
+        'Bandhan Bank',
+        'Indusind Bank',
+      ],
+    });
+    expect(summary.needed.every((n) => n.banks?.length === 7)).toBe(true);
+    expect(summary.needed.every((n) => n.only.length === 0)).toBe(true);
+    // The loans without an EMI or outstanding: 6 banks need only those two.
+    const loans = setCibil(filled(), {
+      tradelines: [
+        { ...emptyTradeline(), emi: 5000 },
+        { ...emptyTradeline(), loan_type: 'credit_card', action: 'obligate' },
+        { ...emptyTradeline(), action: 'bt', emi: 4000 },
+      ],
+    });
+    expect(
+      precheckSummary(result('incomplete_loans'), stillNeeded(loans), {
+        inputs: loans,
+      }).next,
+    ).toEqual({
+      fields: ['tradelines.2.emi', 'tradelines.3.outstanding'],
+      banks: [
+        'HDFC Bank',
+        'ICICI Bank',
+        'Bajaj Finance',
+        'Tata Capital',
+        'Bandhan Bank',
+        'Indusind Bank',
+      ],
+    });
+  });
+
+  it('has no consequences without an answer, and no next step when every bank also refuses', () => {
+    const inputs = setProfile(filled(), { pincode: null });
+    const none = precheckSummary(null, stillNeeded(inputs), { inputs });
+    expect(none.needed).toMatchObject([
+      { field: 'pincode', banks: null, only: [] },
+    ]);
+    expect(none.next).toBeNull();
+    // cibil_enquiries with the pincode emptied on screen since: an answer for
+    // other inputs names no empty pincode, and every bank refuses anyway.
+    const old = precheckSummary(
+      result('cibil_enquiries'),
+      stillNeeded(inputs),
+      {
+        inputs,
+      },
+    );
+    expect(old.needed).toMatchObject([
+      { field: 'pincode', banks: [], only: [] },
+    ]);
+    expect(old.next).toBeNull();
+  });
+
+  it("adds an empty field the answer names but the list does not: a gold loan's outstanding", () => {
+    const gold = setCibil(filled(), {
+      tradelines: [
+        { ...emptyTradeline(), emi: 5000 },
+        {
+          ...emptyTradeline(),
+          loan_type: 'gold' as never,
+          lender: 'Gold Co',
+          emi: 1500,
+        },
+      ],
+    });
+    const summary = precheckSummary(result('gold'), stillNeeded(gold), {
+      inputs: gold,
+    });
+    expect(summary.needed).toEqual([
+      {
+        field: 'tradelines.2.outstanding',
+        required: true,
+        tab: 'cibil',
+        fromDocuments: false,
+        loan: { number: 2, lender: 'Gold Co', loanType: 'gold' },
+        banks: ['HDFC Bank', 'ICICI Bank', 'Indusind Bank'],
+        only: ['HDFC Bank', 'ICICI Bank', 'Indusind Bank'],
+      },
+    ]);
+    expect(summary.refusals.map((r) => r.text)).toEqual([
+      'Pincode 401202 is not serviceable by Axis Bank',
+    ]);
+    expect(precheckTabCounts(summary)).toEqual({
+      profile: 1,
+      cibil: 1,
+      lenders: 0,
+    });
+    // Typed since (the answer is for other inputs): not still needed.
+    const typed = setCibil(gold, {
+      tradelines: gold.cibil.tradelines.map((row, i) =>
+        i === 1 ? { ...row, outstanding: 80000 } : row,
+      ),
+    });
+    expect(
+      precheckSummary(result('gold'), stillNeeded(typed), { inputs: typed })
+        .needed,
+    ).toEqual([]);
+  });
+});
+
+describe('precheckSummary: a refusal of an empty company is "Still needed: Company"', () => {
+  it('never shows "does not lend to CAT U" when no employer is entered', () => {
+    const inputs = setProfile(filled(), { company: null });
+    const summary = precheckSummary(result('no_company'), stillNeeded(inputs), {
+      inputs,
+    });
+    expect(summary.refusals.map((r) => r.text)).toEqual([
+      'Pincode 401202 is not serviceable by Axis Bank',
+    ]);
+    expect(summary.needed).toMatchObject([
+      {
+        field: 'company',
+        banks: [
+          'HDFC Bank',
+          'ICICI Bank',
+          'Axis Bank',
+          'Bajaj Finance',
+          'Tata Capital',
+          'Bandhan Bank',
+          'Indusind Bank',
+        ],
+        // HDFC and Bandhan too: their CAT U refusal is the empty company's.
+        only: [
+          'HDFC Bank',
+          'ICICI Bank',
+          'Bajaj Finance',
+          'Tata Capital',
+          'Bandhan Bank',
+          'Indusind Bank',
+        ],
+      },
+    ]);
+    expect(summary.next?.fields).toEqual(['company']);
+    expect(precheckTabCounts(summary)).toEqual({
+      profile: 2,
+      cibil: 0,
+      lenders: 0,
+    });
+  });
+
+  it("folds the sheet's missing CAT_U values too, but not a typed company's refusals", () => {
+    const answer = parseCalculateResponse(
+      engineAnswer('clear', {
+        per_lender: [
+          {
+            lender: 'HDFC Bank',
+            lender_id: 'hdfc_bank',
+            status: 'not_eligible',
+            reasons: [
+              "HDFC Bank's policy sheet has no ROI for slab 25,000, CAT_U",
+              'Company not entered: its category is needed',
+            ],
+          },
+          {
+            lender: 'ICICI Bank',
+            lender_id: 'icici_bank',
+            status: 'not_eligible',
+            reasons: [
+              "ICICI Bank's policy sheet has no category for a company not in its list",
+              'Company not entered: its category is needed',
+            ],
+          },
+        ],
+      }),
+      'Applicant',
+    );
+    const inputs = setProfile(filled(), { company: null });
+    const summary = precheckSummary(answer, stillNeeded(inputs), { inputs });
+    expect(summary.refusals).toEqual([]);
+    expect(summary.needed[0].only).toEqual(['HDFC Bank', 'ICICI Bank']);
+    // A company typed (unlisted): the same CAT U answer is the bank's.
+    const typed = setProfile(filled(), {
+      company: 'Unheard Of Traders Pvt Ltd',
+    });
+    expect(
+      precheckSummary(result('cat_u'), stillNeeded(typed), { inputs: typed })
+        .refusals[0].text,
+    ).toBe('No loans to CAT U (unlisted) companies at HDFC Bank, Bandhan Bank');
+  });
+});
+
+describe('precheckSummary: no alarms while typing', () => {
+  it('holds the refusals of the field being typed in, and is not clear meanwhile', () => {
+    const typed = setProfile(filled(), { company: 'Unheard Of Traders' });
+    const needed = stillNeeded(typed);
+    const shown = precheckSummary(result('cat_u'), needed, { inputs: typed });
+    expect(shown.refusals.map((r) => r.field)).toEqual(['company', 'pincode']);
+    const held = precheckSummary(result('cat_u'), needed, {
+      inputs: typed,
+      held: 'company',
+    });
+    expect(held.refusals.map((r) => r.field)).toEqual(['pincode']);
+    expect(held.held).toBe(1);
+    expect(precheckClear(held)).toBe(false);
+    expect(precheckTabCounts(held)).toEqual({
+      profile: 1,
+      cibil: 0,
+      lenders: 0,
+    });
+    // Another field held: nothing of the company's is.
+    expect(
+      precheckSummary(result('cat_u'), needed, {
+        inputs: typed,
+        held: 'score',
+      }).refusals,
+    ).toHaveLength(2);
   });
 });
 
@@ -536,11 +917,11 @@ describe('precheckSummary: the box', () => {
       }),
       stillNeeded(inputs),
     );
-    // Profile: the company and the pincode refusal; CIBIL: 7 score and 3
-    // enquiry refusals and the warning.
+    // Profile: the company and the pincode line; CIBIL: one CIBIL line for
+    // the 7 banks, 3 enquiry lines and the warning.
     expect(precheckTabCounts(summary)).toEqual({
       profile: 2,
-      cibil: 11,
+      cibil: 5,
       lenders: 0,
     });
     const unmapped = precheckSummary(
@@ -667,6 +1048,9 @@ describe('precheckKey: what the answer depends on', () => {
       expect(precheckKey('ABCDE1234F', change(filled()))).not.toBe(base);
     }
     expect(precheckKey('Asha Verma', filled())).not.toBe(base);
+    // A new policy sheet or company list (or Reload): the same inputs again.
+    expect(precheckKey('ABCDE1234F', filled(), 1)).not.toBe(base);
+    expect(precheckKey('ABCDE1234F', filled(), 0)).toBe(base);
     // Spacing that the API trims is the same request.
     expect(
       precheckKey('ABCDE1234F', setProfile(filled(), { pincode: ' 401202 ' })),
@@ -714,6 +1098,13 @@ describe("precheckKeyOf: Check eligibility's result as an answer", () => {
     );
     expect(precheckKeyOf('ABCDE1234F', inputsKey(inputs))).toBe(
       precheckKey('ABCDE1234F', inputs),
+    );
+    // Calculated before the policy changed: not the key of the inputs now.
+    expect(precheckKeyOf('ABCDE1234F', inputsKey(inputs), 2)).toBe(
+      precheckKey('ABCDE1234F', inputs, 2),
+    );
+    expect(precheckKeyOf('ABCDE1234F', inputsKey(inputs), 1)).not.toBe(
+      precheckKey('ABCDE1234F', inputs, 2),
     );
     expect(precheckKeyOf('ABCDE1234F', null)).toBeNull();
     expect(precheckKeyOf('ABCDE1234F', 'not json')).toBeNull();

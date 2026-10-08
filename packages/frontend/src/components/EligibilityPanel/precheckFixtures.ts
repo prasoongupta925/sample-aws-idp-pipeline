@@ -3,7 +3,9 @@
 // synthetic applicants of tests/test_lender_policy.py), cut to what the
 // "Before you check" box reads: each bank's status, reasons and notes, and
 // the policy sheet's "Conditions to confirm". Generated on 8 Oct 2026: the
-// reasons are the backend's sentences, word for word.
+// reasons are the backend's sentences, word for word. "session" and
+// "no_company" (8 Oct, later): the v2 sheet without a company list,
+// applicant(company=...) of tests/test_lender_policy.py.
 
 /** Each sheet bank's "Conditions to confirm" (scenario "clear"). */
 const CONDITIONS: Record<string, string[]> = {
@@ -991,6 +993,199 @@ export const ENGINE_ANSWERS = {
         reasons: [
           'Employment type Grade 4 is not accepted by Indusind Bank (Sample: not in your policy sheet)',
         ],
+        notes: [
+          'No pincode list covers Indusind Bank: serviceability not checked',
+        ],
+        sheet: [
+          'Check the credit report: at most 9 enquiries in the last 270 days (3 enquiries in the last 120 days entered) (cell D6)',
+          'Check the bank statement: no bounce in the last 3 months (cell F6)',
+          'Work from home: HR Confirmation Required (cell E6)',
+          'Bachelor accommodation: Funding (cell H6)',
+          'Director / doctor profile: Not Funding (cell I6)',
+          'Consultant profile: Funding (cell J6)',
+          'Grade 4 employees: Funding (cell K6)',
+          'Contract employees: Not Funding (cell L6)',
+          "Co-applicant's home loan: Not obligate (cell N6)",
+          'Co-applicant income: Not Consider (cell O6)',
+          'Guarantor obligation: Not Consider (cell P6)',
+          'Trading in the bank statement: Funding (cell Q6)',
+          'Verification: Home (cell R6)',
+          'Recent funding: 3 months Ok (cell Z6)',
+        ],
+      }),
+    ],
+    notes: [] as string[],
+  },
+  // His last check on 7 Oct (replayed): no pincode, an employer missing from
+  // every company list (CAT U) and CIBIL 722. The pincode is the only thing
+  // ICICI Bank and Bajaj Finance still need; HDFC and Bandhan do not lend to
+  // CAT U; Axis, IndusInd and Tata need a higher score.
+  session: {
+    per_lender: [
+      row({
+        lender: 'HDFC Bank',
+        lender_id: 'hdfc_bank',
+        status: 'not_eligible',
+        reasons: [
+          'HDFC Bank does not lend to CAT U (unlisted) companies (Sheet1, slab 60,000, CAT_U is NA, cell I8)',
+          'Pincode not entered: serviceability cannot be checked',
+        ],
+        notes: [
+          "CAT_U: 'Unheard Of Traders Pvt Ltd' is not in HDFC Bank's company list, so CAT U applies",
+        ],
+      }),
+      row({
+        lender: 'ICICI Bank',
+        lender_id: 'icici_bank',
+        status: 'not_eligible',
+        reasons: ['Pincode not entered: serviceability cannot be checked'],
+        notes: [
+          "CAT_U: 'Unheard Of Traders Pvt Ltd' is not in ICICI Bank's company list, so CAT U applies",
+        ],
+        sheet: true,
+      }),
+      row({
+        lender: 'Axis Bank',
+        lender_id: 'axis_bank',
+        status: 'not_eligible',
+        reasons: [
+          'Pincode not entered: serviceability cannot be checked',
+          'Axis Bank needs CIBIL >= 750: the score is 722 (Sheet2, Axis Bank, Cibil Score "750", cell B4)',
+        ],
+        notes: [
+          "CAT_U: 'Unheard Of Traders Pvt Ltd' is not in Axis Bank's company list, so CAT U applies",
+        ],
+        sheet: true,
+      }),
+      row({
+        lender: 'Bajaj Finance',
+        lender_id: 'bajaj_finance',
+        status: 'not_eligible',
+        reasons: ['Pincode not entered: serviceability cannot be checked'],
+        notes: [
+          "'Unheard Of Traders Pvt Ltd' is not in Bajaj Finance's company list: its unlisted-company policy applies (FOIR 55%, multiplier 12)",
+        ],
+      }),
+      row({
+        lender: 'Tata Capital',
+        lender_id: 'tata_capital',
+        status: 'not_eligible',
+        reasons: [
+          'Pincode not entered: serviceability cannot be checked',
+          "CIBIL score 722 is below Tata Capital's minimum 725",
+        ],
+        notes: [
+          "'Unheard Of Traders Pvt Ltd' is not in Tata Capital's company list: its unlisted-company policy applies (FOIR 50%, multiplier 10)",
+          'Tata Capital calculates eligibility at 60 months (its calculation tenure), not at the requested 72',
+        ],
+      }),
+      row({
+        lender: 'Bandhan Bank',
+        lender_id: 'bandhan_bank',
+        status: 'not_eligible',
+        reasons: [
+          'Bandhan Bank does not lend to CAT U (unlisted) companies (Sheet1, slab 60,000, CAT_U is NA, cell I29)',
+          'Pincode not entered: serviceability cannot be checked',
+        ],
+        notes: [
+          "CAT_U: 'Unheard Of Traders Pvt Ltd' is not in Bandhan Bank's company list, so CAT U applies",
+          "Requested tenure 72 months is more than Bandhan Bank's max 60: the EMI is shown at 60 months and eligibility is calculated at 60 months",
+        ],
+      }),
+      row({
+        lender: 'Indusind Bank',
+        lender_id: 'indusind_bank',
+        status: 'not_eligible',
+        reasons: [
+          'Pincode not entered: serviceability cannot be checked',
+          'Indusind Bank needs CIBIL >= 725: the score is 722 (Sheet2, Indusind Bank, Cibil Score "725", cell B6)',
+        ],
+        notes: [
+          "CAT_U: 'Unheard Of Traders Pvt Ltd' is not in Indusind Bank's company list, so CAT U applies",
+        ],
+        sheet: [
+          'Check the credit report: at most 9 enquiries in the last 270 days (3 enquiries in the last 120 days entered) (cell D6)',
+          'Check the bank statement: no bounce in the last 3 months (cell F6)',
+          'Work from home: HR Confirmation Required (cell E6)',
+          'Bachelor accommodation: Funding (cell H6)',
+          'Director / doctor profile: Not Funding (cell I6)',
+          'Consultant profile: Funding (cell J6)',
+          'Grade 4 employees: Funding (cell K6)',
+          'Contract employees: Not Funding (cell L6)',
+          "Co-applicant's home loan: Not obligate (cell N6)",
+          'Co-applicant income: Not Consider (cell O6)',
+          'Guarantor obligation: Not Consider (cell P6)',
+          'Trading in the bank statement: Funding (cell Q6)',
+          'Verification: Home (cell R6)',
+          'Recent funding: 3 months Ok (cell Z6)',
+        ],
+      }),
+    ],
+    notes: [] as string[],
+  },
+  // No employer entered: the sheet banks price CAT U by default, so HDFC and
+  // Bandhan "do not lend to CAT U" only because the company is empty.
+  no_company: {
+    per_lender: [
+      row({
+        lender: 'HDFC Bank',
+        lender_id: 'hdfc_bank',
+        status: 'not_eligible',
+        reasons: [
+          'HDFC Bank does not lend to CAT U (unlisted) companies (Sheet1, slab 60,000, CAT_U is NA, cell I8)',
+          'Company not entered: its category is needed',
+        ],
+      }),
+      row({
+        lender: 'ICICI Bank',
+        lender_id: 'icici_bank',
+        status: 'not_eligible',
+        reasons: ['Company not entered: its category is needed'],
+        sheet: true,
+      }),
+      row({
+        lender: 'Axis Bank',
+        lender_id: 'axis_bank',
+        status: 'not_serviceable',
+        reasons: [
+          'Pincode 401202 is not serviceable by Axis Bank',
+          'Company not entered: its category is needed',
+        ],
+        sheet: true,
+      }),
+      row({
+        lender: 'Bajaj Finance',
+        lender_id: 'bajaj_finance',
+        status: 'not_eligible',
+        reasons: ['Company not entered: its category is needed'],
+      }),
+      row({
+        lender: 'Tata Capital',
+        lender_id: 'tata_capital',
+        status: 'not_eligible',
+        reasons: ['Company not entered: its category is needed'],
+        notes: [
+          'Tata Capital calculates eligibility at 60 months (its calculation tenure), not at the requested 72',
+        ],
+      }),
+      row({
+        lender: 'Bandhan Bank',
+        lender_id: 'bandhan_bank',
+        status: 'not_eligible',
+        reasons: [
+          'Bandhan Bank does not lend to CAT U (unlisted) companies (Sheet1, slab 60,000, CAT_U is NA, cell I29)',
+          'Company not entered: its category is needed',
+        ],
+        notes: [
+          'No pincode list covers Bandhan Bank: serviceability not checked',
+          "Requested tenure 72 months is more than Bandhan Bank's max 60: the EMI is shown at 60 months and eligibility is calculated at 60 months",
+        ],
+      }),
+      row({
+        lender: 'Indusind Bank',
+        lender_id: 'indusind_bank',
+        status: 'not_eligible',
+        reasons: ['Company not entered: its category is needed'],
         notes: [
           'No pincode list covers Indusind Bank: serviceability not checked',
         ],
