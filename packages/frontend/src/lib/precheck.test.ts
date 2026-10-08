@@ -20,6 +20,7 @@ import {
   precheckBlock,
   precheckClear,
   precheckKey,
+  precheckKeyInputs,
   precheckKeyOf,
   precheckSummary,
   precheckTabCounts,
@@ -709,6 +710,156 @@ describe('precheckSummary: what each empty field blocks', () => {
   });
 });
 
+describe('precheckSummary: an answer for other inputs', () => {
+  const ALL = [
+    'HDFC Bank',
+    'ICICI Bank',
+    'Axis Bank',
+    'Bajaj Finance',
+    'Tata Capital',
+    'Bandhan Bank',
+    'Indusind Bank',
+  ];
+
+  it('puts no bank in "needs only" nor the next step while a field it called empty has been filled since', () => {
+    // The answer of the empty form (5 fields per bank); 4 of them typed since.
+    const answer = result('missing');
+    const typed = setProfile(setCibil(emptyInputs(), { score: 765 }), {
+      pincode: '401202',
+      company: 'Synthetic Cat B Works Pvt Ltd',
+      employment_type: 'private_limited',
+      net_income: 60000,
+    });
+    const summary = precheckSummary(answer, stillNeeded(typed), {
+      inputs: typed,
+    });
+    // Every bank still asks for the enquiries; none of them is known to need
+    // only that: each may refuse the pincode or the company typed.
+    expect(summary.needed).toMatchObject([
+      { field: 'enquiries.d90', banks: ALL, only: [] },
+    ]);
+    expect(summary.next).toBeNull();
+    // Only the pincode typed since: not "all 7 banks need only those 4".
+    const one = setProfile(setCibil(emptyInputs(), { score: 765 }), {
+      pincode: '401202',
+    });
+    const partly = precheckSummary(answer, stillNeeded(one), { inputs: one });
+    expect(partly.needed.map((n) => n.field)).toEqual([
+      'company',
+      'employment_type',
+      'net_income',
+      'enquiries.d90',
+    ]);
+    expect(partly.needed.every((n) => n.banks?.length === 7)).toBe(true);
+    expect(partly.needed.every((n) => n.only.length === 0)).toBe(true);
+    expect(partly.next).toBeNull();
+    // The same answer for the inputs it was calculated with: all 7 need only those 5.
+    const empty = setCibil(emptyInputs(), { score: 765 });
+    expect(
+      precheckSummary(answer, stillNeeded(empty), { inputs: empty }).next
+        ?.banks,
+    ).toEqual(ALL);
+  });
+
+  it('keeps the next step of the banks whose answer still holds', () => {
+    // His 7 Oct answer, the score raised since: ICICI and Bajaj named the
+    // pincode only, which is still empty, so they still need only that.
+    const inputs = setCibil(
+      setProfile(filled(), {
+        pincode: null,
+        company: 'Unheard Of Traders Pvt Ltd',
+      }),
+      { score: 790 },
+    );
+    const summary = precheckSummary(result('session'), stillNeeded(inputs), {
+      inputs,
+    });
+    expect(summary.next).toEqual({
+      fields: ['pincode'],
+      banks: ['ICICI Bank', 'Bajaj Finance'],
+    });
+  });
+});
+
+describe('precheckSummary: a field no bank asks for', () => {
+  /** Every bank but Axis (its pincodes) lends: none asks for the net income (the file check verified the salary). */
+  const verifiedSalary = () =>
+    parseCalculateResponse(
+      engineAnswer('clear', {
+        per_lender: ENGINE_ANSWERS.clear.per_lender.filter(
+          (r) => r.lender_id !== 'axis_bank',
+        ),
+        income: {
+          net_salary: 60000,
+          net_salary_source: 'verified',
+          entered_net_income: null,
+          verified_net_income: 60000,
+        },
+      }),
+      'Applicant',
+    );
+
+  it('is not "Still needed" when the answer saw it empty and no bank asked for it', () => {
+    const inputs = setProfile(filled(), { net_income: null });
+    const summary = precheckSummary(verifiedSalary(), stillNeeded(inputs), {
+      inputs,
+      answered: inputs,
+    });
+    expect(summary.needed).toEqual([]);
+    expect(precheckClear(summary)).toBe(true);
+    expect(precheckTabCounts(summary)).toEqual({
+      profile: 0,
+      cibil: 0,
+      lenders: 0,
+    });
+    // The answer's inputs from its key, as the panel has them: the same.
+    expect(
+      precheckSummary(verifiedSalary(), stillNeeded(inputs), {
+        inputs,
+        answered: precheckKeyInputs(precheckKey('Applicant', inputs)),
+      }).needed,
+    ).toEqual([]);
+  });
+
+  it("stays listed when the answer saw it filled, or without the answer's inputs", () => {
+    // Emptied since: that answer says nothing about it.
+    const inputs = setProfile(filled(), { net_income: null });
+    const filledThen = precheckSummary(verifiedSalary(), stillNeeded(inputs), {
+      inputs,
+      answered: filled(),
+    });
+    expect(filledThen.needed).toMatchObject([
+      { field: 'net_income', banks: [], only: [] },
+    ]);
+    expect(precheckClear(filledThen)).toBe(false);
+    expect(
+      precheckSummary(verifiedSalary(), stillNeeded(inputs), { inputs }).needed,
+    ).toMatchObject([{ field: 'net_income' }]);
+    // No answer yet: nothing is known about any field.
+    expect(
+      precheckSummary(null, stillNeeded(inputs), { inputs, answered: inputs })
+        .needed,
+    ).toMatchObject([{ field: 'net_income', banks: null }]);
+  });
+
+  it('keeps a field the banks ask for', () => {
+    // The empty form's answer names all five: each stays.
+    const empty = setCibil(emptyInputs(), { score: 765 });
+    expect(
+      precheckSummary(result('missing'), stillNeeded(empty), {
+        inputs: empty,
+        answered: empty,
+      }).needed.map((n) => n.field),
+    ).toEqual([
+      'pincode',
+      'company',
+      'employment_type',
+      'net_income',
+      'enquiries.d90',
+    ]);
+  });
+});
+
 describe('precheckSummary: a refusal of an empty company is "Still needed: Company"', () => {
   it('never shows "does not lend to CAT U" when no employer is entered', () => {
     const inputs = setProfile(filled(), { company: null });
@@ -888,9 +1039,11 @@ describe('precheckSummary: the box', () => {
     expect(unused.fileIssues).toEqual([]);
   });
 
-  it('warns of overdues and bank EMIs that match no loan, once each', () => {
+  it('gives overdues and written-off loans as likely refusals, bank EMIs that match no loan to check by hand, once each', () => {
     const overdue =
       'Tradeline 1 (Axis Bank, Personal Loan) has an overdue of ₹4,500: lenders usually decline a file with overdues until they are cleared';
+    const writtenOff =
+      "Tradeline 2 (Sample Finance, Personal Loan) is 'Written off' on the bureau report: lenders usually decline such files";
     const unmatched =
       "Loan EMI ₹6,677 to 'BAJAJ FIN' in the bank statement matches no tradeline: it is counted as an obligation; add it as a tradeline (or mark that loan Close) to confirm";
     const summary = precheckSummary(
@@ -899,12 +1052,31 @@ describe('precheckSummary: the box', () => {
           overdue,
           'Running home loan found in the obligations: Tradeline 2 (Home Loan)',
           unmatched,
+          writtenOff,
           unmatched,
+          overdue,
         ],
       }),
       NONE,
     );
-    expect(summary.warnings).toEqual([overdue, unmatched]);
+    expect(summary.declines).toEqual([overdue, writtenOff]);
+    expect(summary.warnings).toEqual([unmatched]);
+    expect(precheckTabCounts(summary).cibil).toBe(3);
+    // A likely refusal alone: not clear.
+    const declineOnly = precheckSummary(
+      parseCalculateResponse(
+        engineAnswer('clear', {
+          per_lender: ENGINE_ANSWERS.clear.per_lender.filter(
+            (r) => r.lender_id !== 'axis_bank',
+          ),
+          notes: [overdue],
+        }),
+        'Applicant',
+      ),
+      NONE,
+    );
+    expect(declineOnly).toMatchObject({ declines: [overdue], warnings: [] });
+    expect(precheckClear(declineOnly)).toBe(false);
   });
 
   it('counts the open items per tab', () => {
@@ -1108,6 +1280,62 @@ describe("precheckKeyOf: Check eligibility's result as an answer", () => {
     );
     expect(precheckKeyOf('ABCDE1234F', null)).toBeNull();
     expect(precheckKeyOf('ABCDE1234F', 'not json')).toBeNull();
+  });
+});
+
+describe('precheckKeyInputs: what an answer saw', () => {
+  it('gives back the inputs a key was made from, as far as a bank checks them', () => {
+    const inputs = setCibil(
+      setProfile(filled(), {
+        pan: 'ABCDE1234F',
+        name: 'Asha Verma',
+        net_income: null,
+        has_running_home_loan: false,
+        other_income: [
+          {
+            key: 'r1',
+            type: 'rented',
+            amount: 12000,
+            frequency: null,
+            agreement: 'registered',
+          },
+        ],
+      }),
+      {
+        tradelines: [
+          {
+            ...emptyTradeline(),
+            lender: 'Axis Bank',
+            emi: 15000,
+            overdue: 4500,
+            open_date: '2025-07-05',
+            source: 'credit_report',
+          },
+          { ...emptyTradeline(), action: 'bt', outstanding: null },
+        ],
+      },
+    );
+    const key = precheckKey('ABCDE1234F', inputs, 3);
+    const seen = precheckKeyInputs(key);
+    expect(seen && precheckKey('ABCDE1234F', seen, 3)).toBe(key);
+    expect(seen?.profile).toMatchObject({
+      pan: 'ABCDE1234F',
+      pincode: '401202',
+      net_income: null,
+      // Not in the key: no bank reads it.
+      name: null,
+    });
+    expect(seen?.cibil.tradelines[1]).toMatchObject({
+      action: 'bt',
+      outstanding: null,
+    });
+    // Check eligibility's result: its key from its inputsKey.
+    expect(
+      precheckKeyInputs(precheckKeyOf('ABCDE1234F', inputsKey(inputs)))?.cibil
+        .enquiries,
+    ).toEqual(inputs.cibil.enquiries);
+    expect(precheckKeyInputs(null)).toBeNull();
+    expect(precheckKeyInputs('not json')).toBeNull();
   });
 });
 

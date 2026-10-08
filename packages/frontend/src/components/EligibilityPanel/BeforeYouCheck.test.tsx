@@ -22,6 +22,8 @@ import { ApiError } from '../../lib/apiError';
 import {
   emptyInputs,
   parseCalculateResponse,
+  precheckKey,
+  precheckKeyInputs,
   precheckSummary,
   refusalsByField,
   setCibil,
@@ -129,6 +131,8 @@ describe('BeforeYouCheck', () => {
     parseCalculateResponse(engineAnswer(scenario, extra), 'Applicant');
   const UNMATCHED =
     "Loan EMI ₹6,677 to 'BAJAJ FIN' in the bank statement matches no tradeline: it is counted as an obligation; add it as a tradeline (or mark that loan Close) to confirm";
+  const OVERDUE =
+    'Tradeline 1 (Axis Bank, Personal Loan) has an overdue of ₹4,500: lenders usually decline a file with overdues until they are cleared';
 
   it('leads with the next step and says what each empty field blocks (his 7 Oct check)', () => {
     const inputs = sessionInputs();
@@ -188,7 +192,7 @@ describe('BeforeYouCheck', () => {
     );
   });
 
-  it('names more fields, all banks and a field no bank needs', () => {
+  it('names more fields, all banks, and drops a field no bank asks for', () => {
     // The empty form: every bank waits for the same 5 fields only.
     const empty = setCibil(emptyInputs(), { score: 765 });
     const missing = precheckSummary(answer('missing'), stillNeeded(empty), {
@@ -199,29 +203,55 @@ describe('BeforeYouCheck', () => {
       '0 of 7 banks can lend now. Fill the 5 details below: all 7 banks need only those.',
     );
     expect(shown).toContain('Pincode : all 7 banks need it.');
-    // A field the answer does not ask for (e.g. a salary the file check verified).
+    // A field the answer saw empty and no bank asks for (a salary the file
+    // check verified): not still needed, and never "no bank needs it".
     const net = setProfile(sessionInputs(), {
       pincode: '401202',
       net_income: null,
     });
     const verified = precheckSummary(answer('cat_u'), stillNeeded(net), {
       inputs: net,
+      answered: net,
     });
-    expect(box({ summary: verified })).toContain(
-      'Still needed: Net income : no bank needs it now.',
+    expect(box({ summary: verified })).toBe(
+      'Before you check 4 of 7 banks can lend now. Hide Banks that will say no: No loans to CAT U (unlisted) companies at HDFC Bank , Bandhan Bank Company Pincode 401202 is not serviceable by Axis Bank Pincode To check by hand (29)',
     );
-    // An answer for other inputs says nothing about it.
-    expect(box({ summary: verified, outdated: true })).toContain(
+    // An answer that saw it filled says nothing about it: listed, no words.
+    const before = precheckSummary(answer('cat_u'), stillNeeded(net), {
+      inputs: net,
+      answered: setProfile(net, { net_income: 60000 }),
+    });
+    expect(box({ summary: before, outdated: true })).toContain(
       'Still needed: Net income Banks that will say no',
+    );
+    expect(box({ summary: before })).not.toContain('no bank needs it');
+  });
+
+  it('reaches the all-clear line when the only empty field is one no bank asks for (a verified salary)', () => {
+    const clear = answer('clear');
+    clear.per_lender = clear.per_lender.filter((r) => r.lender !== 'Axis Bank');
+    const inputs = setProfile(sessionInputs(), {
+      pincode: '401202',
+      company: 'Synthetic Cat B Works Pvt Ltd',
+      net_income: null,
+    });
+    // As the panel has it: the inputs the answer saw, from its key.
+    const answered = precheckKeyInputs(precheckKey('Applicant', inputs));
+    const summary = precheckSummary(clear, stillNeeded(inputs), {
+      inputs,
+      answered,
+    });
+    expect(box({ summary })).toBe(
+      "Nothing blocking so far: all 6 banks can lend. 61 conditions to confirm after Check eligibility, in each bank's Details",
     );
   });
 
-  it('keeps the order: fill now, upload, banks that will say no, then to check by hand (collapsed)', () => {
+  it('keeps the order: fill now, upload, banks that will say no, likely refusals, then to check by hand (collapsed)', () => {
     const inputs = sessionInputs();
     const summary = precheckSummary(
       answer('session', {
         file_check: NOT_READY_FILE_CHECK,
-        notes: [UNMATCHED],
+        notes: [UNMATCHED, OVERDUE],
       }),
       stillNeeded(inputs),
       { inputs },
@@ -234,14 +264,15 @@ describe('BeforeYouCheck', () => {
     };
     expect(at('Still needed:')).toBeLessThan(at('File not ready'));
     expect(at('File not ready')).toBeLessThan(at('Banks that will say no'));
-    expect(at('Banks that will say no')).toBeLessThan(
-      at('To check by hand (1)'),
-    );
+    expect(at('Banks that will say no')).toBeLessThan(at('Likely refusals:'));
+    expect(at('Likely refusals:')).toBeLessThan(at('To check by hand (1)'));
     expect(shown).toContain(
       "File not ready (5 open issues): Open File check MISSING – Last 3 months' salary slips",
     );
     expect(shown).toContain('+3 more in File check');
-    // Collapsed: the warning is behind "To check by hand".
+    // Shown: an overdue is a likely refusal, not something to look up later.
+    expect(shown).toContain(`Likely refusals: ${OVERDUE}`);
+    // Collapsed: the bank EMI that matches no loan is behind "To check by hand".
     expect(shown).not.toContain('matches no tradeline');
   });
 
@@ -426,7 +457,7 @@ describe('BeforeYouCheck: what the box does', () => {
       parseCalculateResponse(
         engineAnswer('session', {
           notes: [
-            'Tradeline 1 (Axis Bank, Personal Loan) has an overdue of ₹4,500: lenders usually decline a file with overdues until they are cleared',
+            "Loan EMI ₹6,677 to 'BAJAJ FIN' in the bank statement matches no tradeline: it is counted as an obligation; add it as a tradeline (or mark that loan Close) to confirm",
           ],
         }),
         'Applicant',
@@ -441,8 +472,39 @@ describe('BeforeYouCheck: what the box does', () => {
     await sleep(0);
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
     expect(run(shown.q('precheck-confirm'))).toContain(
-      'has an overdue of ₹4,500',
+      "Loan EMI ₹6,677 to 'BAJAJ FIN' in the bank statement matches no tradeline",
     );
+    shown.unmount();
+  });
+
+  it('shows an overdue and a written-off loan as likely refusals, open, with the refusals', () => {
+    const overdue =
+      'Tradeline 1 (Axis Bank, Personal Loan) has an overdue of ₹4,500: lenders usually decline a file with overdues until they are cleared';
+    const writtenOff =
+      "Tradeline 2 (Sample Finance, Personal Loan) is 'Written off' on the bureau report: lenders usually decline such files";
+    const summary = precheckSummary(
+      parseCalculateResponse(
+        engineAnswer('session', { notes: [overdue, writtenOff] }),
+        'Applicant',
+      ),
+      [],
+    );
+    const shown = render({ summary });
+    // No toggle to open first: both lines are there.
+    expect(run(shown.q('precheck-declines'))).toBe(
+      `Likely refusals:${overdue}${writtenOff}`,
+    );
+    expect(shown.q('precheck-declines')?.querySelectorAll('li')).toHaveLength(
+      2,
+    );
+    expect(
+      shown.q('precheck-declines')?.querySelector('[aria-expanded]'),
+    ).toBeNull();
+    // Right after "Banks that will say no", and nothing left to check by hand.
+    expect(shown.q('precheck-refusals')?.nextElementSibling).toBe(
+      shown.q('precheck-declines'),
+    );
+    expect(shown.q('precheck-confirm')).toBeNull();
     shown.unmount();
   });
 
@@ -475,6 +537,61 @@ describe('BeforeYouCheck: what the box does', () => {
     expect(element().style.overflowY).toBe('auto');
     shown.draw({ holdHeight: false });
     expect(element().style.height).toBe('');
+    rect.mockRestore();
+    shown.unmount();
+  });
+
+  /** The box as tall as what it says: a change of its words changes its height. */
+  function heightOfText() {
+    return vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        return { height: run(this).length } as DOMRect;
+      });
+  }
+  const long = () =>
+    precheckSummary(
+      parseCalculateResponse(engineAnswer('cibil_enquiries'), 'Applicant'),
+      [],
+    );
+
+  it('holds the height it had before the change that comes with the hold (the first keystroke)', () => {
+    const rect = heightOfText();
+    const shown = render({ summary: long() });
+    const element = () => shown.q('before-you-check') as HTMLElement;
+    const before = run(element()).length;
+    // The first keystroke: its answer changes and the hold starts at once.
+    shown.draw({ summary: precheckSummary(null, []), holdHeight: true });
+    expect(run(element()).length).not.toBe(before);
+    expect(element().style.height).toBe(`${before}px`);
+    shown.draw({ summary: precheckSummary(null, []), holdHeight: false });
+    expect(element().style.height).toBe('');
+    rect.mockRestore();
+    shown.unmount();
+  });
+
+  it('changes no height while a pointer button is down, until its click has landed', async () => {
+    const rect = heightOfText();
+    const shown = render({ summary: long() });
+    const element = () => shown.q('before-you-check') as HTMLElement;
+    const before = `${run(element()).length}px`;
+    const button = document.body.appendChild(document.createElement('button'));
+    button.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+    await sleep(0);
+    // An answer arrives while the button is pressed: same height.
+    shown.draw({ summary: precheckSummary(null, []) });
+    expect(element().style.height).toBe(before);
+    let atClick = '';
+    button.addEventListener('click', () => {
+      atClick = element().style.height;
+    });
+    button.dispatchEvent(new MouseEvent('pointerup', { bubbles: true }));
+    button.click();
+    expect(atClick).toBe(before);
+    // Then the box takes the height of what it says.
+    await sleep(20);
+    expect(element().style.height).toBe('');
+    button.remove();
     rect.mockRestore();
     shown.unmount();
   });
@@ -543,6 +660,17 @@ const SESSION = {
   },
 };
 
+/** GET .../pincodes/401202: who serves it (Check availability). */
+const PINCODE_ANSWER = {
+  pincode: '401202',
+  region: 'Vasai-Virar (Palghar district)',
+  lenders: [
+    { lender: 'HDFC Bank', lender_id: 'hdfc_bank', serviceable: true },
+    { lender: 'Axis Bank', lender_id: 'axis_bank', serviceable: false },
+  ],
+  sample: true,
+};
+
 /** Every bank of the scenario "clear" but Axis Bank (its pincodes): all lend. */
 function allLend() {
   return engineAnswer('clear', {
@@ -561,6 +689,26 @@ interface Sent {
 }
 
 type Body = { inputs?: EligibilityInputs } | null;
+
+/** The engine's answer to a form with details still empty: every bank names each one. */
+function notEntered(body: Body): unknown {
+  const p = body?.inputs?.profile;
+  const c = body?.inputs?.cibil;
+  const reasons = [
+    !p?.pincode && 'Pincode not entered: serviceability cannot be checked',
+    !p?.employment_type && 'Employment type not entered',
+    !p?.company && 'Company not entered: its category is needed',
+    c?.score == null && 'CIBIL score not entered',
+    c?.enquiries?.d90 == null && 'Enquiries in the last 90 days not entered',
+    p?.net_income == null && 'Net monthly income not entered',
+  ].filter((reason): reason is string => !!reason);
+  return engineAnswer('missing', {
+    per_lender: ENGINE_ANSWERS.missing.per_lender.map((row) => ({
+      ...row,
+      reasons,
+    })),
+  });
+}
 
 /** The engine's answer to the inputs sent (the scenario they are). */
 function engine(body: Body): unknown {
@@ -582,6 +730,7 @@ function api(inputs: unknown, answer: (body: Body) => unknown = engine) {
       await sleep(5);
       if (url === `${BASE}/lenders`) return LENDERS_RESPONSE;
       if (url.startsWith(`${BASE}/inputs?`)) return inputs;
+      if (url.startsWith(`${BASE}/pincodes/`)) return PINCODE_ANSWER;
       if (url === `${BASE}/calculate` && method === 'POST') return answer(body);
       throw new Error(`unexpected ${method} ${url}`);
     },
@@ -596,14 +745,17 @@ function api(inputs: unknown, answer: (body: Body) => unknown = engine) {
   return { fetchApi, sent, calcs, saves, gets };
 }
 
+/** The project page: its eligibility state outlives the panel (closed with `open` false). */
 function Harness({
   fetchApi,
   onBack,
   projectId,
+  open = true,
 }: {
   fetchApi: ReturnType<typeof api>['fetchApi'];
   onBack: () => void;
   projectId?: string;
+  open?: boolean;
 }) {
   const state = useEligibility({
     fetchApi: fetchApi as unknown as <T>(
@@ -613,6 +765,7 @@ function Harness({
     ) => Promise<T>,
     projectId: 'p1',
   });
+  if (!open) return null;
   return (
     <EligibilityPanel
       state={state}
@@ -660,15 +813,19 @@ async function mount(
       </Profiler>
     </I18nextProvider>
   );
-  root.render(
-    page(
-      <Harness
-        fetchApi={server.fetchApi}
-        onBack={onBack}
-        projectId={projectId}
-      />,
-    ),
-  );
+  // The panel opened (or closed) on the same page.
+  const setOpen = (open: boolean) =>
+    root.render(
+      page(
+        <Harness
+          fetchApi={server.fetchApi}
+          onBack={onBack}
+          projectId={projectId}
+          open={open}
+        />,
+      ),
+    );
+  setOpen(true);
   const q = (testId: string) =>
     container.querySelector(`[data-testid="${testId}"]`);
   await until(() => q('before-you-check') !== null);
@@ -678,6 +835,7 @@ async function mount(
     errors,
     onBack,
     q,
+    setOpen,
     commits: () => commits,
     unmount: () => {
       root.unmount();
@@ -846,7 +1004,7 @@ describe('EligibilityPanel: Before you check', () => {
   });
 
   it('waits for something to check, and for the fields in red', async () => {
-    panel = await mount(EMPTY);
+    panel = await mount(EMPTY, { answer: notEntered });
     const { q, calcs, container } = panel;
     expect(text(q('before-you-check'))).toContain(
       'Fill 6 more details to see which banks can lend.',
@@ -1019,7 +1177,7 @@ describe('EligibilityPanel: Before you check', () => {
     expect(gets('lenders').length).toBe(lenders + 1);
   });
 
-  it('keeps the box height while a field is typed in', async () => {
+  it('keeps the box height while a field is typed in, until 2 s after the typing', async () => {
     panel = await mount(SAVED);
     const { q, calcs, container } = panel;
     await until(() =>
@@ -1033,16 +1191,148 @@ describe('EligibilityPanel: Before you check', () => {
     await until(() => q('cibil-score') !== null);
     expect(box().style.height).toBe('');
     const score = q('cibil-score') as HTMLInputElement;
+    // Focus alone holds nothing.
     score.focus();
-    await until(() => box().style.height === '96px');
-    // The answer changes from 5 refusal lines to one line: same height.
+    await sleep(50);
+    expect(box().style.height).toBe('');
+    // Read before typing: the hold's 2 s start during the keystroke.
+    const typedAt = performance.now();
     type(score, '790');
+    await until(() => box().style.height === '96px');
+    // Leaving the field does not end it: only the time does.
+    score.blur();
+    await sleep(50);
+    expect(box().style.height).toBe('96px');
+    // The answer changes from 5 refusal lines to one line: same height.
     await until(() => calcs().length === 2);
     await until(() => text(box()).startsWith('Nothing blocking so far'));
     expect(box().style.height).toBe('96px');
-    // Leaving the field: the box takes its own height again.
-    score.blur();
-    await until(() => box().style.height === '');
+    // 2 s after the typing: the box takes its own height again.
+    await until(() => box().style.height === '', 4000);
+    expect(performance.now() - typedAt).toBeGreaterThan(1900);
+  });
+
+  it('keeps the box height through a click right after typing: focus moves to the button first', async () => {
+    // The box as tall as what it says, from the first render.
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
+      function (this: HTMLElement) {
+        return { height: run(this).length } as DOMRect;
+      },
+    );
+    panel = await mount(SESSION);
+    const { q, gets, container } = panel;
+    await until(() => text(q('before-you-check')).includes('can lend now'));
+    const box = () => q('before-you-check') as HTMLElement;
+    const before = `${run(box()).length}px`;
+    expect(box().style.height).toBe('');
+    const pincode = q('profile-pincode') as HTMLInputElement;
+    pincode.focus();
+    await sleep(50);
+    // Read before typing: the hold's 2 s start during the keystroke.
+    const typedAt = performance.now();
+    type(pincode, '401202');
+    // "Still needed: Pincode" goes: the box keeps the height it had.
+    await until(() => q('precheck-needed') === null);
+    expect(box().style.height).toBe(before);
+    // A mouse press on Check availability: focus moves to it before its click.
+    const check = [...container.querySelectorAll('button')].find(
+      (b) => text(b) === 'Check availability',
+    ) as HTMLButtonElement;
+    let atClick = '';
+    check.addEventListener('click', () => {
+      atClick = box().style.height;
+    });
+    check.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+    check.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    check.focus();
+    await sleep(50);
+    expect(document.activeElement).toBe(check);
+    expect(box().style.height).toBe(before);
+    check.dispatchEvent(new MouseEvent('pointerup', { bubbles: true }));
+    check.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    check.click();
+    // The click lands with the box as it was, and checks the pincode.
+    expect(atClick).toBe(before);
+    await until(() => q('pincode-check') !== null);
+    expect(gets('pincodes')).toHaveLength(1);
+    expect(box().style.height).toBe(before);
+    // 2 s after the typing: the box takes its own height again.
+    await until(() => box().style.height === '', 4000);
+    expect(performance.now() - typedAt).toBeGreaterThan(1900);
+  });
+
+  it('drops a field no bank asks for (a verified salary): clear, also while the next check runs', async () => {
+    // Saved without a net income: the file check's verified salary is used.
+    const verified = {
+      ...SAVED,
+      inputs: {
+        ...SAVED.inputs,
+        profile: { ...SAVED.inputs.profile, net_income: null },
+        cibil: { ...SAVED.inputs.cibil, score: 790 },
+      },
+    };
+    panel = await mount(verified, { answer: () => allLend() });
+    const { q, calcs, container } = panel;
+    await until(
+      () =>
+        calcs().length === 1 &&
+        !text(q('before-you-check')).includes('Checking'),
+    );
+    expect(text(q('before-you-check'))).toBe(
+      "Nothing blocking so far: all 6 banks can lend. 61 conditions to confirm after Check eligibility, in each bank's Details",
+    );
+    expect(q('tab-count-profile')).toBeNull();
+    // Another score: checked again, and no "Still needed: Net income" meanwhile.
+    tabButton(container, 'CIBIL').click();
+    await until(() => q('cibil-score') !== null);
+    type(q('cibil-score'), '795');
+    const states = new Set<string | null | undefined>();
+    while (calcs().length < 2) {
+      states.add(q('before-you-check')?.getAttribute('data-state'));
+      await sleep(20);
+    }
+    await until(() => !text(q('before-you-check')).includes('Checking'));
+    states.add(q('before-you-check')?.getAttribute('data-state'));
+    expect([...states]).toEqual(['clear']);
+    expect(text(q('before-you-check'))).toMatch(/^Nothing blocking so far/);
+  });
+
+  it('keeps the policy number with the page: a result from before a new company list is checked again after the panel is reopened', async () => {
+    panel = await mount(SAVED, { projectId: 'p1' });
+    const { q, calcs, saves, container, setOpen } = panel;
+    await until(
+      () =>
+        calcs().length === 1 &&
+        text(q('before-you-check')).includes('Banks that will say no'),
+    );
+    const check = [...container.querySelectorAll('button')].find(
+      (b) => text(b) === 'Check eligibility',
+    ) as HTMLButtonElement;
+    check.click();
+    await until(() => calcs().length === 2);
+    await until(() => q('lenders-table') !== null);
+    // Closed and opened again: the result is for these inputs and lists.
+    setOpen(false);
+    await until(() => q('eligibility-panel') === null);
+    setOpen(true);
+    await until(() => q('before-you-check') !== null);
+    await sleep(1300);
+    expect(calcs()).toHaveLength(2);
+    // A new company list on the Lenders tab: the same inputs checked again.
+    tabButton(container, 'Lenders').click();
+    await until(() => q('policy-changed') !== null);
+    (q('policy-changed') as HTMLButtonElement).click();
+    await until(() => calcs().length === 3);
+    await until(() => !text(q('before-you-check')).includes('Checking'));
+    // Closed and opened again: Check eligibility's result is from before
+    // that list, so the inputs are checked again at once.
+    setOpen(false);
+    await until(() => q('eligibility-panel') === null);
+    setOpen(true);
+    await until(() => calcs().length === 4);
+    expect(calcs()[3].body).toEqual(calcs()[0].body);
+    expect(calcs()[3].options).toEqual({ retries: 0 });
+    expect(saves()).toEqual([]);
   });
 
   it('settles: no render loop while the background check updates', async () => {

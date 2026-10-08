@@ -81,6 +81,11 @@ export interface EligibilityDraft {
   result: EligibilityResult | null;
   /** inputsKey of the inputs the result was calculated with. */
   resultKey: string | null;
+  /**
+   * The policy number (useEligibility's `policy`) the result was calculated
+   * with: a smaller one than now is a result from before a list changed.
+   */
+  resultPolicy: number;
   calculatedAt: Date | null;
   /** Logins made from this tab, by lender name. */
   logins: Record<string, LenderLoginState>;
@@ -106,6 +111,7 @@ export function newDraft(applicant: string): EligibilityDraft {
     calcError: null,
     result: null,
     resultKey: null,
+    resultPolicy: 0,
     calculatedAt: null,
     logins: {},
   };
@@ -206,6 +212,12 @@ export function useEligibility({ fetchApi, projectId }: UseEligibilityOptions) {
   draftsRef.current = drafts;
   const seqs = useRef<Seqs>(new Map());
   const projectRef = useRef(projectId);
+  // The policy number: moves on when a list the calculation reads changes
+  // (the policy sheet, the company or pincode list) and on Reload. Kept here,
+  // with the drafts, so a result calculated before (its resultPolicy) stays
+  // out of date after its panel is closed and opened again.
+  const [policy, setPolicy] = useState(0);
+  const policyRef = useRef(0);
 
   // The project page is reused across projects: start clean on a switch.
   useEffect(() => {
@@ -219,6 +231,12 @@ export function useEligibility({ fetchApi, projectId }: UseEligibilityOptions) {
   }, [projectId]);
 
   const base = `projects/${projectId}/eligibility`;
+
+  /** A list the calculation reads changed: every result so far is out of date. */
+  const policyChanged = useCallback(() => {
+    policyRef.current += 1;
+    setPolicy(policyRef.current);
+  }, []);
 
   const patchDraft = useCallback(
     (
@@ -368,6 +386,8 @@ export function useEligibility({ fetchApi, projectId }: UseEligibilityOptions) {
       const n = nextSeq(seqs.current, key);
       const current = () => isCurrent(seqs.current, key, n);
       const resultKey = inputsKey(inputs);
+      // The lists as they are when the inputs are sent.
+      const resultPolicy = policyRef.current;
       patchDraft(applicant, { calculating: true, calcError: null });
       try {
         const raw = await fetchApi<unknown>(`${base}/calculate`, {
@@ -381,6 +401,7 @@ export function useEligibility({ fetchApi, projectId }: UseEligibilityOptions) {
           calculating: false,
           result,
           resultKey,
+          resultPolicy,
           calculatedAt: new Date(),
         });
         return result;
@@ -537,6 +558,8 @@ export function useEligibility({ fetchApi, projectId }: UseEligibilityOptions) {
     lendersLoading,
     lendersError,
     loadLenders,
+    policy,
+    policyChanged,
     drafts,
     load,
     edit,

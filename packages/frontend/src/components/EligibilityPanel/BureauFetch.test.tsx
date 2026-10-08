@@ -268,11 +268,16 @@ describe('the CIBIL tab', () => {
     lendersLoading: false,
     lendersError: null,
     loadLenders: async () => undefined,
+    policy: 0,
+    policyChanged: noop,
     drafts,
     load: async () => undefined,
     edit: noop,
     save: async () => true,
     calculate: async () => null,
+    precheck: async () => {
+      throw new Error('not used');
+    },
     login: async () => ({ kind: 'ignored' }),
     checkPincode: async () => {
       throw new Error('not used');

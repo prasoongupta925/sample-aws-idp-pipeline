@@ -1160,6 +1160,39 @@ export function precheckKeyOf(
   }
 }
 
+/**
+ * The inputs a precheckKey was made from, as far as a bank checks them (the
+ * fields the key keeps; the others empty): what an answer saw. Null without
+ * a key.
+ */
+export function precheckKeyInputs(
+  key: string | null,
+): EligibilityInputs | null {
+  if (!key) return null;
+  try {
+    const k = obj(JSON.parse(key));
+    return normalizeInputs({
+      profile: {
+        pan: k.pan,
+        pincode: k.pincode,
+        company: k.company,
+        employment_type: k.employment_type,
+        net_income: k.net_income,
+        other_income: k.other_income,
+        has_running_home_loan: k.has_running_home_loan,
+      },
+      cibil: {
+        score: k.score,
+        enquiries: k.enquiries,
+        tradelines: k.tradelines,
+      },
+      loan: k.loan,
+    });
+  } catch {
+    return null;
+  }
+}
+
 const MAX_ENQUIRIES = 999;
 const MAX_INSTALMENTS = 600;
 const MAX_TENURE_MONTHS = 480;
@@ -2339,9 +2372,16 @@ export interface PrecheckOptions {
   /**
    * The inputs on screen. An empty field the answer names but the list of
    * still-needed fields does not (a gold loan's outstanding) is added while
-   * it is empty here; one filled since (an answer for other inputs) is not.
+   * it is empty here; one filled since (an answer for other inputs) is not,
+   * and a bank that named it is in no "needs only" until a fresh answer.
    */
   inputs?: EligibilityInputs;
+  /**
+   * The inputs the answer was calculated with (precheckKeyInputs of its
+   * key). A field still empty that no bank asks for, in an answer that saw
+   * it empty too (a net income the file check verified), is not needed.
+   */
+  answered?: EligibilityInputs | null;
   /** A field being typed in: its refusals are not shown yet. */
   held?: PrecheckField | null;
 }
@@ -2398,12 +2438,13 @@ interface SortedReasons {
  * The reasons of every bank that is not eligible or does not serve the
  * pincode, sorted: a reason that says a field is empty (or comes from an
  * empty company) goes to that still-needed field, the others to one line per
- * cause, the line of most banks first.
+ * cause, the line of most banks first. A field no bank asks for (in an
+ * answer that saw it empty) is not needed.
  */
 function sortReasons(
   result: EligibilityResult | null,
   needed: readonly StillNeeded[],
-  { inputs, held = null }: PrecheckOptions,
+  { inputs, answered, held = null }: PrecheckOptions,
 ): SortedReasons {
   const items: NeededField[] = needed
     .filter((item) => item.required)
@@ -2435,6 +2476,9 @@ function sortReasons(
     );
     const missing = new Set<NeededField>();
     let refused = false;
+    // A field this answer calls empty was filled since (an answer for other
+    // inputs): what the bank says to the value typed is not known yet.
+    let filledSince = false;
     for (const reason of row.reasons) {
       const cause = causeOf(reason, names);
       const empty =
@@ -2444,6 +2488,7 @@ function sortReasons(
         // Not needed any more: an answer for other inputs.
         const item = itemFor(empty);
         if (item) missing.add(item);
+        else filledSince = true;
         continue;
       }
       refused = true;
@@ -2468,8 +2513,10 @@ function sortReasons(
       lines.set(cause.key, line);
     }
     for (const item of missing) item.banks?.push(row.lender);
-    // Nothing but empty fields stops this bank: what it needs is the next step.
-    if (refused || missing.size === 0) continue;
+    // Nothing but empty fields stops this bank: what it needs is the next
+    // step. Not while a field it called empty has been filled since: it may
+    // refuse that value, so it needs "only" the rest once a fresh answer says so.
+    if (refused || filledSince || missing.size === 0) continue;
     if (missing.size === 1) {
       for (const item of missing) item.only.push(row.lender);
     }
@@ -2496,7 +2543,20 @@ function sortReasons(
         .join(', ')}${line.after}`,
     }))
     .sort((a, b) => b.banks.length - a.banks.length);
-  return { needed: items, next, refusals, held: heldKeys.size };
+  // A field no bank asks for, in an answer that saw it empty too (a net
+  // income the file check verified): not needed, so the box can be clear.
+  // An answer that saw it filled says nothing about it: still listed.
+  const asked = (item: NeededField) =>
+    !answered ||
+    !result?.per_lender.length ||
+    (item.banks?.length ?? 0) > 0 ||
+    !fieldEmpty(answered, item.field);
+  return {
+    needed: items.filter(asked),
+    next,
+    refusals,
+    held: heldKeys.size,
+  };
 }
 
 /**
@@ -2525,9 +2585,11 @@ export function refusalsByField(
   return out;
 }
 
-// Notes of the calculation a lender would stop at: an overdue or a written-off
-// loan, and a bank-statement EMI that matches no loan of the form.
-const WARNING_NOTES = [/lenders usually decline/, /matches no tradeline/];
+// Notes of the calculation a lender would stop at. An overdue or a written-off
+// loan: lenders usually decline the file (the box shows it with the refusals).
+const DECLINE_NOTE = /lenders usually decline/;
+// A bank-statement EMI that matches no loan of the form: to check by hand.
+const UNMATCHED_NOTE = /matches no tradeline/;
 
 /** What the "Before you check" box shows. */
 export interface PrecheckSummary {
@@ -2541,7 +2603,9 @@ export interface PrecheckSummary {
   held: number;
   /** The file check's open issues when it finds the file NOT READY. */
   fileIssues: string[];
-  /** Notes a lender would stop at (overdues, bank EMIs that match no loan). */
+  /** Notes lenders usually decline a file for (an overdue, a written-off loan): likely refusals. */
+  declines: string[];
+  /** Bank-statement EMIs that match no loan of the form (to check by hand). */
   warnings: string[];
   /** The policy sheet's "Conditions to confirm" of the banks that can lend. */
   conditions: number;
@@ -2566,16 +2630,15 @@ export function precheckSummary(
   const withConditions = lending.filter(
     (row) => (row.policy_sheet?.conditions.length ?? 0) > 0,
   );
+  const notes = [...new Set(result?.notes ?? [])];
+  const declines = notes.filter((note) => DECLINE_NOTE.test(note));
   return {
     ...sorted,
     fileIssues: check?.used && check.ready === false ? check.issues : [],
-    warnings: [
-      ...new Set(
-        (result?.notes ?? []).filter((note) =>
-          WARNING_NOTES.some((pattern) => pattern.test(note)),
-        ),
-      ),
-    ],
+    declines,
+    warnings: notes.filter(
+      (note) => UNMATCHED_NOTE.test(note) && !declines.includes(note),
+    ),
     conditions: withConditions.reduce(
       (n, row) => n + (row.policy_sheet?.conditions.length ?? 0),
       0,
@@ -2586,21 +2649,23 @@ export function precheckSummary(
   };
 }
 
-/** Nothing in the box stops a bank: no field needed, no refusal (shown or not yet), no open issue or warning. */
+/** Nothing in the box stops a bank: no field needed, no refusal (shown or not yet, likely or not), no open issue or warning. */
 export function precheckClear(summary: PrecheckSummary): boolean {
   return (
     summary.needed.length === 0 &&
     summary.refusals.length === 0 &&
     summary.held === 0 &&
     summary.fileIssues.length === 0 &&
+    summary.declines.length === 0 &&
     summary.warnings.length === 0
   );
 }
 
 /**
  * The open items of each tab (its badge): the fields still needed there and
- * the refusals its fields cause (the warnings are about the loans, on the
- * CIBIL tab); a refusal no field causes counts on the Lenders tab.
+ * the refusals its fields cause (the likely refusals and the warnings are
+ * about the loans, on the CIBIL tab); a refusal no field causes counts on the
+ * Lenders tab.
  */
 export function precheckTabCounts(
   summary: PrecheckSummary,
@@ -2610,7 +2675,7 @@ export function precheckTabCounts(
   for (const refusal of summary.refusals) {
     counts[refusal.field ? PRECHECK_FIELD_TAB[refusal.field] : 'lenders'] += 1;
   }
-  counts.cibil += summary.warnings.length;
+  counts.cibil += summary.declines.length + summary.warnings.length;
   return counts;
 }
 
